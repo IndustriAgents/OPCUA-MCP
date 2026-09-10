@@ -9,9 +9,11 @@ actually advertised; these checks are on the file itself and run in milliseconds
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from conftest import ROOT
+from opcua_mcp_server.contract import contract_candidates, load_contract
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
 TOOLS = CONTRACT["tools"]
@@ -117,3 +119,39 @@ def test_the_history_family_shares_one_result_shape():
         "read_history_opcua_node": "historyRecords",
         "read_aggregate_opcua_node": "historyRecords",
     }
+
+
+# --- where the Python server looks for the contract ----------------------------
+# The contract has to be found from four very different layouts: a checkout, a
+# wheel, an sdist-built wheel, and a frozen single-file executable. Getting this
+# wrong has already shipped a broken release (a wheel that raised
+# FileNotFoundError on import), and it broke again in the frozen build.
+
+
+def test_the_bundled_copy_is_looked_for_first():
+    """The wheel and the frozen app both carry `tools.json` beside this module."""
+    candidates = contract_candidates(Path("/site-packages/opcua_mcp_server/contract.py"))
+    assert candidates[0] == Path("/site-packages/opcua_mcp_server/tools.json")
+
+
+def test_a_checkout_also_offers_the_canonical_repo_root_copy():
+    module = ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "contract.py"
+    assert contract_candidates(module)[1] == ROOT / "contract" / "tools.json"
+
+
+def test_a_shallow_path_yields_the_bundled_copy_rather_than_raising():
+    """Regression guard for the frozen build dying on import.
+
+    PyInstaller unpacks to `/tmp/_MEIabc123/`, which has fewer levels above this
+    module than a checkout does. The repo-root fallback used to be computed
+    unconditionally while *building* the candidate list, so `Path.parents` raised
+    IndexError before the bundled copy could be tried and the executable never
+    started. Only on Linux: a macOS unpack directory happens to be deep enough
+    that the index is in range, so this passed locally and failed in CI.
+    """
+    candidates = contract_candidates(Path("/tmp/_MEIabc123/opcua_mcp_server/contract.py"))
+    assert candidates == [Path("/tmp/_MEIabc123/opcua_mcp_server/tools.json")]
+
+
+def test_the_real_contract_is_loadable_from_this_checkout():
+    assert load_contract()["tools"]

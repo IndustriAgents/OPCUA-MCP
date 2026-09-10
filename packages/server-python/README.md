@@ -23,7 +23,7 @@ See the central per-tool reference in **[docs/examples.md](https://github.com/mi
 - **Type-Safe Operations**: Automatic type conversion based on existing node data types
 - **Error Handling**: Comprehensive error reporting for debugging and monitoring
 - **Async Support**: Built on FastMCP for efficient asynchronous operations
-- **Configurable**: Environment-based server URL configuration
+- **Configurable**: Environment-based endpoint, security policy and credentials
 
 ## Installation
 
@@ -72,6 +72,42 @@ In an MCP client:
    ```bash
    export OPCUA_SERVER_URL="opc.tcp://localhost:4840"
    ```
+
+## Configuration
+
+The server is configured entirely through environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | OPC UA endpoint to connect to |
+| `OPCUA_SECURITY_POLICY` | `None` | `None`, `Basic128Rsa15`, `Basic256` or `Basic256Sha256` (the AES suites are Node-only) |
+| `OPCUA_SECURITY_MODE` | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt` |
+| `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
+| `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
+| `OPCUA_APPLICATION_URI` | — | Application URI announced to the server; set it to the `subjectAltName` URI of `OPCUA_CLIENT_CERT`, which some servers insist on |
+| `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
+| `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
+
+Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
+An unusable combination — a mode without a policy, a policy without a
+certificate, a username without a password — is refused at startup with a
+message naming the variable. With no security configured the connection is
+unencrypted and unauthenticated, and the server says so on stderr; see
+[SECURITY.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/SECURITY.md).
+
+On the **Python runtime**, certificate and key files are parsed as PEM only when
+they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
+called `client.key` fails to load — name it `client_key.pem`. The Node runtime
+sniffs the contents and accepts either name.
+
+```bash
+export OPCUA_SERVER_URL="opc.tcp://plc.example.internal:4840"
+export OPCUA_SECURITY_POLICY="Basic256Sha256"     # implies SignAndEncrypt
+export OPCUA_CLIENT_CERT="/etc/opcua/client.pem"
+export OPCUA_CLIENT_KEY="/etc/opcua/client_key.pem"
+export OPCUA_USERNAME="mcp-operator"
+export OPCUA_PASSWORD="…"
+```
 
 ## Usage
 

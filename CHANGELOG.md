@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **OPC UA connection security is configurable** on both runtimes, through the
+  same environment variables: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`,
+  `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_APPLICATION_URI`,
+  `OPCUA_USERNAME` and `OPCUA_PASSWORD`. Until now both servers hardcoded `SecurityPolicy.None` /
+  `MessageSecurityMode.None` and an anonymous session, so there was no way to
+  reach a server that requires encryption or a login — the documented "not for
+  production" caveat was a limitation of the code, not a choice.
+
+  Policies: `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256`, plus
+  `Aes128_Sha256_RsaOaep` and `Aes256_Sha256_RsaPss` on the Node runtime
+  (`python-opcua` does not implement the AES suites, and says so by name rather
+  than reporting an unknown policy). Names are case-insensitive; a policy on its
+  own implies `SignAndEncrypt` rather than silently signing only.
+
+  The configuration is validated at startup and a combination OPC UA cannot
+  honour — a mode without a policy, a policy without a client certificate, a
+  certificate path that does not exist, half a credential — exits with
+  `Configuration error: …` naming the variable, identically on both runtimes,
+  instead of failing later against live equipment. The Python capability probes
+  now connect with the same security as the session they precede.
+
+  **The default is unchanged**: with no variables set, both servers still
+  connect unencrypted and anonymous, and now log a warning to stderr saying so.
+
+- A **secured mock OPC UA server** in the test suite
+  (`tests/fixtures/secure_opcua_server.py`, port 4843), offering only
+  Basic256Sha256 endpoints and requiring a username. The end-to-end suite now
+  drives both runtimes through an encrypted, authenticated session — read, write,
+  `Sign` and `SignAndEncrypt` — and asserts the failure modes too: a wrong
+  password yields `BadUserAccessDenied` rather than a session, an unsecured
+  client finds no endpoint to fall back to, and the password never reaches the
+  logs. Certificates are generated per test session, not committed. What no mock
+  can cover is a real server's certificate trust list, so enabling security
+  against real equipment still needs a manual first connection.
+
 ### Changed
 - **BREAKING (Node server): `read_history_opcua_node` and
   `read_aggregate_opcua_node` now return flat records instead of raw

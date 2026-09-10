@@ -5,7 +5,7 @@ Three tiers, fastest first. Pick the narrowest one that covers your change.
 | Tier | Directory | Needs | Time | What it is for |
 |------|-----------|-------|------|----------------|
 | **unit** | `unit/` | nothing | <1s | Pure logic: ISO-8601 parsing, contract invariants, version manifests |
-| **e2e** | `e2e/` | mock OPC UA server + built Node server | ~50s | Drives both real servers over stdio via the `mcp` client SDK |
+| **e2e** | `e2e/` | mock OPC UA servers + built Node server | ~70s | Drives both real servers over stdio via the `mcp` client SDK, unsecured and secured |
 | **smoke** | `smoke/` | npm + uv | ~20s | Builds and installs the real npm tarball and Python wheel, then drives the *installed* entry points |
 
 ```bash
@@ -47,6 +47,12 @@ Every test runs against **both** server implementations.
 | `test_write_boolean_node` | Writing a `Boolean` node with `"true"` succeeds (bool-handling regression) |
 | `test_call_method_start_then_stop` | `call_opcua_method` drives `StartProduction`/`StopProduction` and `SystemMode` reacts |
 | `test_read_history` | The history tool (`read_history_opcua_node`) returns timestamped records |
+| `test_refuses_to_start_without_the_certificate_the_policy_needs` | A security policy with no certificate exits with the same `Configuration error: …` on both runtimes |
+| `test_reads_and_writes_over_a_secured_connection` | Read/write work over Basic256Sha256, in `Sign` and in `SignAndEncrypt` |
+| `test_the_password_never_reaches_the_logs` | `OPCUA_PASSWORD` appears nowhere in the server's stderr |
+| `test_default_mode_is_sign_and_encrypt` | A policy with no explicit mode negotiates the strongest endpoint, not the weakest |
+| `test_a_wrong_password_is_rejected` | Bad credentials yield `BadUserAccessDenied`, never a working session |
+| `test_an_unsecured_client_cannot_use_the_secured_server` | With no security configured there is no endpoint to fall back to, and the server warns |
 
 Both servers expose the history tool under the same name, `read_history_opcua_node`,
 and only when the server advertises `AccessHistoryDataCapability`.
@@ -59,9 +65,16 @@ Two are used, on purpose:
 |------|------|------|
 | `packages/mock-server` (python-opcua) | 4840 | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
 | `packages/mock-server-aggregate` (node-opcua) | 4841 | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
+| `tests/fixtures/secure_opcua_server.py` (python-opcua) | 4843 | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. |
 
 The main mock cannot serve aggregates even in principle: python-opcua answers
 `ReadProcessedDetails` with `BadNotImplemented`.
+
+The secured mock accepts any client certificate, because python-opcua's server
+has no trust list. Real equipment does: a Siemens, Kepware or Prosys server
+rejects an unknown client certificate until an operator moves it into its trusted
+folder. That step, and vendor-specific certificate handling generally, can only
+be verified by hand against the real server.
 
 ## Prerequisites
 

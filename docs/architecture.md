@@ -97,21 +97,31 @@ the repo.
 ```
 contract/tools.json          single source of truth for the tool surface
 packages/server-python/      FastMCP + opcua (FreeOpcUa)
-  src/opcua_mcp_server/      config · contract · datetimes · capabilities
+  src/opcua_mcp_server/      config · security · contract · datetimes · capabilities
                              · aggregates · records · server
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua
-  src/                       config · contract · dates · records · connection
-                             · tools · index
+  src/                       config · security · contract · dates · records
+                             · connection · tools · index
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
 packages/mock-server-aggregate/  aggregate-capable mock (:4841)
-tests/                       unit/ (fast) · e2e/ (both servers) · smoke/ (artifacts)
+tests/                       unit/ (fast) · e2e/ (both servers, secured and not)
+                             · smoke/ (artifacts) · fixtures/ (secured mock, PKI)
 examples/                    standalone demo scripts
 ```
 
 ## Security posture
 
-Both runtimes connect with `SecurityPolicy.None` and
-`MessageSecurityMode.None` — unauthenticated and unencrypted. That is
-appropriate for the bundled mock and local development, and **not** appropriate
-for production industrial systems. Making the security mode configurable is
-tracked for a future release; see [SECURITY.md](../SECURITY.md).
+Connection security is configured through the environment, by the same variables
+on both runtimes: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`,
+`OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_USERNAME` and `OPCUA_PASSWORD`
+(see [Configuration](../README.md#configuration)). Each runtime parses and
+validates them in one module — `security.ts` / `security.py` — which the client
+factory, the capability probes and the startup check all go through, so a
+probe cannot end up on a different security footing than the session it
+precedes.
+
+The **default is `None`/`None`**: unauthenticated and unencrypted, appropriate
+for the bundled mock and local development and **not** appropriate for
+production industrial systems. Both servers warn on stderr when running that
+way. For what the secured path does and does not verify — notably that the
+server certificate is not pinned — see [SECURITY.md](../SECURITY.md).

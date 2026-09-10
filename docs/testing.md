@@ -6,6 +6,9 @@ Three ways to test, from fully automated to fully interactive:
 2. [MCP Inspector](#2-mcp-inspector) — point-and-click or one-line CLI
 3. [AI agents](#3-ai-agents) — Claude Code, Claude Desktop, Cursor
 
+Plus [a secured connection by hand](#4-a-secured-connection-by-hand), for when
+you are turning encryption and credentials on.
+
 > **All three need the mock OPC UA server running first** — it is the simulated
 > device the MCP servers talk to.
 >
@@ -27,7 +30,8 @@ Common nodes: Temperature `ns=2;i=3`, PumpEnabled `ns=2;i=12`, ValvePosition
 ## 1. Automated end-to-end suite
 
 Drives **both** servers over stdio with the official `mcp` client SDK and asserts
-on real responses. 22 tests (11 cases × Python + Node).
+on real responses, unsecured against the mock on `:4840` and secured against the
+mock on `:4843`.
 
 ```bash
 uv sync --all-packages         # one-time, from the repo root
@@ -160,6 +164,51 @@ ask Cursor's assistant the prompts above.
 
 ---
 
+## 4. A secured connection by hand
+
+The suite covers this automatically (`tests/e2e/test_secure_connection_e2e.py`),
+but running it yourself is the quickest way to see what your MCP client will
+show — and the closest local rehearsal for pointing a server at real equipment.
+
+```bash
+# 1. throwaway certificates (server + client), into a directory of your choice
+uv run --no-sync python tests/fixtures/pki.py /tmp/opcua-pki
+
+# 2. the secured mock: Basic256Sha256 only, username operator / hunter2
+uv run --no-sync python tests/fixtures/secure_opcua_server.py \
+  --endpoint opc.tcp://127.0.0.1:4843/mcp/secure \
+  --cert /tmp/opcua-pki/server.pem --key /tmp/opcua-pki/server_key.pem \
+  --uri urn:opcua-mcp:test-server
+```
+
+Then, in another shell, point either server at it:
+
+```bash
+export OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4843/mcp/secure
+export OPCUA_SECURITY_POLICY=Basic256Sha256
+export OPCUA_CLIENT_CERT=/tmp/opcua-pki/client.pem
+export OPCUA_CLIENT_KEY=/tmp/opcua-pki/client_key.pem
+export OPCUA_APPLICATION_URI=urn:opcua-mcp:test-client
+export OPCUA_USERNAME=operator OPCUA_PASSWORD=hunter2
+
+npx @modelcontextprotocol/inspector node packages/server-node/build/index.js
+# or the Python server:
+npx @modelcontextprotocol/inspector uv --directory packages/server-python run opcua-mcp-server
+```
+
+The server logs `Connected to OPC UA server (policy=Basic256Sha256
+mode=SignAndEncrypt user="operator")` on stderr; `Temperature` is `ns=2;i=2`.
+Worth trying deliberately wrong: drop `OPCUA_SECURITY_POLICY` (no endpoint to
+fall back to), or change the password (`BadUserAccessDenied`).
+
+**Against real equipment this is not the whole story.** The mock accepts any
+client certificate; a real server keeps a trust list and will reject yours until
+an operator moves it into the trusted folder — usually after one failed
+connection puts it in the rejected folder. Expect to do that first connection by
+hand.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -169,5 +218,8 @@ ask Cursor's assistant the prompts above.
 | **`read_aggregate_opcua_node` not listed** | Expected — the bundled mock advertises no aggregate functions, so the tool is correctly hidden |
 | **`Address already in use` on :4840** | A mock server is already running; reuse it, or `lsof -tiTCP:4840 -sTCP:LISTEN \| xargs kill` |
 | **Project MCP servers `⏸ Pending approval`** | Normal — approve them in a new `claude` session or via `/mcp` |
+| **Server exits at once with `Configuration error: …`** | A security variable is set to a combination OPC UA cannot honour; the message names the variable to fix |
+| **`BadUserAccessDenied` / `BadIdentityTokenRejected` on every tool** | `OPCUA_USERNAME` / `OPCUA_PASSWORD` rejected by the server |
+| **`BadSecurityChecksFailed`, or the server refuses the session** | The client certificate is not trusted by the OPC UA server, or `OPCUA_APPLICATION_URI` does not match its `subjectAltName` |
 | **Values "snap back" after a write** | Expected — the mock republishes sensor/actuator state every ~1s; use command variables/methods for lasting changes |
 | **Node value lags after a method call** | The mock propagates method effects via its 1 Hz loop; re-read after ~1s |

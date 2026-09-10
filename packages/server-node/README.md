@@ -44,14 +44,39 @@ npm start
 
 ## Configuration
 
-The server connects to an OPC UA server using the following environment variable:
+The server is configured entirely through environment variables:
 
-- `OPCUA_SERVER_URL`: The OPC UA server endpoint (default: `opc.tcp://localhost:4840`)
+| Variable                | Default                                                 | Meaning                                                                                                                          |
+| ----------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `OPCUA_SERVER_URL`      | `opc.tcp://localhost:4840`                              | OPC UA endpoint to connect to                                                                                                    |
+| `OPCUA_SECURITY_POLICY` | `None`                                                  | `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256`, `Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`                           |
+| `OPCUA_SECURITY_MODE`   | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt`                                                                                               |
+| `OPCUA_CLIENT_CERT`     | —                                                       | Client certificate (PEM/DER). Required for any policy other than `None`                                                          |
+| `OPCUA_CLIENT_KEY`      | —                                                       | Private key for `OPCUA_CLIENT_CERT`                                                                                              |
+| `OPCUA_APPLICATION_URI` | —                                                       | Application URI announced to the server; set it to the `subjectAltName` URI of `OPCUA_CLIENT_CERT`, which some servers insist on |
+| `OPCUA_USERNAME`        | —                                                       | Username identity; the session is anonymous when unset                                                                           |
+| `OPCUA_PASSWORD`        | —                                                       | Password for `OPCUA_USERNAME`                                                                                                    |
 
-Example:
+Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
+An unusable combination — a mode without a policy, a policy without a
+certificate, a username without a password — is refused at startup with a
+message naming the variable. With no security configured the connection is
+unencrypted and unauthenticated, and the server says so on stderr; see
+[SECURITY.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/SECURITY.md).
+
+Examples:
 
 ```bash
+# unsecured, e.g. against the bundled mock
 OPCUA_SERVER_URL=opc.tcp://192.168.1.100:4840 npx opcua-mcp-server
+
+# encrypted and authenticated
+OPCUA_SERVER_URL=opc.tcp://plc.example.internal:4840 \
+OPCUA_SECURITY_POLICY=Basic256Sha256 \
+OPCUA_CLIENT_CERT=/etc/opcua/client.pem \
+OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem \
+OPCUA_USERNAME=mcp-operator OPCUA_PASSWORD=… \
+  npx opcua-mcp-server
 ```
 
 ## Tools
@@ -164,10 +189,15 @@ Result: "Found 15 variables:
 
 ## Security Considerations
 
-- This server currently connects without security (SecurityPolicy.None)
-- For production use, implement appropriate security policies and authentication
+- The connection defaults to no security (`SecurityPolicy.None`); set
+  `OPCUA_SECURITY_POLICY` and credentials as shown under
+  [Configuration](#configuration) for anything beyond local development
+- The server certificate is taken from the endpoint description and is not
+  pinned or checked against a trust list
 - Ensure proper network security when connecting to industrial OPC UA servers
 - Validate and sanitize all input parameters
+- Scope the OPC UA account you connect with to what the assistant should be able
+  to do — it can write nodes and call methods
 
 ## Error Handling
 

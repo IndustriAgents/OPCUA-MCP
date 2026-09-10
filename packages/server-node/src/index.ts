@@ -8,6 +8,7 @@ import { pathToFileURL } from "url";
 
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
+import { securityConfig } from "./security.js";
 import { OpcuaTools } from "./tools.js";
 
 // Keep stdout pristine for the MCP stdio JSON-RPC transport: route any stray
@@ -90,6 +91,16 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
+  // Fail fast and readably on a bad security configuration: an MCP client only
+  // ever shows the server's stderr, so an unhandled parse error deep in a
+  // capability probe would surface as "server exited" and nothing else.
+  try {
+    securityConfig();
+  } catch (error) {
+    console.error(`Configuration error: ${(error as Error).message}`);
+    process.exit(1);
+  }
+
   const server = new OPCUAMCPServer();
   server.run().catch(console.error);
 }

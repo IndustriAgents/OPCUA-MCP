@@ -3,19 +3,19 @@
 // Capability probes are best-effort by design: an optional capability must
 // never break tools/list, so a transient outage still leaves the core tools
 // advertised.
-import {
-  OPCUAClient,
-  MessageSecurityMode,
-  SecurityPolicy,
-  ClientSession,
-  StatusCodes,
-  AggregateFunction,
-} from "node-opcua";
+import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua";
 
 import { setDefaultAutoSelectFamily } from "net";
 
 import { SERVER_URL } from "./config.js";
 import { CONTRACT } from "./contract.js";
+import {
+  clientSecurityOptions,
+  describeSecurity,
+  isInsecure,
+  securityConfig,
+  userIdentity,
+} from "./security.js";
 
 // Happy Eyeballs: try IPv4 and IPv6 rather than only the first address DNS
 // returns. Node 20+ does this by default, Node 18 does not — so on Node 18 an
@@ -36,21 +36,29 @@ export class OpcuaConnection {
         return; // Already connected
       }
 
+      const security = securityConfig();
+      if (isInsecure(security)) {
+        console.error(
+          "WARNING: connecting with no OPC UA security — traffic is unencrypted and " +
+            "unauthenticated. Set OPCUA_SECURITY_POLICY (and OPCUA_USERNAME) for anything " +
+            "beyond local development."
+        );
+      }
+
       this.opcuaClient = OPCUAClient.create({
         applicationName: "OPC UA MCP Client",
         connectionStrategy: {
           initialDelay: 1000,
           maxRetry: 1,
         },
-        securityMode: MessageSecurityMode.None,
-        securityPolicy: SecurityPolicy.None,
+        ...clientSecurityOptions(security),
         endpoint_must_exist: false,
       });
 
       await this.opcuaClient.connect(SERVER_URL);
-      console.error("Connected to OPC UA server");
+      console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
-      this.session = await this.opcuaClient.createSession();
+      this.session = await this.opcuaClient.createSession(userIdentity(security));
       console.error("OPC UA session created");
     } catch (error) {
       console.error("Failed to connect to OPC UA server:", error);

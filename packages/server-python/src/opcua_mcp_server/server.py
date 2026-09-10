@@ -7,7 +7,6 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -21,6 +20,7 @@ from .contract import DESC
 from .datetimes import parse_iso_datetime
 from .records import history_records
 from .security import create_client, describe_security, security_config, security_warnings
+from .version import package_version
 
 
 # Manage the lifecycle of the OPC UA client connection
@@ -46,25 +46,13 @@ async def opcua_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         print("Disconnected from OPC UA server", file=sys.stderr)
 
 
-def _package_version() -> str:
-    """Version of the installed distribution, single-sourced from pyproject.toml.
-
-    Falls back to "0.0.0+unknown" when running from a source tree that was never
-    installed (the distribution metadata is absent), so importing never fails.
-    """
-    try:
-        return version("opcua-mcp-server")
-    except PackageNotFoundError:
-        return "0.0.0+unknown"
-
-
 # Create an MCP server instance. The server identity must match the Node server's
 # so both runtimes present themselves as the same product to MCP clients.
 mcp = FastMCP("opcua-mcp-server", lifespan=opcua_lifespan)
 # FastMCP does not expose the protocol-level version in its constructor, so set it
 # on the underlying low-level server. Without this the Python server reports a
 # null version over MCP while the Node server reports a real one.
-mcp._mcp_server.version = _package_version()
+mcp._mcp_server.version = package_version()
 
 
 # Tool: Read the value of an OPC UA node
@@ -507,7 +495,14 @@ def get_all_variables(ctx: Context) -> str:
 
 # Run the server
 def main() -> None:
-    """Entry point for the `opcua-mcp-server` console script."""
+    """Run the MCP server on stdio.
+
+    The console script points at `cli.main`, which dispatches CLI flags first and
+    only imports this module — and so only probes the OPC UA server — when it is
+    actually going to serve. So this runs on the serving path only: `--help` and
+    `--install` must stay usable while the security configuration is still being
+    got right.
+    """
     # Fail fast and readably on a bad security configuration: an MCP client only
     # ever shows the server's stderr, so letting it surface from a best-effort
     # capability probe (which swallows it) would leave nothing to go on.
@@ -516,5 +511,6 @@ def main() -> None:
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
+
 
     mcp.run(transport="stdio")

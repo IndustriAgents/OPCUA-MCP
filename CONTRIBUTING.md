@@ -17,7 +17,7 @@ Thanks for your interest in contributing! This repo provides **two MCP servers**
 | `packages/server-python/` | **Python** MCP server (FastMCP + `opcua`/FreeOpcUa), a `src/` package |
 | `packages/server-node/` | **Node** MCP server (TypeScript + `@modelcontextprotocol/sdk` + `node-opcua`) |
 | `tests/` | End-to-end pytest suite driving both servers via the `mcp` SDK |
-| `docs/` | Usage docs (`architecture.md`, `examples.md`, `testing.md`); `archive/` holds executed plans |
+| `docs/` | Usage docs (`architecture.md`, `examples.md`, `install.md`, `testing.md`); `archive/` holds executed plans |
 | `examples/` | Standalone demo scripts (not part of any package) |
 
 ```
@@ -70,16 +70,19 @@ uv sync --all-packages                        # one-time workspace setup
 cd tests
 uv run --no-sync pytest unit/                 # <1s, no server needed
 uv run --no-sync pytest                       # unit + e2e (~50s)
-uv run --no-sync pytest -m smoke smoke/       # packaged artifacts (~20s)
+uv run --no-sync pytest -m smoke smoke/       # downloadable artifacts (~60s)
 
 cd ../packages/server-node
 npm run build && npm test                     # Node unit tests
 ```
 
-The **smoke** tier builds the real npm tarball and Python wheel, installs them in
-isolation, and drives the installed entry points. It is the only tier that can
-see packaging faults and unbounded dependencies — both of which have shipped
-broken releases here before — so run it before any release.
+The **smoke** tier builds every artifact a user can download — npm tarball, Python
+wheel, the `.mcpb` bundle and both single-file executables — installs them in
+isolation, and drives them over MCP. It is the only tier that can see packaging
+faults, unbounded dependencies, or a bundling change that breaks once
+`node_modules` is no longer on disk. The first two have shipped broken releases
+here before, so run it before any release. Building the executables needs
+PyInstaller: `uv sync --all-packages --group packaging`.
 
 See [tests/README.md](tests/README.md) for details and selectors
 (`-k "[python]"` / `-k "[node]"`). For manual testing with the MCP Inspector or an AI
@@ -133,7 +136,13 @@ Beyond what the tools check:
 ## Releasing
 
 See **[docs/releasing.md](docs/releasing.md)**. Releases are tag-triggered and
-gated on the full suite plus the artifact smoke tests.
+gated on the full suite plus the artifact smoke tests. Two workflows run off the
+tag: `publish.yml` ships to npm and PyPI, and `release.yml` builds the `.mcpb`
+bundle and the per-platform executables and attaches them to the GitHub release.
+
+Version lives in the package manifests and, for the bundle, in
+`packages/server-node/mcpb/manifest.json`;
+`tests/unit/test_version_manifests.py` fails if they drift apart.
 
 ## Security note
 

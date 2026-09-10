@@ -4,9 +4,9 @@ Three tiers, fastest first. Pick the narrowest one that covers your change.
 
 | Tier | Directory | Needs | Time | What it is for |
 |------|-----------|-------|------|----------------|
-| **unit** | `unit/` | nothing | <1s | Pure logic: ISO-8601 parsing, contract invariants, version manifests |
+| **unit** | `unit/` | nothing (a built Node server for the `--install` parity tests) | ~5s | Pure logic: ISO-8601 parsing, contract invariants, version manifests, security config, `--install` |
 | **e2e** | `e2e/` | mock OPC UA servers + built Node server | ~70s | Drives both real servers over stdio via the `mcp` client SDK, unsecured and secured |
-| **smoke** | `smoke/` | npm + uv | ~20s | Builds and installs the real npm tarball and Python wheel, then drives the *installed* entry points |
+| **smoke** | `smoke/` | npm + uv (+ PyInstaller for the executables) | ~60s | Builds every downloadable artifact — npm tarball, wheel, `.mcpb` bundle, single-file executables — and drives them |
 
 ```bash
 uv run --no-sync pytest unit/         # fast inner loop
@@ -22,9 +22,23 @@ cd packages/server-node && npm run build && npm test
 
 **Why the smoke tier exists:** everything else runs from the source tree, where
 relative paths happen to resolve and dependencies come from `uv.lock`. Users get
-a tarball or a wheel. That gap has shipped real bugs — a wheel that raised
-`FileNotFoundError` on import, and an unbounded `mcp` dependency that resolved to
-a breaking major on any fresh install. Both were invisible to the e2e suite.
+a tarball, a wheel, a bundle or a binary. That gap has shipped real bugs — a wheel
+that raised `FileNotFoundError` on import, and an unbounded `mcp` dependency that
+resolved to a breaking major on any fresh install. Both were invisible to the e2e
+suite.
+
+The gap is widest for the two newest artifacts, which is why they are built here
+rather than trusted:
+
+| Artifact | What only this tier can catch |
+|---|---|
+| `.mcpb` bundle (`test_artifacts.py`) | The whole dependency tree is bundled into one file with the contract inlined, so there is no `node_modules` and no `contract.json` on disk. node-opcua needs `require`, `__filename` and `__dirname` supplied by hand to survive that. |
+| Executables (`test_binaries.py`) | An embedded interpreter, no packaging metadata in the usual place, and a `--install` that must name the binary alone — handing a frozen app `-m opcua_mcp_server` writes a config entry that fails every launch. |
+
+The executables cannot be cross-compiled, so this tier only ever covers the
+platform it runs on. `.github/workflows/release.yml` builds and checks the other
+two. PyInstaller comes from an opt-in dependency group:
+`uv sync --all-packages --group packaging`.
 
 ## What the e2e tier covers
 
@@ -78,7 +92,7 @@ be verified by hand against the real server.
 
 ## Prerequisites
 
-- `uv`, `node` (>=18), `npm`
+- `uv`, `node` (>=18; >=20 to build a single-file executable), `npm`
 - Set up the workspace once (from the repo root): `uv sync --all-packages`
 - Build the Node server once: `cd packages/server-node && npm install && npm run build`
   (Node tests are **skipped** if `build/index.js` is missing).

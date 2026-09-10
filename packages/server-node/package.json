@@ -17,7 +17,9 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "build:mcpb": "node scripts/build-mcpb.mjs",
+    "build:sea": "node scripts/build-sea.mjs"
   },
   "keywords": [
     "mcp",
@@ -45,7 +47,10 @@
     "node-opcua-client": "^2.128.0"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.12",
+    "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.6",
     "typescript": "^5.0.0"
   },

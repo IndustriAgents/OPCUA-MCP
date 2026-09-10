@@ -5,7 +5,7 @@ and both `pyproject.toml`s), which is exactly the kind of thing that silently
 drifts across a release. These are the static halves of that guard; the
 handshake half lives in e2e/test_version_parity.py.
 
-The packages in this repo are released as a unit, so all three manifests are
+The packages in this repo are released as a unit, so all the manifests are
 expected to carry the same version.
 """
 
@@ -24,6 +24,7 @@ from conftest import ROOT
 NODE_PKG = ROOT / "packages" / "server-node" / "package.json"
 PYTHON_PYPROJECT = ROOT / "packages" / "server-python" / "pyproject.toml"
 MOCK_PYPROJECT = ROOT / "packages" / "mock-server" / "pyproject.toml"
+MCPB_MANIFEST = ROOT / "packages" / "server-node" / "mcpb" / "manifest.json"
 
 
 def _node_version() -> str:
@@ -35,11 +36,19 @@ def _py_version(pyproject) -> str:
 
 
 def test_manifests_agree_on_version():
-    """All three package manifests carry the same version (released as a unit)."""
+    """Every package manifest carries the same version (released as a unit).
+
+    The MCP bundle manifest is in here because `mcpb validate` runs against the
+    checked-in file, so it has to hold a real version rather than a placeholder —
+    which means it can drift. (`scripts/build-mcpb.mjs` stamps the version from
+    package.json on the way into the bundle, so a release that forgets this file
+    still ships a correct `.mcpb`; this keeps the source honest.)
+    """
     versions = {
         "server-node/package.json": _node_version(),
         "server-python/pyproject.toml": _py_version(PYTHON_PYPROJECT),
         "mock-server/pyproject.toml": _py_version(MOCK_PYPROJECT),
+        "server-node/mcpb/manifest.json": json.loads(MCPB_MANIFEST.read_text())["version"],
     }
     assert len(set(versions.values())) == 1, f"version drift across manifests: {versions}"
 

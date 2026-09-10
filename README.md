@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Quick Start](#quick-start) · [Tools](#tools) · [Examples](docs/examples.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Contributing](CONTRIBUTING.md)
+[Quick Start](#quick-start) · [Install](docs/install.md) · [Tools](#tools) · [Examples](docs/examples.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -37,8 +37,23 @@ flowchart LR
 
 ## Quick Start
 
-Nothing to clone or install — add one of these to your MCP client config and
-point `OPCUA_SERVER_URL` at your OPC UA endpoint.
+**Claude Desktop, nothing installed?** Download the `.mcpb` bundle from the
+[latest release](https://github.com/midhunxavier/OPCUA-MCP/releases/latest) and
+drag it into **Settings → Extensions**. It carries the server and every
+dependency, Claude Desktop supplies the runtime, and the OPC UA endpoint is a
+field in the settings form — no Node, no Python, no JSON to edit. There are
+[single-file executables](docs/install.md#2-single-file-executable--no-runtime-at-all)
+too, for machines with no runtime and no network.
+
+**Already have a runtime?** Install the package and let it write the config:
+
+```bash
+npm install -g opcua-mcp-server        # or: uv tool install opcua-mcp-server
+opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+```
+
+**Prefer to configure it yourself?** Add one of these to your MCP client config
+and point `OPCUA_SERVER_URL` at your OPC UA endpoint.
 
 **Node** (via `npx`):
 
@@ -73,6 +88,9 @@ For Claude Code, one command does it:
 ```bash
 claude mcp add opcua -e OPCUA_SERVER_URL=opc.tcp://localhost:4840 -- npx -y opcua-mcp-server
 ```
+
+All four routes, and what to do when Claude Desktop cannot start the server:
+**[docs/install.md](docs/install.md)**.
 
 > **No OPC UA server to hand?** This repo ships a mock industrial plant — see
 > [Try it against the mock](#try-it-against-the-mock).
@@ -205,8 +223,8 @@ sniffs the contents and accepts either name.
 
 ## Installation
 
-Most users need only the [Quick Start](#quick-start) config above — `npx` and
-`uvx` fetch the package on demand. To install it permanently:
+Most users need only the [Quick Start](#quick-start) above — `npx` and `uvx`
+fetch the package on demand. To install it permanently:
 
 ```bash
 # Node
@@ -217,6 +235,18 @@ opcua-mcp-server            # also available as: opcua-mcp
 uv tool install opcua-mcp-server   # or: pip install opcua-mcp-server
 opcua-mcp-server
 ```
+
+Either command, once installed, can register itself with Claude Desktop:
+
+```bash
+opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+```
+
+That writes absolute paths rather than a bare `npx`, which matters more than it
+sounds: Claude Desktop is launched from the GUI and does not inherit a login
+shell's `PATH`. `--dry-run` shows the result without writing it. Downloadable
+artifacts for machines with no runtime at all — the `.mcpb` bundle and the
+single-file executables — are covered in **[docs/install.md](docs/install.md)**.
 
 | | Python | Node |
 |---|---|---|

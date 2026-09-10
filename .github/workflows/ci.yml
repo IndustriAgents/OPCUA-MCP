@@ -113,12 +113,17 @@ jobs:
         working-directory: tests
         run: uv run --no-sync pytest -v e2e/ unit/
 
-  # Builds the real npm tarball and Python wheel, installs them somewhere
-  # isolated, and drives the installed entry points. The rest of CI runs from the
-  # source tree and from uv.lock, so it cannot see packaging faults or an
-  # unbounded dependency resolving to a breaking major.
+  # Builds every artifact a user can actually download — npm tarball, Python
+  # wheel, the `.mcpb` bundle and both single-file executables — installs them
+  # somewhere isolated, and drives them over MCP. The rest of CI runs from the
+  # source tree and from uv.lock, so it cannot see packaging faults, an unbounded
+  # dependency resolving to a breaking major, or a bundling change that only
+  # breaks once node_modules is no longer on disk.
+  #
+  # The executables cannot be cross-compiled, so this covers Linux only; the
+  # release workflow builds and checks macOS and Windows.
   smoke:
-    name: Packaged artifacts (npm tarball + wheel)
+    name: Downloadable artifacts (npm, wheel, .mcpb, executables)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -140,8 +145,10 @@ jobs:
           npm ci
           npm run build
 
+      # `--group packaging` brings in PyInstaller, which only the single-file
+      # executable needs; the other jobs deliberately do without it.
       - name: Sync workspace (all packages)
-        run: uv sync --all-packages
+        run: uv sync --all-packages --group packaging
 
       - name: Run artifact smoke tests
         working-directory: tests

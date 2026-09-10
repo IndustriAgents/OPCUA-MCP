@@ -1,0 +1,48 @@
+{
+  "manifest_version": "0.3",
+  "name": "opcua-mcp-server",
+  "display_name": "OPC UA",
+  "version": "0.2.1",
+  "description": "Read industrial sensors and control equipment on any OPC UA server.",
+  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools: read and write nodes, browse the address space, call methods, and read history and server-side aggregates.\n\nSet the endpoint below to your OPC UA server's URL, for example `opc.tcp://192.168.0.10:4840`.\n\n**Security:** this release connects with no encryption and no authentication, and it can write nodes and call methods on whatever it is pointed at. Use it against a simulator or a lab server, not against production equipment, and scope the OPC UA account it connects with to exactly what you intend Claude to be able to do.",
+  "author": {
+    "name": "Midhun Xavier",
+    "url": "https://github.com/midhunxavier"
+  },
+  "homepage": "https://github.com/midhunxavier/OPCUA-MCP#readme",
+  "documentation": "https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md",
+  "support": "https://github.com/midhunxavier/OPCUA-MCP/issues",
+  "license": "MIT",
+  "keywords": ["opcua", "opc-ua", "industrial", "automation", "scada", "plc", "manufacturing"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/midhunxavier/OPCUA-MCP"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.mjs"],
+      "env": {
+        "OPCUA_SERVER_URL": "${user_config.opcua_server_url}"
+      }
+    }
+  },
+  "user_config": {
+    "opcua_server_url": {
+      "type": "string",
+      "title": "OPC UA endpoint",
+      "description": "URL of the OPC UA server to connect to, e.g. opc.tcp://192.168.0.10:4840",
+      "default": "opc.tcp://localhost:4840",
+      "required": true
+    }
+  },
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

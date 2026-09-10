@@ -46,8 +46,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logs. Certificates are generated per test session, not committed. What no mock
   can cover is a real server's certificate trust list, so enabling security
   against real equipment still needs a manual first connection.
+- **Download-and-use distribution.** Getting started previously meant having Node
+  or Python on `PATH`, then finding and hand-editing `claude_desktop_config.json`
+  — three walls in front of an audience of automation engineers, often on
+  locked-down machines on air-gapped plant networks. Three new routes in, none of
+  which needs a runtime or a text editor:
+
+  - **An `.mcpb` MCP bundle** (~1.2 MB) for Claude Desktop: one file, dragged
+    into Settings → Extensions. It carries the server and its whole dependency
+    tree bundled into a single JavaScript file, Claude Desktop supplies the Node
+    runtime, and the OPC UA endpoint is rendered as a settings field from the
+    manifest's `user_config`. Built by `npm run build:mcpb`.
+  - **Single-file executables** for Linux, macOS and Windows, from both runtimes
+    (`npm run build:sea` via Node's single-executable support, and PyInstaller
+    for Python). No Node, no Python, no network access at startup. Neither can be
+    cross-compiled, so `.github/workflows/release.yml` builds one per OS and
+    attaches them to the GitHub release.
+  - **`opcua-mcp-server --install claude-desktop`**, in both runtimes, which
+    writes the client config itself: correct path per OS, merged into whatever is
+    already there, previous file backed up, written atomically, and refusing
+    rather than overwriting an existing `opcua` entry without `--force`. It
+    records *absolute* paths to the interpreter and the server, because desktop
+    apps are launched from the GUI and do not inherit a login shell's `PATH` —
+    the most common reason an MCP server that works in a terminal fails to start
+    in Claude Desktop. Also `--url`, `--dry-run`, `--force`, `--version`,
+    `--help`.
+
+  See [docs/install.md](docs/install.md). Every one of these artifacts is built
+  and driven against a live OPC UA server in `tests/smoke/`.
+
+- `python -m opcua_mcp_server` as an equivalent of the console script.
 
 ### Changed
+- **Importing `opcua_mcp_server` no longer connects to an OPC UA server.** The
+  capability probe ran at package-import time, so `import opcua_mcp_server` — or
+  `--help` — would sit through a connection timeout. `main` and `mcp` are now
+  resolved lazily (PEP 562) and the console script entry point moved to
+  `opcua_mcp_server.cli:main`, which starts the server only when it is going to
+  serve. `from opcua_mcp_server import main, mcp` still works.
+
 - **BREAKING (Node server): `read_history_opcua_node` and
   `read_aggregate_opcua_node` now return flat records instead of raw
   `DataValue` JSON.** The two servers answered the same tool call with different

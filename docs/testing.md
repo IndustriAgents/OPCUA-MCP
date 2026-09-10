@@ -157,6 +157,17 @@ Add to `claude_desktop_config.json`
 }
 ```
 
+Or let the server write that block for you, which also saves getting the absolute
+paths right:
+
+```bash
+cd packages/server-node && npm run build
+node build/index.js --install claude-desktop \
+  --url opc.tcp://localhost:4840/freeopcua/server/ --dry-run
+```
+
+Drop `--dry-run` to write it. See [install.md](install.md) for the full flag set.
+
 ### Cursor
 
 Add the same `mcpServers` block to your Cursor MCP settings (Settings → MCP), then
@@ -223,3 +234,5 @@ hand.
 | **`BadSecurityChecksFailed`, or the server refuses the session** | The client certificate is not trusted by the OPC UA server, or `OPCUA_APPLICATION_URI` does not match its `subjectAltName` |
 | **Values "snap back" after a write** | Expected — the mock republishes sensor/actuator state every ~1s; use command variables/methods for lasting changes |
 | **Node value lags after a method call** | The mock propagates method effects via its 1 Hz loop; re-read after ~1s |
+| **Works in the terminal, fails in Claude Desktop** | Desktop apps do not inherit a login shell's `PATH`, so a bare `"command": "npx"` or `"node"` cannot be found. Use absolute paths — `--install claude-desktop` writes them for you |
+| **macOS refuses to run a downloaded executable** | It is ad-hoc signed, not notarised: `xattr -d com.apple.quarantine <binary>` |

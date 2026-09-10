@@ -92,16 +92,27 @@ Both have already shipped bugs here. `tests/smoke/` builds the real artifacts,
 installs them in isolation, and drives the installed entry points from outside
 the repo.
 
+There are now five such artifacts, and the two newest stray furthest from the
+source tree: the `.mcpb` bundle inlines the contract and bundles node-opcua's
+whole CommonJS dependency tree into one file, and the single-file executables
+freeze an interpreter around it. Both can break while every other test stays
+green, so both are built and driven over MCP in `tests/smoke/`. See
+[install.md](install.md) for what each artifact is for.
+
 ## Layout
 
 ```
 contract/tools.json          single source of truth for the tool surface
 packages/server-python/      FastMCP + opcua (FreeOpcUa)
-  src/opcua_mcp_server/      config · security · contract · datetimes · capabilities
-                             · aggregates · records · server
+  src/opcua_mcp_server/      config · security · contract · datetimes
+                             · capabilities · aggregates · records · version
+                             · install · cli · server
+  packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua
   src/                       config · security · contract · dates · records
-                             · connection · tools · index
+                             · connection · tools · install · index · sea
+  mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
+  scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
 packages/mock-server-aggregate/  aggregate-capable mock (:4841)
 tests/                       unit/ (fast) · e2e/ (both servers, secured and not)

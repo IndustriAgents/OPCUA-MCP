@@ -114,8 +114,11 @@ async def test_servers_match_contract(impl_params):
         assert tool.description == spec["description"], (
             f"{impl}/{name}: description differs from contract"
         )
+        # `inputSchema` on the wire, `input_schema` on the SDK's model. Read the
+        # attribute directly rather than via `getattr(..., {})`, so another rename
+        # in the SDK fails here instead of quietly comparing against an empty set.
         want_props, want_req = _props_required(spec["inputSchema"])
-        got_props, got_req = _props_required(getattr(tool, "inputSchema", {}) or {})
+        got_props, got_req = _props_required(tool.input_schema or {})
         assert got_props == want_props, (
             f"{impl}/{name}: params {got_props} != contract {want_props}"
         )
@@ -139,7 +142,7 @@ async def test_history_result_matches_the_contract_shape(impl_params):
             "read_history_opcua_node", {"node_id": NODE["Temperature"], "num_values": 3}
         )
 
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
     records = records_of(result)
     assert records, f"{impl}: no history records to check the shape against"
     assert_matches_result_shape(records, spec["resultShape"], f"{impl}/read_history_opcua_node")

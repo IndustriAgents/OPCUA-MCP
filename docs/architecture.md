@@ -24,7 +24,7 @@ That interchangeability is not maintained by discipline. It is maintained by
 | | How it uses the contract |
 |---|---|
 | **Node** | Builds its `tools/list` response directly from it. `npm run build` copies it to `build/contract.json` so the npm package is self-contained. |
-| **Python** | Reads tool descriptions and capability node IDs from it. Input schemas are derived by FastMCP from the function signatures, and checked against the contract by a test. |
+| **Python** | Reads tool descriptions and capability node IDs from it. Input schemas are derived by `MCPServer` from the function signatures, and checked against the contract by a test. |
 
 The contract also pins what the tools *return*, where the answer is more than
 free text. A tool names a shape from `resultShapes`; the history family
@@ -103,7 +103,7 @@ green, so both are built and driven over MCP in `tests/smoke/`. See
 
 ```
 contract/tools.json          single source of truth for the tool surface
-packages/server-python/      FastMCP + opcua (FreeOpcUa)
+packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records · version
                              · install · cli · server

@@ -36,6 +36,10 @@ before cutting a release.
 #    packages/server-python/pyproject.toml
 #    packages/mock-server/pyproject.toml
 #    packages/server-node/mcpb/manifest.json
+#
+#    Then refresh the npm lockfile, which records the root version twice and
+#    will not be updated by editing package.json alone:
+#      cd packages/server-node && npm install --package-lock-only
 
 # 2. Move CHANGELOG entries from [Unreleased] into the new version, and add the
 #    comparison link at the bottom.

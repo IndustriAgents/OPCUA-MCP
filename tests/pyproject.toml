@@ -14,7 +14,7 @@ dependencies = [
     "opcua>=0.98.13",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "anyio>=4.0",
+    "anyio>=4.15.1",
     # tomllib is stdlib from 3.11; the tests read pyproject files to check
     # version parity, so older interpreters need the backport.
     "tomli>=2; python_version<'3.11'",

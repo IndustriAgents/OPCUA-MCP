@@ -123,7 +123,13 @@ jobs:
   # The executables cannot be cross-compiled, so this covers Linux only; the
   # release workflow builds and checks macOS and Windows.
   smoke:
-    name: Downloadable artifacts (npm, wheel, .mcpb, executables)
+    # NOTE: this name is a required status check in the `main-protection`
+    # ruleset, which matches on the exact string. Renaming it here without
+    # updating the ruleset makes the required check one that never runs, and the
+    # merge gate can then never be satisfied — which is exactly what happened
+    # when this job was briefly called "Downloadable artifacts". The name now
+    # understates what the job covers; the comment above is the accurate version.
+    name: Packaged artifacts (npm tarball + wheel)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

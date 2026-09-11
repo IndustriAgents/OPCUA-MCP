@@ -137,6 +137,16 @@ gated on the full suite plus the artifact smoke tests.
 
 ## Security note
 
-The servers connect with `SecurityPolicy.None` / `MessageSecurityMode.None` for
-local development. Do **not** use this configuration against production OPC UA
-systems — add certificate-based auth, encryption, and input validation first.
+The servers **default** to `SecurityPolicy.None` / `MessageSecurityMode.None`
+for local development against the mock. Do **not** use that default against
+production OPC UA systems — configure `OPCUA_SECURITY_POLICY`,
+`OPCUA_CLIENT_CERT`/`OPCUA_CLIENT_KEY` and credentials
+([Configuration](README.md#configuration)), and note the gaps listed in
+[SECURITY.md](SECURITY.md) (notably that the server certificate is not pinned,
+and that node IDs and written values are not validated beyond what the OPC UA
+server enforces).
+
+Both runtimes parse those variables in one place — `src/security.ts` and
+`src/opcua_mcp_server/security.py` — with the same defaults and the same error
+wording. A change to one belongs in the other, and the unit suites on both sides
+assert the shared messages.

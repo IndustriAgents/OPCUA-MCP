@@ -14,6 +14,7 @@ from .config import SERVER_URL
 from .contract import CONTRACT, DESC, HISTORY_NODE_ID, load_contract
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .records import history_record, history_records, scalar_to_json, variant_to_json
+from .security import SecurityConfig, create_client, parse_security_config, security_config
 from .server import main, mcp
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "DESC",
     "HISTORY_NODE_ID",
     "SERVER_URL",
+    "SecurityConfig",
+    "create_client",
     "format_iso_utc",
     "history_record",
     "history_records",
@@ -28,6 +31,8 @@ __all__ = [
     "main",
     "mcp",
     "parse_iso_datetime",
+    "parse_security_config",
     "scalar_to_json",
+    "security_config",
     "variant_to_json",
 ]

@@ -8,12 +8,17 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   DataType,
   LocalizedText,
+  MessageSecurityMode,
   NodeId,
   QualifiedName,
+  SecurityPolicy,
   StatusCodes,
+  UserTokenType,
   Variant,
   VariantArrayType,
   coerceNodeId,
@@ -21,6 +26,13 @@ import {
 
 import { toDate } from "../build/dates.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "../build/records.js";
+import {
+  clientSecurityOptions,
+  describeSecurity,
+  parseSecurityConfig,
+  securityWarnings,
+  userIdentity,
+} from "../build/security.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -209,6 +221,269 @@ describe("history records", () => {
   test("no data values is an empty record list", () => {
     assert.deepEqual(toHistoryRecords(undefined), []);
     assert.deepEqual(toHistoryRecords([]), []);
+  });
+});
+
+// --- connection security -------------------------------------------------------
+// The Python server mirrors this configuration layer verbatim; the assertions
+// below on shared error wording are duplicated in
+// tests/unit/test_security_config.py so the two cannot drift.
+
+// Pretend every configured path exists; path checking is covered separately.
+const ALWAYS = () => true;
+const CERTS = { OPCUA_CLIENT_CERT: "/pki/client.pem", OPCUA_CLIENT_KEY: "/pki/client.key" };
+const parseSecurity = (env) => parseSecurityConfig(env, ALWAYS);
+
+/** Asserts that parsing `env` fails with exactly `message`. */
+function assertSecurityError(env, message, exists = ALWAYS) {
+  assert.throws(
+    () => parseSecurityConfig(env, exists),
+    (err) => {
+      assert.equal(err.message, message);
+      return true;
+    }
+  );
+}
+
+describe("parseSecurityConfig", () => {
+  test("defaults to no security, as the hardcoded behaviour did", () => {
+    const config = parseSecurity({});
+    assert.equal(config.policy, "None");
+    assert.equal(config.mode, "None");
+    assert.equal(config.username, undefined);
+    assert.equal(securityWarnings(config).length, 1);
+  });
+
+  test("treats blank values as unset — MCP configs carry empty env entries", () => {
+    const config = parseSecurity({ OPCUA_SECURITY_POLICY: "", OPCUA_SECURITY_MODE: "  " });
+    assert.equal(config.policy, "None");
+    assert.equal(config.mode, "None");
+  });
+
+  test("a policy alone implies SignAndEncrypt rather than a silent downgrade", () => {
+    const config = parseSecurity({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS });
+    assert.equal(config.policy, "Basic256Sha256");
+    assert.equal(config.mode, "SignAndEncrypt");
+    assert.deepEqual(securityWarnings(config), []);
+  });
+
+  test("keeps an explicit Sign mode", () => {
+    const config = parseSecurity({
+      OPCUA_SECURITY_POLICY: "Basic256",
+      OPCUA_SECURITY_MODE: "Sign",
+      ...CERTS,
+    });
+    assert.equal(config.mode, "Sign");
+  });
+
+  test("accepts the AES policies node-opcua implements", () => {
+    const config = parseSecurity({ OPCUA_SECURITY_POLICY: "Aes256_Sha256_RsaPss", ...CERTS });
+    assert.equal(config.policy, "Aes256_Sha256_RsaPss");
+  });
+
+  test("matches policy and mode names case-insensitively", () => {
+    const config = parseSecurity({
+      OPCUA_SECURITY_POLICY: "basic256sha256",
+      OPCUA_SECURITY_MODE: "signandencrypt",
+      ...CERTS,
+    });
+    assert.equal(config.policy, "Basic256Sha256");
+    assert.equal(config.mode, "SignAndEncrypt");
+  });
+
+  test("rejects an unknown policy, listing the valid ones", () => {
+    assertSecurityError(
+      { OPCUA_SECURITY_POLICY: "Basic999" },
+      'Invalid OPCUA_SECURITY_POLICY: "Basic999". Use one of: None, Basic128Rsa15, Basic256, ' +
+        "Basic256Sha256, Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss"
+    );
+  });
+
+  // Wording shared with the Python server.
+  test("rejects an unknown mode", () => {
+    assertSecurityError(
+      { OPCUA_SECURITY_MODE: "Encrypt" },
+      'Invalid OPCUA_SECURITY_MODE: "Encrypt". Use one of: None, Sign, SignAndEncrypt'
+    );
+  });
+
+  test("rejects a mode without a policy — SecurityPolicy#None only pairs with None", () => {
+    assertSecurityError(
+      { OPCUA_SECURITY_MODE: "SignAndEncrypt" },
+      "OPCUA_SECURITY_MODE=SignAndEncrypt requires OPCUA_SECURITY_POLICY to be set to a policy " +
+        "other than None"
+    );
+  });
+
+  test("rejects a policy combined with mode None", () => {
+    assertSecurityError(
+      { OPCUA_SECURITY_POLICY: "Basic256Sha256", OPCUA_SECURITY_MODE: "None", ...CERTS },
+      "OPCUA_SECURITY_POLICY=Basic256Sha256 cannot be combined with OPCUA_SECURITY_MODE=None; " +
+        "use Sign or SignAndEncrypt"
+    );
+  });
+
+  test("requires a certificate and key for a secure policy", () => {
+    const message =
+      "OPCUA_SECURITY_POLICY=Basic256Sha256 requires OPCUA_CLIENT_CERT and OPCUA_CLIENT_KEY " +
+      "(paths to the client certificate and its private key)";
+    for (const partial of [
+      {},
+      { OPCUA_CLIENT_CERT: "/pki/client.pem" },
+      { OPCUA_CLIENT_KEY: "/k" },
+    ]) {
+      assertSecurityError({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...partial }, message);
+    }
+  });
+
+  test("reports a missing certificate file instead of failing in the crypto layer", () => {
+    const dir = mkdtempSync(join(tmpdir(), "opcua-mcp-pki-"));
+    const key = join(dir, "client.key");
+    const missing = join(dir, "client.pem");
+    writeFileSync(key, "key");
+    assertSecurityError(
+      {
+        OPCUA_SECURITY_POLICY: "Basic256Sha256",
+        OPCUA_CLIENT_CERT: missing,
+        OPCUA_CLIENT_KEY: key,
+      },
+      `OPCUA_CLIENT_CERT does not exist: ${missing}`,
+      existsSync // the real check, not the stub the other cases use
+    );
+  });
+
+  test("accepts certificate files that exist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "opcua-mcp-pki-"));
+    const cert = join(dir, "client.pem");
+    const key = join(dir, "client.key");
+    writeFileSync(cert, "cert");
+    writeFileSync(key, "key");
+    const config = parseSecurityConfig({
+      OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_CLIENT_CERT: cert,
+      OPCUA_CLIENT_KEY: key,
+    });
+    assert.equal(config.clientCert, cert);
+    assert.equal(config.clientKey, key);
+  });
+
+  test("carries an application URI through, since servers match it to the certificate", () => {
+    assert.equal(parseSecurity({}).applicationUri, undefined);
+    assert.equal(
+      parseSecurity({ OPCUA_APPLICATION_URI: "urn:plant:mcp-client", ...CERTS }).applicationUri,
+      "urn:plant:mcp-client"
+    );
+  });
+
+  test("reads credentials together", () => {
+    const config = parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" });
+    assert.equal(config.username, "operator");
+    assert.equal(config.password, "hunter2");
+  });
+
+  test("an empty password is an explicit credential, not an unset variable", () => {
+    assert.equal(parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "" }).password, "");
+  });
+
+  test("rejects half a credential", () => {
+    assertSecurityError({ OPCUA_USERNAME: "operator" }, "OPCUA_USERNAME requires OPCUA_PASSWORD");
+    assertSecurityError({ OPCUA_PASSWORD: "hunter2" }, "OPCUA_PASSWORD requires OPCUA_USERNAME");
+  });
+});
+
+describe("security wiring", () => {
+  test("maps the configuration onto node-opcua client options", () => {
+    const options = clientSecurityOptions(
+      parseSecurity({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS })
+    );
+    assert.equal(options.securityPolicy, SecurityPolicy.Basic256Sha256);
+    assert.equal(options.securityMode, MessageSecurityMode.SignAndEncrypt);
+    assert.equal(options.certificateFile, CERTS.OPCUA_CLIENT_CERT);
+    assert.equal(options.privateKeyFile, CERTS.OPCUA_CLIENT_KEY);
+    assert.equal("applicationUri" in options, false);
+  });
+
+  test("passes the application URI through when one is configured", () => {
+    const options = clientSecurityOptions(
+      parseSecurity({
+        OPCUA_SECURITY_POLICY: "Basic256Sha256",
+        OPCUA_APPLICATION_URI: "urn:plant:mcp-client",
+        ...CERTS,
+      })
+    );
+    assert.equal(options.applicationUri, "urn:plant:mcp-client");
+  });
+
+  test("leaves the certificate options off entirely when unsecured", () => {
+    const options = clientSecurityOptions(parseSecurity({}));
+    assert.equal(options.securityPolicy, SecurityPolicy.None);
+    assert.equal(options.securityMode, MessageSecurityMode.None);
+    assert.equal("certificateFile" in options, false);
+    assert.equal("privateKeyFile" in options, false);
+  });
+
+  test("logs in anonymously when no username is configured", () => {
+    assert.deepEqual(userIdentity(parseSecurity({})), { type: UserTokenType.Anonymous });
+  });
+
+  test("logs in with the configured credentials", () => {
+    const identity = userIdentity(
+      parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" })
+    );
+    assert.deepEqual(identity, {
+      type: UserTokenType.UserName,
+      userName: "operator",
+      password: "hunter2",
+    });
+  });
+
+  test("warns whenever the channel is unencrypted, credentials or not", () => {
+    // A username authenticates the session; it does not encrypt anything.
+    const warnings = securityWarnings(
+      parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" })
+    );
+    assert.ok(warnings.some((warning) => warning.includes("traffic is unencrypted")));
+    assert.equal(warnings.join(" ").includes("hunter2"), false);
+  });
+
+  test("warns that credentials cross that unencrypted channel in clear text", () => {
+    const withUser = securityWarnings(
+      parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" })
+    );
+    assert.ok(withUser.some((warning) => warning.includes("clear text")));
+    // ...and that extra warning is specific to having credentials configured.
+    const anonymous = securityWarnings(parseSecurity({}));
+    assert.equal(
+      anonymous.some((warning) => warning.includes("clear text")),
+      false
+    );
+  });
+
+  test("a secured channel warns about nothing", () => {
+    const config = parseSecurity({
+      OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_USERNAME: "operator",
+      OPCUA_PASSWORD: "hunter2",
+      ...CERTS,
+    });
+    assert.deepEqual(securityWarnings(config), []);
+  });
+
+  test("the startup summary never carries the password", () => {
+    const described = describeSecurity(
+      parseSecurity({
+        OPCUA_SECURITY_POLICY: "Basic256Sha256",
+        OPCUA_USERNAME: "operator",
+        OPCUA_PASSWORD: "hunter2",
+        ...CERTS,
+      })
+    );
+    assert.equal(described, 'policy=Basic256Sha256 mode=SignAndEncrypt user="operator"');
+    assert.equal(described.includes("hunter2"), false);
+  });
+
+  test("summarises the default connection", () => {
+    assert.equal(describeSecurity(parseSecurity({})), "policy=None mode=None user=anonymous");
   });
 });
 

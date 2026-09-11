@@ -2,21 +2,49 @@
 
 ## Connection security (important)
 
-Both server implementations currently connect to OPC UA endpoints using:
+By default — with no security variables set — both server implementations
+connect using `SecurityPolicy.None` and `MessageSecurityMode.None`, so traffic
+is **unencrypted and unauthenticated**. That default suits local development and
+evaluation against mock/test servers, **not** production or anything exposed to
+an untrusted network. Both servers log a warning to stderr while running that
+way.
 
-- `SecurityPolicy.None`
-- `MessageSecurityMode.None`
+For anything else, configure security through the environment (identical
+variables on both runtimes, documented in the
+[README](README.md#configuration)):
 
-This means traffic is **unencrypted and unauthenticated**. It is suitable for
-local development and evaluation against mock/test servers, **not** for
-production or anything exposed to an untrusted network.
+```bash
+OPCUA_SECURITY_POLICY=Basic256Sha256   # implies SignAndEncrypt
+OPCUA_CLIENT_CERT=/etc/opcua/client.pem
+OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
+OPCUA_USERNAME=mcp-operator
+OPCUA_PASSWORD=…
+# and, when the server checks it against the certificate:
+OPCUA_APPLICATION_URI=urn:plant:mcp-client
+```
 
-For production deployments you should add:
+An unusable combination — a mode without a policy, a policy without a client
+certificate, a username without a password, a certificate path that does not
+exist — is rejected at startup rather than at the first tool call.
 
-- Certificate-based authentication
-- Encrypted communication (a non-`None` security policy/mode)
-- User authentication
-- Input validation on node IDs and written values
+What this does **not** do, and you should still plan for:
+
+- **Server certificate verification.** The server's certificate is taken from
+  its endpoint description during the handshake; neither runtime pins it or
+  validates it against a trust list, so encryption here protects against passive
+  eavesdropping, not against an attacker who can impersonate the endpoint.
+- **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
+  `OPCUA_PASSWORD` without a security policy is authentication, not
+  confidentiality: both client libraries send the password in clear text when
+  the server's user-token policy specifies no security policy of its own. Both
+  servers warn about this on stderr; set `OPCUA_SECURITY_POLICY` rather than
+  relying on the server to encrypt the token.
+- **Certificate-based *user* authentication** (`X509IdentityToken`). User
+  identity is anonymous or username/password only.
+- **Input validation on node IDs and written values**, beyond what the OPC UA
+  server itself enforces.
+- **Secret handling.** `OPCUA_PASSWORD` is read from the environment, so it is
+  as protected as the MCP client config file that holds it.
 
 Treat the MCP servers as having the same privileges as the OPC UA account they
 connect with: anyone able to talk to the MCP server can read and write any node

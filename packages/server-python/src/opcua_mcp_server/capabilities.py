@@ -6,10 +6,11 @@ server actually advertises it, mirroring the Node server's gating.
 
 from __future__ import annotations
 
-from opcua import Client, ua
+from opcua import ua
 
 from .aggregates import spec_aggregate_node_ids
 from .contract import AGGREGATE_NODE_ID, HISTORY_NODE_ID
+from .security import create_client
 
 
 def server_supports_history(url: str) -> bool:
@@ -19,7 +20,7 @@ def server_supports_history(url: str) -> bool:
     supports historical reads, matching the Node server's behaviour.
     """
     try:
-        probe = Client(url)
+        probe = create_client(url)
         probe.connect()
         try:
             return bool(probe.get_node(HISTORY_NODE_ID).get_value())
@@ -43,7 +44,7 @@ def server_aggregate_functions(url: str) -> dict[str, ua.NodeId]:
     """
     spec = spec_aggregate_node_ids()
     try:
-        probe = Client(url)
+        probe = create_client(url)
         probe.connect()
         try:
             node = probe.get_node(AGGREGATE_NODE_ID)

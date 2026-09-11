@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
-from opcua import Client, ua
+from opcua import ua
 from opcua.ua import NodeClass
 
 from .aggregates import validate_aggregate_function
@@ -20,18 +20,25 @@ from .config import SERVER_URL
 from .contract import DESC
 from .datetimes import parse_iso_datetime
 from .records import history_records
+from .security import create_client, describe_security, security_config, security_warnings
 
 
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
 async def opcua_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
-    client = Client(SERVER_URL)
+    config = security_config()
+    # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
+    for warning in security_warnings(config):
+        print(f"WARNING: {warning}", file=sys.stderr)
+
+    # Both calls run in a thread: building a secured client fetches the server's
+    # certificate from its endpoint list, so it blocks on the network too.
+    client = await asyncio.to_thread(create_client, SERVER_URL)
     try:
         # Connect to OPC UA server synchronously, wrapped in a thread for async compatibility
         await asyncio.to_thread(client.connect)
-        # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
-        print("Connected to OPC UA server", file=sys.stderr)
+        print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
         yield {"opcua_client": client}
     finally:
         # Disconnect from OPC UA server on shutdown
@@ -501,4 +508,13 @@ def get_all_variables(ctx: Context) -> str:
 # Run the server
 def main() -> None:
     """Entry point for the `opcua-mcp-server` console script."""
+    # Fail fast and readably on a bad security configuration: an MCP client only
+    # ever shows the server's stderr, so letting it surface from a best-effort
+    # capability probe (which swallows it) would leave nothing to go on.
+    try:
+        security_config()
+    except ValueError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+
     mcp.run(transport="stdio")

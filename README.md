@@ -152,11 +152,56 @@ read_history_opcua_node  node_id="ns=2;i=3"  start_time="2026-02-30T00:00:00Z"
 
 ## Configuration
 
-Both runtimes read a single environment variable:
+Both runtimes read the same environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | OPC UA endpoint to connect to |
+| `OPCUA_SECURITY_POLICY` | `None` | `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256` — plus `Aes128_Sha256_RsaOaep` and `Aes256_Sha256_RsaPss` on the Node runtime |
+| `OPCUA_SECURITY_MODE` | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt` |
+| `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
+| `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
+| `OPCUA_APPLICATION_URI` | — | Application URI announced to the server; set it to the `subjectAltName` URI of `OPCUA_CLIENT_CERT`, which some servers insist on |
+| `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
+| `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
+
+Encrypted, authenticated connection to a real server:
+
+```json
+{
+  "mcpServers": {
+    "opcua": {
+      "command": "npx",
+      "args": ["-y", "opcua-mcp-server"],
+      "env": {
+        "OPCUA_SERVER_URL": "opc.tcp://plc.example.internal:4840",
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/etc/opcua/client.pem",
+        "OPCUA_CLIENT_KEY": "/etc/opcua/client_key.pem",
+        "OPCUA_USERNAME": "mcp-operator",
+        "OPCUA_PASSWORD": "…"
+      }
+    }
+  }
+}
+```
+
+Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
+Anything the OPC UA spec cannot honour — a mode without a policy, a policy
+without a certificate, a username without a password — is refused at startup
+with a message naming the variable, rather than failing later against live
+equipment. The server certificate is taken from the endpoint description during
+the handshake, so no server certificate file is needed.
+
+`OPCUA_USERNAME` / `OPCUA_PASSWORD` authenticate the session but encrypt
+nothing: without a security policy the password crosses the network in clear
+text unless the server's user-token policy protects it, and both servers say so
+on stderr. Pair credentials with a policy.
+
+On the **Python runtime**, certificate and key files are parsed as PEM only when
+they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
+called `client.key` fails to load — name it `client_key.pem`. The Node runtime
+sniffs the contents and accepts either name.
 
 ## Installation
 
@@ -221,14 +266,15 @@ Full guide, including the MCP Inspector and AI-agent walkthroughs:
 ## Security
 
 > [!WARNING]
-> Both runtimes currently connect with `SecurityPolicy.None` and
-> `MessageSecurityMode.None` — **unauthenticated and unencrypted**. This is fine
-> for the bundled mock and local development. **Do not point it at production
-> industrial equipment as-is.**
+> Both runtimes **default** to `SecurityPolicy.None` and
+> `MessageSecurityMode.None` — **unauthenticated and unencrypted**. That default
+> is fine for the bundled mock and local development. **Do not point it at
+> production industrial equipment as-is** — set `OPCUA_SECURITY_POLICY` and
+> credentials as shown under [Configuration](#configuration). Both servers print
+> a warning to stderr while running without security.
 
-Configurable security policies, certificate-based authentication and user
-credentials are planned; see [SECURITY.md](SECURITY.md) for the current posture
-and how to report a vulnerability.
+See [SECURITY.md](SECURITY.md) for the security posture, what the servers do and
+do not verify, and how to report a vulnerability.
 
 Note also that this server can **write** to nodes and **call methods** on real
 equipment. Scope the OPC UA user account you connect with to exactly what you

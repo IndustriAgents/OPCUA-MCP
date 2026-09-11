@@ -9,6 +9,10 @@ A second, aggregate-capable mock (`packages/mock-server-aggregate`, :4841) backs
 the aggregate tests. It is kept separate from the main mock on purpose: the main
 mock must keep advertising *no* aggregate functions so the suite can assert that
 both MCP servers hide `read_aggregate_opcua_node` when it is unsupported.
+
+A third, *secured* mock (`fixtures/secure_opcua_server.py`, :4843) backs the
+connection-security tests. It is separate for the same reason: it offers no
+unsecured endpoint at all, which is what makes those assertions mean something.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import time
 from pathlib import Path
 
 import pytest
+from fixtures.pki import CLIENT_URI, SERVER_URI, write_self_signed
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVER_URL = os.environ.get("OPCUA_SERVER_URL", "opc.tcp://localhost:4840/freeopcua/server/")
@@ -53,6 +58,17 @@ AGGREGATE_WARMUP_SECONDS = 20
 # test fixture, not of the shipped Node server, whose own dependency tree
 # installs cleanly on Node 18.
 AGGREGATE_MOCK_MIN_NODE = 20
+
+# --- secured mock (tests/fixtures/secure_opcua_server.py) -----------------------
+# A third mock, on its own port, offering *only* Basic256Sha256 endpoints and
+# requiring a username. The other two must stay unsecured — the rest of the suite
+# depends on connecting to them with no security at all.
+SECURE_PORT = 4843
+SECURE_SERVER_URL = f"opc.tcp://127.0.0.1:{SECURE_PORT}/mcp/secure"
+SECURE_SERVER_URI = SERVER_URI
+SECURE_CLIENT_URI = CLIENT_URI
+SECURE_USERNAME = "operator"
+SECURE_PASSWORD = "hunter2"
 
 
 def _node_major() -> int:
@@ -154,6 +170,81 @@ def aggregate_opcua_server() -> str:
 
         time.sleep(AGGREGATE_WARMUP_SECONDS)  # let history build up to aggregate over
         yield AGGREGATE_SERVER_URL
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture(scope="session")
+def secure_pki(tmp_path_factory) -> dict[str, str]:
+    """Freshly generated server and client key pairs for the secured mock.
+
+    One client certificate serves both runtimes: they announce its
+    subjectAltName URI through `OPCUA_APPLICATION_URI`, which is exactly what
+    that variable is for.
+    """
+    directory = tmp_path_factory.mktemp("pki")
+    server_cert, server_key = write_self_signed(directory, "server", SECURE_SERVER_URI)
+    client_cert, client_key = write_self_signed(directory, "client", SECURE_CLIENT_URI)
+    return {
+        "server_cert": str(server_cert),
+        "server_key": str(server_key),
+        "client_cert": str(client_cert),
+        "client_key": str(client_key),
+    }
+
+
+@pytest.fixture(scope="session")
+def secure_opcua_server(secure_pki) -> str:
+    """Start the secured mock OPC UA server for the session.
+
+    Unlike the unsecured mocks this one is never reused from a previous run: the
+    certificates are generated per session, so an already-running instance would
+    be presenting a different one.
+
+    Yields the server endpoint URL.
+    """
+    if _port_open("127.0.0.1", SECURE_PORT):
+        pytest.skip(
+            f"port {SECURE_PORT} is already in use — stop whatever is listening on it "
+            f"so the secured mock can present this session's certificate"
+        )
+
+    proc = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "--no-sync",
+            "python",
+            str(ROOT / "tests" / "fixtures" / "secure_opcua_server.py"),
+            "--endpoint",
+            SECURE_SERVER_URL,
+            "--cert",
+            secure_pki["server_cert"],
+            "--key",
+            secure_pki["server_key"],
+            "--uri",
+            SECURE_SERVER_URI,
+        ],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if _port_open("127.0.0.1", SECURE_PORT):
+                break
+            if proc.poll() is not None:
+                raise RuntimeError("secured mock OPC UA server exited during startup")
+            time.sleep(1)
+        else:
+            raise RuntimeError("secured mock OPC UA server did not start within 60s")
+
+        yield SECURE_SERVER_URL
     finally:
         proc.terminate()
         try:

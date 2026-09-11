@@ -230,7 +230,7 @@ The server provides detailed error messages for:
 ## Dependencies
 
 - `@modelcontextprotocol/sdk`: MCP SDK for Node.js
-- `node-opcua`: OPC UA client library for Node.js
+- `node-opcua-client`: OPC UA client library for Node.js (the client half of `node-opcua`; the server half is not needed here and is deliberately not a dependency)
 - `typescript`: TypeScript compiler
 
 ## Contributing

@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tool.inputSchema` is `tool.input_schema`, `initialize().serverInfo` is
     `.server_info`. This is a Python-attribute rename only: the wire format, and
     so `contract/tools.json` and the Node server, are untouched.
+- **The Node server needs Node 22.13 or newer** (`engines.node` was `>=18`).
+  node-opcua 2.183 declares the same floor, and the releases just before it had
+  already stopped working on Node 18 in fact if not in writing: 2.182 pulls in
+  `hexy` 0.4, which is ESM-only, and `node-opcua-debug` `require()`s it, so the
+  server died on import with `ERR_REQUIRE_ESM`. Node 18 went end-of-life in
+  April 2025 and Node 20 in April 2026. CI now covers Node 22 and 24, the
+  release and publish workflows build on Node 22 — the single-file executable
+  embeds the Node that builds it, so that one has to satisfy the floor too — and
+  the `.mcpb` manifest asks for the same version.
+- **The Node server depends on `node-opcua-client` rather than the umbrella
+  `node-opcua` package.** It is an OPC UA client and uses nothing from the server
+  half, which the umbrella package's entry point pulled in regardless. That was
+  not merely dead weight: `node-opcua-server` and the address-space test helpers
+  both read a file relative to their own `__dirname` at *import* time to find
+  their `package.json`, which does not exist once bundled, so under 2.183 the
+  `.mcpb` failed on connect with `ENOENT … extension/package.json`. Importing the
+  client package removes both reads, lets the compiler enforce that this server
+  only reaches for client APIs, and takes the `.mcpb` from about 7 MB to under
+  one.
 
 ## [0.3.0] — 2026-09-11
 

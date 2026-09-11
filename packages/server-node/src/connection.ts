@@ -3,7 +3,14 @@
 // Capability probes are best-effort by design: an optional capability must
 // never break tools/list, so a transient outage still leaves the core tools
 // advertised.
-import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua";
+// `node-opcua-client`, not the umbrella `node-opcua`: this is an OPC UA *client*,
+// and the umbrella package's entry point drags in the server implementation
+// alongside it. That half is not merely dead weight in the downloadable bundles
+// — `node-opcua-server` and the address-space test helpers both read files
+// relative to their own `__dirname` at *import* time to find their package.json,
+// which no longer exists once bundled, so the `.mcpb` died on connect. Importing
+// the client package keeps the compiler honest about what this server may use.
+import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua-client";
 
 import { setDefaultAutoSelectFamily } from "net";
 
@@ -18,13 +25,12 @@ import {
 } from "./security.js";
 
 // Happy Eyeballs: try IPv4 and IPv6 rather than only the first address DNS
-// returns. Node 20+ does this by default, Node 18 does not — so on Node 18 an
-// endpoint like the default `opc.tcp://localhost:4840` resolves to ::1 and fails
-// outright against an OPC UA server listening on IPv4, instead of falling back
-// to 127.0.0.1. Guarded because the API landed in Node 18.13.
-if (typeof setDefaultAutoSelectFamily === "function") {
-  setDefaultAutoSelectFamily(true);
-}
+// returns. Every Node this package now supports defaults to this, so the call is
+// belt and braces — but an explicit `true` also survives a deployment that turns
+// it off with `--no-network-family-autoselection`, under which the default
+// `opc.tcp://localhost:4840` resolves to ::1 and fails outright against an OPC UA
+// server listening on IPv4 rather than falling back to 127.0.0.1.
+setDefaultAutoSelectFamily(true);
 
 export class OpcuaConnection {
   private opcuaClient: OPCUAClient | null = null;

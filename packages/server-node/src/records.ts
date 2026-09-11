@@ -13,7 +13,7 @@
 // Python — so anything that reaches for `String(value)` or `typeof` as its
 // primary signal diverges by construction. The per-type table is shared, and
 // pinned from both sides by tests/fixtures/value-encoding.json.
-import { DataType, DataValue, Variant, VariantArrayType } from "node-opcua";
+import { DataType, DataValue, Variant, VariantArrayType } from "node-opcua-client";
 
 export interface HistoryRecord {
   /** JSON-native where the OPC UA type allows; see `variantToJson`. */

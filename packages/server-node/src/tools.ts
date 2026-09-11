@@ -14,7 +14,7 @@ import {
   HistoryData,
   AggregateFunction,
   ClientSession,
-} from "node-opcua";
+} from "node-opcua-client";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { OpcuaConnection } from "./connection.js";

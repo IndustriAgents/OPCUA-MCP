@@ -59,7 +59,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: packages/server-node/package-lock.json
 
@@ -95,11 +95,12 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      # Node 20+ is a build-time floor: `--experimental-sea-config` does not
-      # exist before it. The server itself still supports Node 18.
+      # The single-file executable embeds *this* Node, so it has to be a Node the
+      # server actually runs on — `engines.node` is `>=22.13.0`, which is also
+      # comfortably past the Node 20 floor `--experimental-sea-config` needs.
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: packages/server-node/package-lock.json
 

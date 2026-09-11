@@ -3,20 +3,21 @@
 // The npm package does not need this — `npm install` brings node_modules with
 // it. The two *downloadable* artifacts do:
 //
-//   * the MCP bundle (`build-mcpb.mjs`), where 7 MB beats shipping a 90 MB
-//     node_modules inside a zip a plant engineer has to download;
+//   * the MCP bundle (`build-mcpb.mjs`), where under a megabyte beats shipping a
+//     100 MB node_modules inside a zip a plant engineer has to download;
 //   * the single-file executable (`build-sea.mjs`), which by definition is one
 //     file.
 //
-// Two things about node-opcua make this less routine than it sounds, and both
-// are handled below rather than left to bite at runtime:
+// Three things make this less routine than it sounds, and all are handled below
+// rather than left to bite at runtime:
 //
-//   1. Its dependency tree is CommonJS, so an ESM bundle has to be handed a
-//      working `require`, `__filename` and `__dirname` (BANNER).
+//   1. node-opcua-client's dependency tree is CommonJS, so an ESM bundle has to
+//      be handed a working `require`, `__filename` and `__dirname` (BANNER).
 //   2. `contract.ts` locates `contract.json` and `version.json` relative to its
 //      own module URL, which stops being a real directory once bundled. So the
 //      contract and version are inlined at build time instead (inlineContract),
 //      which also makes the output genuinely self-contained.
+//   3. It reaches an optional peer dependency it does not install (EXTERNAL).
 //
 // Bundling is verified end to end, not assumed: tests/smoke/test_artifacts.py
 // drives the packed .mcpb against a live OPC UA server over MCP.
@@ -46,6 +47,18 @@ const BANNER = [
   "const __filename = __fileURLToPath(import.meta.url);",
   "const __dirname = __dirname_of(__filename);",
 ].join("\n");
+
+// Optional peer dependencies that are deliberately absent from node_modules.
+//
+// `@ster5/global-mutex`, which node-opcua-client pulls in for its certificate store,
+// declares `proper-lockfile` as an *optional* peer and reaches for it through a
+// dynamic `import()` guarded by a try/catch that falls back to its own native
+// file-locking provider. Nothing installs it, so esbuild cannot resolve the
+// specifier and fails the whole bundle. Marking it external leaves the
+// `import()` in place, the catch fires at runtime exactly as it does under
+// `npm install`, and the native provider is used — the same behaviour, reached
+// the same way.
+const EXTERNAL = ["proper-lockfile"];
 
 /** esbuild plugin: replace `./contract.js` with the contract inlined as literals.
  *
@@ -82,7 +95,7 @@ function inlineContract() {
 export async function bundle({
   outfile,
   format = "esm",
-  target = "node18",
+  target = "node22",
   entry = join(PKG_ROOT, "src", "index.ts"),
 }) {
   await esbuild.build({
@@ -92,6 +105,7 @@ export async function bundle({
     platform: "node",
     format,
     target,
+    external: EXTERNAL,
     banner: format === "esm" ? { js: BANNER } : undefined,
     // `index.ts` reads `import.meta.url` to decide whether it is the process
     // entry point. A CommonJS bundle has no `import.meta`, and esbuild warns

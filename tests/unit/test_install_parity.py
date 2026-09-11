@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import ROOT
@@ -61,6 +62,21 @@ def _dry_run_config(impl: str, home, extra: list[str] | None = None) -> dict:
     proc = _run(impl, ["--install", "claude-desktop", "--dry-run", *(extra or [])], home)
     assert proc.returncode == 0, f"{impl}: {proc.stderr}"
     return json.loads(proc.stdout[proc.stdout.index("{") :])
+
+
+def _config_target(impl: str, home) -> Path:
+    """Where this runtime would write, taken from its own `--dry-run` report.
+
+    Asking rather than reconstructing: the path is platform-specific (Application
+    Support on macOS, XDG on Linux, APPDATA on Windows), and a test that hardcodes
+    one of them silently stops testing anything on the other two — it seeds a file
+    the runtime never reads, and then asserts against whatever it does instead.
+    """
+    proc = _run(impl, ["--install", "claude-desktop", "--dry-run"], home)
+    assert proc.returncode == 0, proc.stderr
+    first_line = proc.stdout.splitlines()[0]
+    assert first_line.startswith("Would write "), f"{impl} changed its dry-run preamble"
+    return Path(first_line.removeprefix("Would write ").rstrip(":"))
 
 
 @pytest.mark.parametrize("impl", ["python", "node"])
@@ -186,11 +202,11 @@ def test_dry_run_output_survives_a_pipe(impl, tmp_path):
     is precisely the condition that triggers it; a shell redirect to a file would
     not have caught it.
     """
-    config = tmp_path / "Library" / "Application Support" / "Claude"
-    config.mkdir(parents=True)
+    target = _config_target(impl, tmp_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     bulk = {"command": "x" * 200, "args": ["y" * 200]}
     existing = {"mcpServers": {f"server{i}": bulk for i in range(2000)}}
-    (config / "claude_desktop_config.json").write_text(json.dumps(existing), encoding="utf-8")
+    target.write_text(json.dumps(existing), encoding="utf-8")
 
     proc = _run(impl, ["--install", "claude-desktop", "--dry-run", "--force"], tmp_path)
     assert proc.returncode == 0, proc.stderr

@@ -18,8 +18,10 @@
 //     Gatekeeper — first launch still needs the quarantine flag cleared. See
 //     docs/install.md.
 //
-// Requires Node 20+ to build (`--experimental-sea-config`); the *server* still
-// supports Node 18, and the npm package is unaffected by any of this.
+// Requires Node 20+ to build (`--experimental-sea-config`), but CI builds on a
+// Node that satisfies `engines.node` (>=22.13.0) because the executable embeds
+// the building Node and then has to run the server with it. The npm package is
+// unaffected by any of this.
 //
 // Run: npm run build:sea   ->   dist/opcua-mcp-server-node-<platform>-<arch>[.exe]
 import { spawnSync } from "child_process";

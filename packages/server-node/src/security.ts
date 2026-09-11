@@ -12,7 +12,7 @@ import {
   SecurityPolicy,
   type UserIdentityInfo,
   UserTokenType,
-} from "node-opcua";
+} from "node-opcua-client";
 
 import { existsSync } from "fs";
 

@@ -93,9 +93,9 @@ installs them in isolation, and drives the installed entry points from outside
 the repo.
 
 There are now five such artifacts, and the two newest stray furthest from the
-source tree: the `.mcpb` bundle inlines the contract and bundles node-opcua's
-whole CommonJS dependency tree into one file, and the single-file executables
-freeze an interpreter around it. Both can break while every other test stays
+source tree: the `.mcpb` bundle inlines the contract and bundles
+node-opcua-client's whole CommonJS dependency tree into one file, and the
+single-file executables freeze an interpreter around it. Both can break while every other test stays
 green, so both are built and driven over MCP in `tests/smoke/`. See
 [install.md](install.md) for what each artifact is for.
 
@@ -108,7 +108,7 @@ packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
                              · capabilities · aggregates · records · version
                              · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
-packages/server-node/        @modelcontextprotocol/sdk + node-opcua
+packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
                              · connection · tools · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)

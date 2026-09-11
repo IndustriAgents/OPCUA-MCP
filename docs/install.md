@@ -163,10 +163,10 @@ uv run --group packaging pyinstaller --noconfirm \
     packages/server-python/packaging/opcua-mcp-server.spec
 ```
 
-Building an executable needs Node 20+ (`--experimental-sea-config`) even though
-the server itself supports Node 18. Neither executable can be cross-compiled —
-each embeds the interpreter it was built with — so a release builds one per
-operating system in
+Build with a Node that satisfies the server's own floor (>=22.13): each
+executable embeds the interpreter it was built with, and then has to run the
+server on it. That also means neither can be cross-compiled, so a release builds
+one per operating system in
 [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 `tests/smoke/` builds all of these and drives them against a live OPC UA server;

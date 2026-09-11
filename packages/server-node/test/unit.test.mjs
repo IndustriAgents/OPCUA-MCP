@@ -22,7 +22,7 @@ import {
   Variant,
   VariantArrayType,
   coerceNodeId,
-} from "node-opcua";
+} from "node-opcua-client";
 
 import { toDate } from "../build/dates.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "../build/records.js";

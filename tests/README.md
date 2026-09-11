@@ -92,14 +92,14 @@ be verified by hand against the real server.
 
 ## Prerequisites
 
-- `uv`, `node` (>=18; >=20 to build a single-file executable), `npm`
+- `uv`, `node` (>=22.13, matching the server's `engines.node`), `npm`
 - Set up the workspace once (from the repo root): `uv sync --all-packages`
 - Build the Node server once: `cd packages/server-node && npm install && npm run build`
   (Node tests are **skipped** if `build/index.js` is missing).
 - Install the aggregate mock once: `cd packages/mock-server-aggregate && npm install`
   (aggregate tests are **skipped** if its `node_modules` is missing, or on Node <20 —
   `node-opcua-aggregates` pulls dependencies that require it. This limits the test
-  fixture only; the shipped Node server supports Node 18+).
+  fixture only; the shipped Node server needs Node 22.13+).
 
 ## Running
 

@@ -43,8 +43,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "node-opcua": "^2.128.0",
-    "node-opcua-client": "^2.128.0"
+    "node-opcua-client": "^2.183.1"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",
@@ -55,7 +54,7 @@
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "files": [
     "build/**/*",

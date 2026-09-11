@@ -250,10 +250,10 @@ single-file executables — are covered in **[docs/install.md](docs/install.md)*
 
 | | Python | Node |
 |---|---|---|
-| Requires | Python 3.10+ | Node 18+ |
+| Requires | Python 3.10+ | Node 22.13+ |
 | Package | [PyPI `opcua-mcp-server`](https://pypi.org/project/opcua-mcp-server/) | [npm `opcua-mcp-server`](https://www.npmjs.com/package/opcua-mcp-server) |
 | Framework | `mcp` (`MCPServer`) | `@modelcontextprotocol/sdk` |
-| OPC UA library | `opcua` (FreeOpcUa) | `node-opcua` |
+| OPC UA library | `opcua` (FreeOpcUa) | `node-opcua-client` |
 | Source | `packages/server-python/` | `packages/server-node/` |
 
 Exact dependency versions live in the manifests

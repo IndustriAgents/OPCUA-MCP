@@ -185,6 +185,56 @@ describe("parseArgs", () => {
     assert.equal(parseArgs(["--force"]).kind, "error"); // --install is required
   });
 
+  // Was a real hazard: `--url` swallowed the next token whatever it was, so a
+  // forgotten endpoint turned `--dry-run` into the URL *and* consumed the flag
+  // that was meant to prevent any write. The result was a real config written
+  // with a nonsense endpoint, reported as success.
+  test("a flag is never accepted as the value of another flag", () => {
+    const action = parseArgs(["--install", "claude-desktop", "--url", "--dry-run"]);
+    assert.equal(action.kind, "error");
+    assert.match(action.message, /--url needs an endpoint/);
+  });
+
+  test("a missing client name is an error, not the next flag", () => {
+    const action = parseArgs(["--install", "--dry-run"]);
+    assert.equal(action.kind, "error");
+    assert.match(action.message, /--install needs a client name/);
+  });
+
+  // argparse accepts `--url=value`, so the Node runtime has to as well; a user
+  // following the Python docs must not be told it is an unknown argument.
+  test("--flag=value is accepted, like argparse", () => {
+    const action = parseArgs(["--install=claude-desktop", `--url=${URL_}`, "--dry-run"]);
+    assert.deepEqual(action.options, {
+      client: "claude-desktop",
+      url: URL_,
+      force: false,
+      dryRun: true,
+    });
+  });
+
+  test("an endpoint containing '=' survives the split", () => {
+    const url = "opc.tcp://h:4840/path?a=b";
+    assert.equal(parseArgs(["--install=claude-desktop", `--url=${url}`]).options.url, url);
+  });
+
+  // argparse: "ignored explicit argument" — a hard error, not a silent accept.
+  test("a value attached to a boolean flag is rejected", () => {
+    assert.equal(parseArgs(["--install=claude-desktop", "--force=yes"]).kind, "error");
+    assert.equal(parseArgs(["--install=claude-desktop", "--dry-run=1"]).kind, "error");
+  });
+
+  // An endpoint is not an option token, so the guard above must not reject one.
+  test("flags after a consumed value are still parsed", () => {
+    const action = parseArgs(["--install", "claude-desktop", "--url", URL_, "--dry-run"]);
+    assert.deepEqual(action.options, {
+      client: "claude-desktop",
+      url: URL_,
+      force: false,
+      dryRun: true,
+    });
+  });
+
   test("every advertised client is accepted", () => {
     for (const client of CLIENTS) {
       assert.equal(parseArgs(["--install", client]).kind, "install");

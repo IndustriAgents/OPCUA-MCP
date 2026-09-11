@@ -128,14 +128,18 @@ export function runMain(opts: { scriptPath: string | null }): void {
     server.run().catch(console.error);
     return;
   }
-  process.exit(
-    runCli(action, {
-      execPath: process.execPath,
-      scriptPath: opts.scriptPath,
-      log: (msg) => process.stdout.write(`${msg}\n`),
-      err: (msg) => process.stderr.write(`${msg}\n`),
-    })
-  );
+  // `process.exitCode`, never `process.exit()`. Writes to a *piped* stdout are
+  // asynchronous, and `process.exit()` does not wait for them — piping a
+  // `--dry-run` of a large config to a file would truncate the JSON mid-write
+  // and still report success. Setting the code lets Node drain and exit on its
+  // own, which it can do immediately here because the CLI path opens nothing:
+  // no MCP transport, no OPC UA connection, only synchronous file IO.
+  process.exitCode = runCli(action, {
+    execPath: process.execPath,
+    scriptPath: opts.scriptPath,
+    log: (msg) => process.stdout.write(`${msg}\n`),
+    err: (msg) => process.stderr.write(`${msg}\n`),
+  });
 }
 
 if (isEntryPoint()) {

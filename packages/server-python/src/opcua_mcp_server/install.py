@@ -140,9 +140,15 @@ def _read_config(path: Path) -> Any:
 
     An unparseable config is a hard error: overwriting it would silently destroy
     every other MCP server the user has configured.
+
+    The encoding is explicit because ``Path.read_text`` otherwise defaults to the
+    system locale, which on Windows is typically not UTF-8. Claude's config is
+    UTF-8, and a Windows user whose profile path contains a non-ASCII character —
+    hardly exotic — would otherwise get mojibake written back or an uncaught
+    UnicodeDecodeError. The Node runtime has always passed "utf8" here.
     """
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
     if not raw.strip():
@@ -166,7 +172,10 @@ def _write_config(path: Path, config: Any) -> Path | None:
     # Write-then-rename: a crash mid-write must not leave a truncated config that
     # takes every other MCP server down with it.
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(config, indent=2) + "\n")
+    # UTF-8 for the same reason as the read, and `ensure_ascii=False` so a
+    # non-ASCII value that came out of the existing config goes back in as
+    # itself rather than as an escape sequence.
+    tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(path)
     return backup
 

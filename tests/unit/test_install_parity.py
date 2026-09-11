@@ -147,3 +147,75 @@ def test_an_unknown_argument_exits_2_without_serving(impl, tmp_path):
 @pytest.mark.parametrize("impl", ["python", "node"])
 def test_an_unknown_client_is_rejected(impl, tmp_path):
     assert _run(impl, ["--install", "emacs"], tmp_path).returncode == 2
+
+
+# --- malformed input must fail the same way in both -----------------------------
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_a_flag_is_never_swallowed_as_another_flags_value(impl, tmp_path):
+    """`--url --dry-run` must be rejected, not read as an endpoint of "--dry-run".
+
+    The Node parser used to take the next token unconditionally, so a forgotten
+    endpoint both produced a nonsense URL *and* consumed the flag that was meant
+    to stop anything being written — the config got rewritten for real, and the
+    command reported success. Python's argparse always refused it; the point of
+    this test is that the two agree.
+    """
+    proc = _run(impl, ["--install", "claude-desktop", "--url", "--dry-run"], tmp_path)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not list(tmp_path.rglob("claude_desktop_config.json")), (
+        f"{impl} wrote a config despite a usage error"
+    )
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_a_missing_client_name_is_rejected(impl, tmp_path):
+    proc = _run(impl, ["--install", "--dry-run"], tmp_path)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not list(tmp_path.rglob("claude_desktop_config.json"))
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_dry_run_output_survives_a_pipe(impl, tmp_path):
+    """A large `--dry-run` must not be truncated when stdout is a pipe.
+
+    Node's writes to a pipe are asynchronous and `process.exit()` does not wait
+    for them, so this used to stop at exactly one 64 KB pipe buffer — emitting
+    invalid JSON and still exiting 0. `subprocess` gives the child a pipe, which
+    is precisely the condition that triggers it; a shell redirect to a file would
+    not have caught it.
+    """
+    config = tmp_path / "Library" / "Application Support" / "Claude"
+    config.mkdir(parents=True)
+    bulk = {"command": "x" * 200, "args": ["y" * 200]}
+    existing = {"mcpServers": {f"server{i}": bulk for i in range(2000)}}
+    (config / "claude_desktop_config.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    proc = _run(impl, ["--install", "claude-desktop", "--dry-run", "--force"], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert len(proc.stdout) > 100_000, "test is meaningless below one pipe buffer"
+
+    printed = json.loads(proc.stdout[proc.stdout.index("{") :])
+    assert len(printed["mcpServers"]) == len(existing["mcpServers"]) + 1
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_flag_equals_value_is_accepted(impl, tmp_path):
+    """`--url=...` as well as `--url ...`.
+
+    argparse has always taken both forms, so a user following the Python docs at
+    the Node runtime must not be told `--install=claude-desktop` is an unknown
+    argument. The Node parser only matched whole tokens until this was noticed.
+    """
+    proc = _run(impl, ["--install=claude-desktop", f"--url={URL}", "--dry-run"], tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    entry = json.loads(proc.stdout[proc.stdout.index("{") :])["mcpServers"]["opcua"]
+    assert entry["env"]["OPCUA_SERVER_URL"] == URL
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_a_value_on_a_boolean_flag_is_rejected(impl, tmp_path):
+    proc = _run(impl, ["--install=claude-desktop", "--force=yes"], tmp_path)
+    assert proc.returncode == 2, proc.stdout + proc.stderr

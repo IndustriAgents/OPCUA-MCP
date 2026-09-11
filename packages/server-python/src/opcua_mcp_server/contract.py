@@ -46,7 +46,10 @@ def load_contract() -> dict:
     candidates = contract_candidates(Path(__file__).resolve())
     for path in candidates:
         if path.is_file():
-            return json.loads(path.read_text())
+            # Explicit UTF-8: `read_text` otherwise defaults to the system locale,
+            # so a non-ASCII character in a tool description would make the
+            # package unimportable on a Windows machine and nowhere else.
+            return json.loads(path.read_text(encoding="utf-8"))
     raise FileNotFoundError(
         "Shared tool contract not found; looked in " + ", ".join(str(p) for p in candidates)
     )

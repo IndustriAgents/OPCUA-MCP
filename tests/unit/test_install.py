@@ -205,3 +205,34 @@ def test_every_advertised_client_is_a_string():
     """`--install` advertises these in its help; the Node runtime must offer the
     same set (see test_install_parity.py)."""
     assert CLIENTS and all(isinstance(c, str) for c in CLIENTS)
+
+
+# --- encoding ------------------------------------------------------------------
+
+
+def test_a_non_ascii_config_round_trips_unchanged(config_path):
+    """Reading and rewriting must not corrupt non-ASCII values.
+
+    `Path.read_text` defaults to the system locale, which on Windows is typically
+    not UTF-8, while Claude's config is. A user whose profile path contains an
+    accented character — `C:\\Users\\José` — would otherwise get mojibake written
+    back over their config, or an uncaught UnicodeDecodeError. The Node runtime
+    has always passed "utf8" explicitly, so this was a parity gap too.
+    """
+    existing = {"mcpServers": {"café": {"command": "/Users/José/bin/serveur", "args": ["—flag"]}}}
+    config_path.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+
+    assert run_install(URL, config_path=config_path) == 0
+
+    after = json.loads(config_path.read_text(encoding="utf-8"))
+    assert after["mcpServers"]["café"] == existing["mcpServers"]["café"]
+
+
+def test_the_written_config_is_utf8_bytes(config_path):
+    """Not just round-trippable through our own reader — actually UTF-8 on disk,
+    since Claude Desktop is the one that has to read it back."""
+    config_path.write_text(json.dumps({"mcpServers": {"ré": {"command": "x"}}}), encoding="utf-8")
+    assert run_install(URL, config_path=config_path) == 0
+
+    raw = config_path.read_bytes()
+    assert "ré".encode() in raw, "non-ASCII key was not written back as UTF-8"

@@ -191,8 +191,40 @@ export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Acti
   let force = false;
   let dryRun = false;
 
+  /** The operand after a flag, or undefined when the flag was given none.
+   *
+   * A token starting with `-` counts as "none". In `--url --dry-run` the user
+   * forgot the endpoint, and taking `--dry-run` as the URL would write a real
+   * config with a nonsense endpoint *and* swallow the very flag that was meant
+   * to stop it writing anything. Python's argparse rejects that input, and the
+   * two runtimes have to agree.
+   */
+  const operandAfter = (i: number): string | undefined => {
+    const next = argv[i + 1];
+    return next === undefined || next.startsWith("-") ? undefined : next;
+  };
+
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+    // `--url=value` as well as `--url value`. Python's argparse accepts both, and
+    // a user who reads the Python docs and types the first form at the Node
+    // runtime must not be told it is an unknown argument.
+    const token = argv[i];
+    const eq = token.startsWith("--") ? token.indexOf("=") : -1;
+    const arg = eq === -1 ? token : token.slice(0, eq);
+    const inline = eq === -1 ? undefined : token.slice(eq + 1);
+
+    /** This flag's operand, from `=value` or the next token, consuming it. */
+    const operand = (): string | undefined => {
+      if (inline !== undefined) return inline;
+      const next = operandAfter(i);
+      if (next !== undefined) i++;
+      return next;
+    };
+
+    /** A value attached to a flag that takes none — argparse rejects this too. */
+    const rejectsInline = (): Action | undefined =>
+      inline === undefined ? undefined : { kind: "error", message: `${arg} takes no value` };
+
     switch (arg) {
       case "-h":
       case "--help":
@@ -200,21 +232,32 @@ export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Acti
       case "-v":
       case "--version":
         return { kind: "version" };
-      case "--install":
-        client = argv[++i];
-        if (client === undefined)
+      case "--install": {
+        const value = operand();
+        if (value === undefined) {
           return { kind: "error", message: "--install needs a client name" };
+        }
+        client = value;
         break;
-      case "--url":
-        url = argv[++i];
-        if (url === undefined) return { kind: "error", message: "--url needs an endpoint" };
+      }
+      case "--url": {
+        const value = operand();
+        if (value === undefined) return { kind: "error", message: "--url needs an endpoint" };
+        url = value;
         break;
-      case "--force":
+      }
+      case "--force": {
+        const bad = rejectsInline();
+        if (bad) return bad;
         force = true;
         break;
-      case "--dry-run":
+      }
+      case "--dry-run": {
+        const bad = rejectsInline();
+        if (bad) return bad;
         dryRun = true;
         break;
+      }
       default:
         return { kind: "error", message: `unknown argument: ${arg}` };
     }

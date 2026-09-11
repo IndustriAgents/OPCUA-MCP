@@ -46,7 +46,7 @@ async def test_server_reports_manifest_version(impl, opcua_server):
         stdio_client(_server_params(impl, opcua_server)) as (read, write),
         ClientSession(read, write) as session,
     ):
-        info = (await session.initialize()).serverInfo
+        info = (await session.initialize()).server_info
 
     assert info.name == "opcua-mcp-server", f"{impl} server identifies as {info.name!r}"
     assert info.version == _expected_version(impl), (

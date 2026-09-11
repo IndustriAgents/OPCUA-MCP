@@ -108,7 +108,7 @@ async def test_aggregate_average_values_are_correct(agg_server):
     async with connect(params) as session:
         result, values = await read_average(session, window_seconds=20, interval_ms=interval_ms)
 
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
     records = records_of(result)
     # The aggregate tool shares the history tool's record shape (contract ->
     # resultShapes.historyRecords); both servers must produce it.
@@ -153,7 +153,7 @@ async def test_aggregate_default_end_time_is_utc(agg_server):
             end_time="default",
         )
 
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
     # A 60s window in 10s buckets is 6 buckets, plus at most one for the boundary.
     # Under the bug this was 727 on a UTC+2 host and would be ~1986 at UTC+5:30.
     max_buckets = window_seconds * 1000 // interval_ms + 2

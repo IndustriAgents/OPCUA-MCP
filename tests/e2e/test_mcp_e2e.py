@@ -226,7 +226,7 @@ async def test_read_single_node(server):
     _impl, params = server
     async with connect(params) as session:
         result = await session.call_tool("read_opcua_node", {"node_id": NODE["Temperature"]})
-    assert not result.isError
+    assert not result.is_error
     text = text_of(result)
     assert NODE["Temperature"] in text
     assert "value" in text.lower()
@@ -237,7 +237,7 @@ async def test_read_multiple_nodes(server):
     ids = [NODE["Temperature"], NODE["Pressure"], NODE["PumpEnabled"]]
     async with connect(params) as session:
         result = await session.call_tool("read_multiple_opcua_nodes", {"node_ids": ids})
-    assert not result.isError
+    assert not result.is_error
     text = text_of(result)
     for nid in ids:
         assert nid in text
@@ -247,7 +247,7 @@ async def test_get_all_variables(server):
     _impl, params = server
     async with connect(params) as session:
         result = await session.call_tool("get_all_variables", {})
-    assert not result.isError
+    assert not result.is_error
     text = text_of(result)
     assert "Found" in text and "variables" in text
     assert "Temperature" in text
@@ -259,7 +259,7 @@ async def test_browse_children(server):
         result = await session.call_tool(
             "browse_opcua_node_children", {"node_id": NODE["IndustrialControlSystem"]}
         )
-    assert not result.isError
+    assert not result.is_error
     text = text_of(result)
     for folder in ("Sensors", "Actuators", "SystemStatus", "Methods"):
         assert folder in text
@@ -272,7 +272,7 @@ async def test_write_numeric_node(server):
         result = await session.call_tool(
             "write_opcua_node", {"node_id": NODE["ValvePosition"], "value": "80"}
         )
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
     assert "Success" in text_of(result) or "wrote" in text_of(result).lower()
 
 
@@ -283,7 +283,7 @@ async def test_write_boolean_node(server):
         result = await session.call_tool(
             "write_opcua_node", {"node_id": NODE["StopProductionCommand"], "value": "true"}
         )
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
     assert "Success" in text_of(result) or "wrote" in text_of(result).lower()
 
 
@@ -303,7 +303,7 @@ async def test_call_method_start_then_stop(server):
                 "arguments": ["60"],
             },
         )
-        assert not start.isError, text_of(start)
+        assert not start.is_error, text_of(start)
 
         mode = await wait_for_node_value(session, NODE["SystemMode"], "AUTO")
         assert "AUTO" in mode
@@ -312,7 +312,7 @@ async def test_call_method_start_then_stop(server):
             "call_opcua_method",
             {"object_node_id": NODE["Methods"], "method_node_id": methods["StopProduction"]},
         )
-        assert not stop.isError, text_of(stop)
+        assert not stop.is_error, text_of(stop)
 
         mode2 = await wait_for_node_value(session, NODE["SystemMode"], "MANUAL")
         assert "MANUAL" in mode2
@@ -331,7 +331,7 @@ async def test_read_history(server):
         result = await session.call_tool(
             HISTORY_TOOL[impl], {"node_id": NODE["Temperature"], "num_values": 5}
         )
-    assert not result.isError, text_of(result)
+    assert not result.is_error, text_of(result)
 
     records = records_of(result)
     assert records, f"{impl}: no history records returned"
@@ -353,6 +353,32 @@ async def test_read_history(server):
 
     # Not asserted: ordering. Given `num_values` alone, an OPC UA server reads
     # backwards from now, and both servers pass that ordering through unchanged.
+
+
+async def test_history_rejects_a_malformed_timestamp_identically(server):
+    """A bad timestamp must come back diagnosable, and worded the same on both.
+
+    Two things could take this away silently. The `mcp` SDK only forwards a
+    `ToolError`'s message to the client — any other exception is treated as a
+    crash and replaced with `Error executing tool <name>`, which would leave the
+    caller nothing to act on. And each server wraps the failure itself, so the
+    `Failed to read node …` prefix is as much part of the shared wording as the
+    `Invalid date/time: …` the unit tests pin. Asserting the whole sentence
+    catches either one drifting.
+
+    The SDKs' own outer prefixes are excluded: neither server chooses those.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            HISTORY_TOOL[impl],
+            {"node_id": NODE["Temperature"], "start_time": "not-a-date"},
+        )
+    expected = (
+        f'Failed to read node {NODE["Temperature"]}: Invalid date/time: "not-a-date". '
+        "Use ISO 8601, e.g. 2026-04-23T17:40:00Z"
+    )
+    assert expected in text_of(result), f"{impl}: got {text_of(result)!r}"
 
 
 # --- browse parsing (server output formats differ) -----------------------------

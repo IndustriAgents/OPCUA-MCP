@@ -14,7 +14,7 @@ Thanks for your interest in contributing! This repo provides **two MCP servers**
 |------|------------|
 | `packages/mock-server/` | Mock "Industrial Control System" OPC UA server (:4840; advertises no aggregate functions, on purpose) |
 | `packages/mock-server-aggregate/` | Aggregate-capable mock (:4841), backing the aggregate tests |
-| `packages/server-python/` | **Python** MCP server (FastMCP + `opcua`/FreeOpcUa), a `src/` package |
+| `packages/server-python/` | **Python** MCP server (`mcp`/`MCPServer` + `opcua`/FreeOpcUa), a `src/` package |
 | `packages/server-node/` | **Node** MCP server (TypeScript + `@modelcontextprotocol/sdk` + `node-opcua`) |
 | `tests/` | End-to-end pytest suite driving both servers via the `mcp` SDK |
 | `docs/` | Usage docs (`architecture.md`, `examples.md`, `install.md`, `testing.md`); `archive/` holds executed plans |
@@ -95,7 +95,7 @@ The tool surface is defined once in [`contract/tools.json`](contract/tools.json)
 1. **Contract** (`contract/tools.json`): add an entry under `tools` with its `name`, `description`, `inputSchema` (JSON Schema), and `capability` (`null`, or `"history"`/`"aggregate"` if it depends on a server capability).
    If the tool returns structured data rather than free text, give it a `resultShape` naming an entry under `resultShapes` — reuse an existing shape where one fits. Both servers must then emit that shape byte-comparably; a client that has learned one server's output has to be able to read the other's, and `tests/e2e/test_contract_parity.py` checks the real output against the shape.
 2. **Node** (`packages/server-node/src/tools.ts`): add a `case "foo"` to the `callTool` switch and implement the handler method. You do **not** edit `listTools` — it is generated from the contract. Run `npm run build` (this also stages the contract and version into `build/`).
-3. **Python** (`packages/server-python/src/opcua_mcp_server/server.py`): add a function decorated with `@mcp.tool(description=_DESC["foo"])`, with typed args (FastMCP derives the input schema from them — keep it matching the contract) and `ctx: Context`. For a capability-gated tool, register it conditionally like `read_history_opcua_node`.
+3. **Python** (`packages/server-python/src/opcua_mcp_server/server.py`): add a function decorated with `@mcp.tool(description=_DESC["foo"])`, with typed args (`MCPServer` derives the input schema from them — keep it matching the contract) and `ctx: Context`. For a capability-gated tool, register it conditionally like `read_history_opcua_node`.
 4. **Test**: add an end-to-end test in `tests/e2e/test_mcp_e2e.py` (it runs against both servers). The contract-parity test will automatically check that both servers advertise the new tool with the contract's description and parameters; if the tool declares a `resultShape`, assert the returned records against it with `assert_matches_result_shape`.
 5. **Document it** in `docs/examples.md` (the central per-tool reference).
 
@@ -114,8 +114,11 @@ npm run typecheck              # tsc --noEmit
 
 Beyond what the tools check:
 
-- **Python**: type-hint tool signatures — FastMCP derives the input schema from
-  them, so a wrong annotation is a wire-protocol bug, not a style nit.
+- **Python**: type-hint tool signatures — `MCPServer` derives the input schema
+  from them, so a wrong annotation is a wire-protocol bug, not a style nit.
+- **Python**: raise `ToolError` for a failure the caller should see. The SDK
+  forwards its message and withholds every other exception's as a crash, so a
+  bare `raise` turns a diagnosable error into `Error executing tool <name>`.
 - **Never write to `stdout`** except via the MCP transport; stdout carries the
   JSON-RPC stream and stray output corrupts it. Use `print(..., file=sys.stderr)`
   in Python; the Node server already redirects stray `console.log` to `stderr`.

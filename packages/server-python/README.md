@@ -22,7 +22,7 @@ See the central per-tool reference in **[docs/examples.md](https://github.com/mi
 - **Automatic Connection Management**: Handles OPC UA client lifecycle with proper connection setup and teardown
 - **Type-Safe Operations**: Automatic type conversion based on existing node data types
 - **Error Handling**: Comprehensive error reporting for debugging and monitoring
-- **Async Support**: Built on FastMCP for efficient asynchronous operations
+- **Async Support**: Built on the `mcp` SDK's `MCPServer` for efficient asynchronous operations
 - **Configurable**: Environment-based endpoint, security policy and credentials
 
 ## Installation

@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- **The Python server now targets the `mcp` 2.x API.** 0.3.0 pinned `mcp[cli]<2`
+  because 2.x renamed `FastMCP` to `MCPServer` and the server died on import
+  without it; the pin is now `>=2.2.0,<3` and the server imports
+  `mcp.server.mcpserver`. The protocol version no longer has to be poked onto the
+  private low-level server — `MCPServer` takes `version=` in its constructor.
+
+  Two consequences worth knowing if you depend on this package:
+
+  * **Tool failures must be raised as `ToolError` to stay readable.** 2.x forwards
+    a `ToolError`'s message to the client and replaces every other exception's
+    with `Error executing tool <name>`, on the grounds that an unanticipated crash
+    should not leak its internals. The history and aggregate tools now raise
+    `ToolError`, so `Invalid aggregate function. Supported: …` and
+    `Failed to read node …: …` still reach the caller, worded as the Node server
+    words them. Python `read_history_opcua_node` had no such wrapper at all
+    before, so a bad node ID or timestamp surfaced without the `Failed to read
+    node …` prefix the Node server adds; the two now agree. (Each SDK still adds
+    its own outer prefix, which neither server controls.)
+  * **The client models are snake_case.** `result.isError` is `result.is_error`,
+    `tool.inputSchema` is `tool.input_schema`, `initialize().serverInfo` is
+    `.server_info`. This is a Python-attribute rename only: the wire format, and
+    so `contract/tools.json` and the Node server, are untouched.
 
 ## [0.3.0] — 2026-09-11
 

@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from opcua import ua
 from opcua.ua import NodeClass
 
@@ -25,7 +26,7 @@ from .version import package_version
 
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
-async def opcua_lifespan(server: FastMCP) -> AsyncIterator[dict]:
+async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
     config = security_config()
     # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
@@ -47,12 +48,9 @@ async def opcua_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 
 # Create an MCP server instance. The server identity must match the Node server's
-# so both runtimes present themselves as the same product to MCP clients.
-mcp = FastMCP("opcua-mcp-server", lifespan=opcua_lifespan)
-# FastMCP does not expose the protocol-level version in its constructor, so set it
-# on the underlying low-level server. Without this the Python server reports a
-# null version over MCP while the Node server reports a real one.
-mcp._mcp_server.version = package_version()
+# so both runtimes present themselves as the same product to MCP clients, and the
+# version must be a real one rather than the null the Node server never reports.
+mcp = MCPServer("opcua-mcp-server", version=package_version(), lifespan=opcua_lifespan)
 
 
 # Tool: Read the value of an OPC UA node
@@ -103,12 +101,19 @@ def read_history_opcua_node(
             (`resultShapes.historyRecords`) and matched by the Node server.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
-    node = client.get_node(node_id)
-    values = node.read_raw_history(
-        starttime=parse_iso_datetime(start_time),
-        endtime=parse_iso_datetime(end_time),
-        numvalues=num_values,
-    )
+    # `ToolError`, not a bare exception: the SDK forwards a ToolError's message to
+    # the client and withholds anything else as a crash. A bad node ID or an
+    # unparseable timestamp is the caller's to fix, so it has to reach them —
+    # worded exactly as the Node server words it.
+    try:
+        node = client.get_node(node_id)
+        values = node.read_raw_history(
+            starttime=parse_iso_datetime(start_time),
+            endtime=parse_iso_datetime(end_time),
+            numvalues=num_values,
+        )
+    except Exception as e:
+        raise ToolError(f"Failed to read node {node_id}: {e!s}") from e
     return history_records(values)
 
 
@@ -157,7 +162,13 @@ def read_aggregate_opcua_node(
     # lose aggregate support while this process is running, and answering from a
     # stale cache would report the wrong supported set.
     aggregate_functions = server_aggregate_functions(SERVER_URL)
-    validate_aggregate_function(aggregate_function, aggregate_functions)
+    # Both runtimes reject an unsupported function with the same sentence, so the
+    # message is part of the contract and must reach the client rather than be
+    # masked as a crash — hence ToolError. See `validate_aggregate_function`.
+    try:
+        validate_aggregate_function(aggregate_function, aggregate_functions)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
@@ -176,7 +187,7 @@ def read_aggregate_opcua_node(
 
         return history_records(result.HistoryData.DataValues)
     except Exception as e:
-        raise ValueError(f"Failed to read node {node_id}: {e!s}") from e
+        raise ToolError(f"Failed to read node {node_id}: {e!s}") from e
 
 
 if _AGGREGATE_FUNCTIONS:

@@ -26,7 +26,7 @@ import { spawnSync } from "child_process";
 import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { PKG_ROOT, bundle } from "./bundle.mjs";
+import { PKG_ROOT, bundle, resolveCli } from "./bundle.mjs";
 
 const STAGING = join(PKG_ROOT, "build-sea");
 const DIST = join(PKG_ROOT, "dist");
@@ -125,12 +125,11 @@ async function main() {
     run("codesign", ["--remove-signature", OUTPUT]);
   }
 
-  // `--no-install`: postject is a declared devDependency, so a build must never
-  // reach the network to fetch it — the whole point of this artifact is working
-  // where the network does not.
-  run("npx", [
-    "--no-install",
-    "postject",
+  // Run postject's CLI directly rather than through `npx`: it is a declared
+  // devDependency, so a build must never reach the network to fetch it, and on
+  // Windows `npx` is a `.cmd` that `spawnSync` cannot execute at all.
+  run(process.execPath, [
+    resolveCli("postject"),
     OUTPUT,
     "NODE_SEA_BLOB",
     join(STAGING, "sea-prep.blob"),

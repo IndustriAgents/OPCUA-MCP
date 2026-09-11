@@ -57,7 +57,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -97,7 +97,7 @@ jobs:
 
       # Node 20+ is a build-time floor: `--experimental-sea-config` does not
       # exist before it. The server itself still supports Node 18.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm

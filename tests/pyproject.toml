@@ -12,7 +12,7 @@ dependencies = [
     # API is tracked separately.
     "mcp[cli]>=1.9.1,<2",
     "opcua>=0.98.13",
-    "pytest>=8.0",
+    "pytest>=9.1.1",
     "pytest-asyncio>=0.24",
     "anyio>=4.15.1",
     # tomllib is stdlib from 3.11; the tests read pyproject files to check

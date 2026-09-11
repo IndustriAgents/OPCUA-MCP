@@ -193,6 +193,11 @@ with a message naming the variable, rather than failing later against live
 equipment. The server certificate is taken from the endpoint description during
 the handshake, so no server certificate file is needed.
 
+`OPCUA_USERNAME` / `OPCUA_PASSWORD` authenticate the session but encrypt
+nothing: without a security policy the password crosses the network in clear
+text unless the server's user-token policy protects it, and both servers say so
+on stderr. Pair credentials with a policy.
+
 On the **Python runtime**, certificate and key files are parsed as PEM only when
 they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
 called `client.key` fails to load — name it `client_key.pem`. The Node runtime

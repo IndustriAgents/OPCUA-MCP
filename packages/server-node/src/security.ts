@@ -170,9 +170,31 @@ export function describeSecurity(config: SecurityConfig): string {
   return `policy=${config.policy} mode=${config.mode} user=${user}`;
 }
 
-/** True when the connection carries neither encryption/signing nor a user. */
-export function isInsecure(config: SecurityConfig): boolean {
-  return config.policy === "None" && config.username === undefined;
+/**
+ * Warnings to log before connecting; empty once a policy is configured.
+ *
+ * Keyed on the policy alone, never on the presence of a user: a username
+ * authenticates the session but leaves every read, write and method call on the
+ * wire in the clear, so credentials must not buy silence here. The password may
+ * be among what is in the clear — both client libraries send it unencrypted when
+ * the server's user-token policy specifies no security policy of its own.
+ */
+export function securityWarnings(config: SecurityConfig): string[] {
+  if (config.policy !== "None") {
+    return [];
+  }
+
+  const warnings = [
+    "connecting with no OPC UA security (policy=None) — traffic is unencrypted and " +
+      "unsigned. Set OPCUA_SECURITY_POLICY for anything beyond local development.",
+  ];
+  if (config.username !== undefined) {
+    warnings.push(
+      "OPCUA_USERNAME/OPCUA_PASSWORD are being sent over that unencrypted channel, and " +
+        "the password is in clear text unless the server's user-token policy encrypts it."
+    );
+  }
+  return warnings;
 }
 
 /** Client options that select the configured policy, mode, certificate and URI. */

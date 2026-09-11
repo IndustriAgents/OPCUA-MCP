@@ -16,8 +16,8 @@ import pytest
 from opcua_mcp_server.security import (
     SecurityConfig,
     describe_security,
-    is_insecure,
     parse_security_config,
+    security_warnings,
 )
 
 # Pretend every configured path exists; path checking is covered separately.
@@ -35,7 +35,7 @@ def test_defaults_to_no_security():
     config = parse({})
     assert (config.policy, config.mode) == ("None", "None")
     assert config.username is None and config.password is None
-    assert is_insecure(config)
+    assert len(security_warnings(config)) == 1
 
 
 def test_blank_values_count_as_unset():
@@ -48,7 +48,7 @@ def test_a_policy_alone_implies_the_strongest_mode():
     """Silently signing when the operator asked for a policy would be a downgrade."""
     config = parse({"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS})
     assert (config.policy, config.mode) == ("Basic256Sha256", "SignAndEncrypt")
-    assert not is_insecure(config)
+    assert security_warnings(config) == []
 
 
 def test_explicit_sign_mode_is_kept():
@@ -176,8 +176,6 @@ def test_application_uri_is_optional_and_passed_through():
 def test_credentials_are_read_together():
     config = parse({"OPCUA_USERNAME": "operator", "OPCUA_PASSWORD": "hunter2"})
     assert (config.username, config.password) == ("operator", "hunter2")
-    # A user identity is authentication even without a security policy.
-    assert not is_insecure(config)
 
 
 def test_an_empty_password_is_a_password():
@@ -196,6 +194,37 @@ def test_rejects_a_password_without_a_username():
     with pytest.raises(ValueError) as excinfo:
         parse({"OPCUA_PASSWORD": "hunter2"})
     assert str(excinfo.value) == "OPCUA_PASSWORD requires OPCUA_USERNAME"
+
+
+def test_warns_whenever_the_channel_is_unencrypted():
+    """A username authenticates the session; it does not encrypt anything."""
+    warnings = security_warnings(parse({"OPCUA_USERNAME": "operator", "OPCUA_PASSWORD": "x"}))
+    assert any("traffic is unencrypted" in warning for warning in warnings)
+
+
+def test_warns_that_credentials_cross_an_unencrypted_channel():
+    """Both client libraries send the password in clear text on a `None` channel."""
+    warnings = security_warnings(parse({"OPCUA_USERNAME": "operator", "OPCUA_PASSWORD": "x"}))
+    assert any("clear text" in warning for warning in warnings)
+    # ...and that extra warning is specific to having credentials configured.
+    assert not any("clear text" in warning for warning in security_warnings(parse({})))
+
+
+def test_a_secured_channel_warns_about_nothing():
+    config = parse(
+        {
+            "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_USERNAME": "operator",
+            "OPCUA_PASSWORD": "hunter2",
+            **CERTS,
+        }
+    )
+    assert security_warnings(config) == []
+
+
+def test_warnings_never_leak_the_password():
+    config = parse({"OPCUA_USERNAME": "operator", "OPCUA_PASSWORD": "hunter2"})
+    assert "hunter2" not in " ".join(security_warnings(config))
 
 
 def test_description_never_leaks_the_password():

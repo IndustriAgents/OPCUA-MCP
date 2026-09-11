@@ -12,8 +12,8 @@ import { CONTRACT } from "./contract.js";
 import {
   clientSecurityOptions,
   describeSecurity,
-  isInsecure,
   securityConfig,
+  securityWarnings,
   userIdentity,
 } from "./security.js";
 
@@ -37,12 +37,8 @@ export class OpcuaConnection {
       }
 
       const security = securityConfig();
-      if (isInsecure(security)) {
-        console.error(
-          "WARNING: connecting with no OPC UA security — traffic is unencrypted and " +
-            "unauthenticated. Set OPCUA_SECURITY_POLICY (and OPCUA_USERNAME) for anything " +
-            "beyond local development."
-        );
+      for (const warning of securityWarnings(security)) {
+        console.error(`WARNING: ${warning}`);
       }
 
       this.opcuaClient = OPCUAClient.create({

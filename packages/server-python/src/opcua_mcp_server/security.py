@@ -171,9 +171,29 @@ def describe_security(config: SecurityConfig) -> str:
     return f"policy={config.policy} mode={config.mode} user={user}"
 
 
-def is_insecure(config: SecurityConfig) -> bool:
-    """True when the connection carries neither encryption/signing nor a user."""
-    return config.policy == "None" and config.username is None
+def security_warnings(config: SecurityConfig) -> list[str]:
+    """Warnings to log before connecting; empty once a policy is configured.
+
+    Keyed on the policy alone, never on the presence of a user: a username
+    authenticates the session but leaves every read, write and method call on
+    the wire in the clear, so credentials must not buy silence here. The
+    password may be among what is in the clear — both client libraries send it
+    unencrypted when the server's user-token policy specifies no security policy
+    of its own (python-opcua logs "Sending plain-text password" when it does).
+    """
+    if config.policy != "None":
+        return []
+
+    warnings = [
+        "connecting with no OPC UA security (policy=None) — traffic is unencrypted and "
+        "unsigned. Set OPCUA_SECURITY_POLICY for anything beyond local development."
+    ]
+    if config.username is not None:
+        warnings.append(
+            "OPCUA_USERNAME/OPCUA_PASSWORD are being sent over that unencrypted channel, and "
+            "the password is in clear text unless the server's user-token policy encrypts it."
+        )
+    return warnings
 
 
 def create_client(url: str) -> Client:

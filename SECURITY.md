@@ -33,6 +33,12 @@ What this does **not** do, and you should still plan for:
   its endpoint description during the handshake; neither runtime pins it or
   validates it against a trust list, so encryption here protects against passive
   eavesdropping, not against an attacker who can impersonate the endpoint.
+- **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
+  `OPCUA_PASSWORD` without a security policy is authentication, not
+  confidentiality: both client libraries send the password in clear text when
+  the server's user-token policy specifies no security policy of its own. Both
+  servers warn about this on stderr; set `OPCUA_SECURITY_POLICY` rather than
+  relying on the server to encrypt the token.
 - **Certificate-based *user* authentication** (`X509IdentityToken`). User
   identity is anonymous or username/password only.
 - **Input validation on node IDs and written values**, beyond what the OPC UA

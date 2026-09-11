@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **The default is unchanged**: with no variables set, both servers still
   connect unencrypted and anonymous, and now log a warning to stderr saying so.
+  That warning keys on the policy alone — credentials authenticate a session but
+  encrypt nothing, and a password on a `None` channel is sent in clear text
+  unless the server's user-token policy protects it, which earns a second
+  warning of its own.
 
 - A **secured mock OPC UA server** in the test suite
   (`tests/fixtures/secure_opcua_server.py`, port 4843), offering only

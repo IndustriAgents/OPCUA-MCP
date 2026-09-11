@@ -198,6 +198,23 @@ async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, secure_en
     assert "BadUserAccessDenied" in reason
 
 
+async def test_credentials_without_a_policy_warn_about_clear_text(
+    impl, secure_opcua_server, errlog
+):
+    """A username must not buy silence: it authenticates, it does not encrypt.
+
+    Both client libraries send the password in clear text when the channel is
+    `None` and the server's user-token policy specifies no security policy, so
+    the warning has to fire before the connection is attempted — which is what
+    this asserts, since the connection itself cannot succeed here.
+    """
+    credentials_only = {"OPCUA_USERNAME": SECURE_USERNAME, "OPCUA_PASSWORD": SECURE_PASSWORD}
+    reason = await _read_or_reason(impl, secure_opcua_server, credentials_only, errlog)
+    assert "traffic is unencrypted" in reason
+    assert "clear text" in reason
+    assert SECURE_PASSWORD not in reason
+
+
 async def test_an_unsecured_client_cannot_use_the_secured_server(impl, secure_opcua_server, errlog):
     """With no security configured there is no endpoint to fall back to."""
     reason = await _read_or_reason(impl, secure_opcua_server, {}, errlog)

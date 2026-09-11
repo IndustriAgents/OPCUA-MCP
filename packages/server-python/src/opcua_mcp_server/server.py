@@ -20,7 +20,7 @@ from .config import SERVER_URL
 from .contract import DESC
 from .datetimes import parse_iso_datetime
 from .records import history_records
-from .security import create_client, describe_security, is_insecure, security_config
+from .security import create_client, describe_security, security_config, security_warnings
 
 
 # Manage the lifecycle of the OPC UA client connection
@@ -28,14 +28,9 @@ from .security import create_client, describe_security, is_insecure, security_co
 async def opcua_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
     config = security_config()
-    if is_insecure(config):
-        # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
-        print(
-            "WARNING: connecting with no OPC UA security — traffic is unencrypted and "
-            "unauthenticated. Set OPCUA_SECURITY_POLICY (and OPCUA_USERNAME) for anything "
-            "beyond local development.",
-            file=sys.stderr,
-        )
+    # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
+    for warning in security_warnings(config):
+        print(f"WARNING: {warning}", file=sys.stderr)
 
     # Both calls run in a thread: building a secured client fetches the server's
     # certificate from its endpoint list, so it blocks on the network too.

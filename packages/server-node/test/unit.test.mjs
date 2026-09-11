@@ -29,8 +29,8 @@ import { toHistoryRecords, toIsoUtc, variantToJson } from "../build/records.js";
 import {
   clientSecurityOptions,
   describeSecurity,
-  isInsecure,
   parseSecurityConfig,
+  securityWarnings,
   userIdentity,
 } from "../build/security.js";
 
@@ -251,7 +251,7 @@ describe("parseSecurityConfig", () => {
     assert.equal(config.policy, "None");
     assert.equal(config.mode, "None");
     assert.equal(config.username, undefined);
-    assert.equal(isInsecure(config), true);
+    assert.equal(securityWarnings(config).length, 1);
   });
 
   test("treats blank values as unset — MCP configs carry empty env entries", () => {
@@ -264,7 +264,7 @@ describe("parseSecurityConfig", () => {
     const config = parseSecurity({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS });
     assert.equal(config.policy, "Basic256Sha256");
     assert.equal(config.mode, "SignAndEncrypt");
-    assert.equal(isInsecure(config), false);
+    assert.deepEqual(securityWarnings(config), []);
   });
 
   test("keeps an explicit Sign mode", () => {
@@ -375,11 +375,10 @@ describe("parseSecurityConfig", () => {
     );
   });
 
-  test("reads credentials together, and counts them as authentication", () => {
+  test("reads credentials together", () => {
     const config = parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" });
     assert.equal(config.username, "operator");
     assert.equal(config.password, "hunter2");
-    assert.equal(isInsecure(config), false);
   });
 
   test("an empty password is an explicit credential, not an unset variable", () => {
@@ -436,6 +435,38 @@ describe("security wiring", () => {
       userName: "operator",
       password: "hunter2",
     });
+  });
+
+  test("warns whenever the channel is unencrypted, credentials or not", () => {
+    // A username authenticates the session; it does not encrypt anything.
+    const warnings = securityWarnings(
+      parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" })
+    );
+    assert.ok(warnings.some((warning) => warning.includes("traffic is unencrypted")));
+    assert.equal(warnings.join(" ").includes("hunter2"), false);
+  });
+
+  test("warns that credentials cross that unencrypted channel in clear text", () => {
+    const withUser = securityWarnings(
+      parseSecurity({ OPCUA_USERNAME: "operator", OPCUA_PASSWORD: "hunter2" })
+    );
+    assert.ok(withUser.some((warning) => warning.includes("clear text")));
+    // ...and that extra warning is specific to having credentials configured.
+    const anonymous = securityWarnings(parseSecurity({}));
+    assert.equal(
+      anonymous.some((warning) => warning.includes("clear text")),
+      false
+    );
+  });
+
+  test("a secured channel warns about nothing", () => {
+    const config = parseSecurity({
+      OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_USERNAME: "operator",
+      OPCUA_PASSWORD: "hunter2",
+      ...CERTS,
+    });
+    assert.deepEqual(securityWarnings(config), []);
   });
 
   test("the startup summary never carries the password", () => {

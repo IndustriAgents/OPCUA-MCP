@@ -13,15 +13,7 @@
   "documentation": "https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md",
   "support": "https://github.com/midhunxavier/OPCUA-MCP/issues",
   "license": "MIT",
-  "keywords": [
-    "opcua",
-    "opc-ua",
-    "industrial",
-    "automation",
-    "scada",
-    "plc",
-    "manufacturing"
-  ],
+  "keywords": ["opcua", "opc-ua", "industrial", "automation", "scada", "plc", "manufacturing"],
   "repository": {
     "type": "git",
     "url": "https://github.com/midhunxavier/OPCUA-MCP"
@@ -31,9 +23,7 @@
     "entry_point": "server/index.mjs",
     "mcp_config": {
       "command": "node",
-      "args": [
-        "${__dirname}/server/index.mjs"
-      ],
+      "args": ["${__dirname}/server/index.mjs"],
       "env": {
         "OPCUA_SERVER_URL": "${user_config.opcua_server_url}",
         "OPCUA_SECURITY_POLICY": "${user_config.opcua_security_policy}",
@@ -93,11 +83,7 @@
   },
   "tools_generated": true,
   "compatibility": {
-    "platforms": [
-      "darwin",
-      "win32",
-      "linux"
-    ],
+    "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
       "node": ">=18.0.0"
     }

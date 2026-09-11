@@ -389,6 +389,19 @@ describe("parseSecurityConfig", () => {
     assertSecurityError({ OPCUA_USERNAME: "operator" }, "OPCUA_USERNAME requires OPCUA_PASSWORD");
     assertSecurityError({ OPCUA_PASSWORD: "hunter2" }, "OPCUA_PASSWORD requires OPCUA_USERNAME");
   });
+
+  // An empty password *is* a credential when paired with a username (above), but
+  // an empty one on its own is how "unset" arrives from an MCP client config —
+  // those routinely carry empty `env` entries — and from an MCP bundle, where
+  // every optional `user_config` field substitutes as an empty string. Treating
+  // it as a usage error made an anonymous connection impossible to express in the
+  // bundle: it refused to start until a username *and* password were typed in.
+  test("blank credentials mean anonymous, not half a credential", () => {
+    const both = parseSecurity({ OPCUA_USERNAME: "", OPCUA_PASSWORD: "" });
+    assert.equal(both.username, undefined);
+    assert.equal(both.password, undefined);
+    assert.equal(parseSecurity({ OPCUA_PASSWORD: "" }).password, undefined);
+  });
 });
 
 describe("security wiring", () => {

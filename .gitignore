@@ -37,6 +37,12 @@ coverage/
 .env
 .env.*
 
+# Downloadable artifacts (built on demand and at release time, never committed)
+build-mcpb/
+build-sea/
+build-pyinstaller/
+*.mcpb
+
 # Local Claude Code config (machine-specific)
 .mcp.json
 .claude/settings.local.json

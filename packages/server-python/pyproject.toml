@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-opcua-mcp-server = "opcua_mcp_server:main"
+opcua-mcp-server = "opcua_mcp_server.cli:main"
 
 [build-system]
 requires = ["hatchling"]

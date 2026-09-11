@@ -141,8 +141,14 @@ def parse_security_config(
 
     username = _read(env, "OPCUA_USERNAME")
     # Not `_read`: an empty password is a real (if unwise) credential, so only an
-    # absent variable counts as unset here.
+    # absent variable counts as unset — except when there is no username to pair
+    # it with, where a blank value can only mean "not configured". MCP client
+    # configs routinely carry empty env entries, and an MCP bundle substitutes an
+    # unset optional field as an empty string, so treating that pair as a usage
+    # error would make an anonymous connection impossible to express there.
     password = env.get("OPCUA_PASSWORD")
+    if username is None and not password:
+        password = None
     if username is not None and password is None:
         raise ValueError("OPCUA_USERNAME requires OPCUA_PASSWORD")
     if username is None and password is not None:

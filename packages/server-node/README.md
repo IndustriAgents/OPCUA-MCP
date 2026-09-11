@@ -32,6 +32,24 @@ npm install -g opcua-mcp-server
 opcua-mcp-server
 ```
 
+### Registering with Claude Desktop
+
+Rather than editing `claude_desktop_config.json` by hand, let the server write it:
+
+```bash
+opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+```
+
+It merges into the existing config, backs the old one up, and records absolute
+paths — Claude Desktop is launched from the GUI and does not inherit a login
+shell's `PATH`, so a bare `"command": "npx"` often works in a terminal and fails
+in the app. Add `--dry-run` to see the result first, `--force` to replace an
+existing `opcua` entry.
+
+There is also a **downloadable `.mcpb` bundle** for Claude Desktop and
+**single-file executables** that need no Node at all — see
+[docs/install.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/install.md).
+
 ### Local Development
 
 ```bash

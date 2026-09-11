@@ -241,3 +241,135 @@ async def test_wheel_installed_server_lists_tools(wheel_venv, opcua_server, tmp_
         cwd=str(tmp_path),
     )
     assert await _list_tools(params) >= CORE_TOOLS
+
+
+# --- MCP bundle (.mcpb) --------------------------------------------------------
+# The `.mcpb` is the download-and-double-click artifact for Claude Desktop, and
+# unlike the npm package it carries no node_modules: the whole dependency tree is
+# bundled into one file, with the tool contract inlined at build time. That is a
+# genuinely different build path from everything above, and node-opcua is not a
+# library that bundles by accident — it needs `require`, `__filename` and
+# `__dirname` handed to it. So these tests pack the real bundle, unpack it, and
+# drive the server inside it against a live OPC UA server.
+
+
+@pytest.fixture(scope="module")
+def packed_mcpb(tmp_path_factory):
+    """Build the real `.mcpb` and unpack it, yielding the extracted directory."""
+    if shutil.which("npm") is None:
+        pytest.skip("npm not available")
+    if not (NODE_PKG_DIR / "node_modules").is_dir():
+        pytest.skip("Node dependencies not installed — run `npm ci` in packages/server-node")
+
+    _run(["npm", "run", "build:mcpb"], cwd=NODE_PKG_DIR)
+    bundles = list((NODE_PKG_DIR / "dist").glob("*.mcpb"))
+    assert len(bundles) == 1, f"expected exactly one .mcpb, got {bundles}"
+
+    unpacked = tmp_path_factory.mktemp("mcpb") / "extension"
+    unpack = ["npx", "--no-install", "mcpb", "unpack", str(bundles[0]), str(unpacked)]
+    _run(unpack, cwd=NODE_PKG_DIR)
+    return unpacked
+
+
+def test_mcpb_manifest_matches_the_package_version(packed_mcpb):
+    """`build-mcpb.mjs` stamps the version from package.json, so a release that
+    forgets to touch mcpb/manifest.json still ships a correctly labelled bundle."""
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    package = json.loads((NODE_PKG_DIR / "package.json").read_text())
+    assert manifest["version"] == package["version"]
+
+
+def test_mcpb_is_self_contained(packed_mcpb):
+    """No node_modules, and the declared entry point is really in the bundle.
+
+    Claude Desktop runs the entry point as-is; it does not install anything. A
+    bundle that expected its dependencies to be present would fail at startup on
+    a user's machine and nowhere else.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    entry = packed_mcpb / manifest["server"]["entry_point"]
+    assert entry.is_file(), f"entry point {manifest['server']['entry_point']} missing"
+    assert not list(packed_mcpb.rglob("node_modules"))
+
+
+def test_mcpb_exposes_the_endpoint_as_user_config(packed_mcpb):
+    """The endpoint must be a `user_config` field wired into the server's env.
+
+    This is the entire reason the bundle removes the need to edit JSON: Claude
+    Desktop renders the field as a form and substitutes the answer here. If the
+    two halves stop matching, the server silently starts on the default endpoint.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    assert "opcua_server_url" in manifest["user_config"]
+    assert manifest["user_config"]["opcua_server_url"]["required"] is True
+    env = manifest["server"]["mcp_config"]["env"]
+    assert env["OPCUA_SERVER_URL"] == "${user_config.opcua_server_url}"
+
+
+def test_mcpb_exposes_every_security_setting(packed_mcpb):
+    """The bundle must be able to express a secured connection.
+
+    Claude Desktop passes the server exactly the env this manifest declares and
+    nothing else, so a security variable missing here is one a bundle user can
+    never set — the one-click install would be permanently stuck on the
+    unencrypted, anonymous default. Pinned against the runtime's own variable
+    names so the two cannot drift apart in silence.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    env = manifest["server"]["mcp_config"]["env"]
+
+    required = {
+        "OPCUA_SECURITY_POLICY",
+        "OPCUA_SECURITY_MODE",
+        "OPCUA_CLIENT_CERT",
+        "OPCUA_CLIENT_KEY",
+        "OPCUA_USERNAME",
+        "OPCUA_PASSWORD",
+    }
+    assert required <= set(env), f"not settable from the bundle: {sorted(required - set(env))}"
+
+    # Every one must be wired to a user_config field, not hardcoded.
+    for name in required:
+        assert env[name].startswith("${user_config."), f"{name} is not user-settable"
+        key = env[name].removeprefix("${user_config.").rstrip("}")
+        assert key in manifest["user_config"], f"{name} points at a missing field {key}"
+
+    assert manifest["user_config"]["opcua_password"].get("sensitive") is True, (
+        "the password field must be marked sensitive so it is masked and encrypted"
+    )
+
+
+async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):
+    """Unset optional fields arrive as empty strings, and must mean "not configured".
+
+    This is how the bundle runs for anyone who only fills in the endpoint — the
+    common case. It once failed outright: an empty `OPCUA_PASSWORD` was read as
+    half a credential and the server exited with a configuration error before
+    serving anything.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    blank = {name: "" for name in manifest["server"]["mcp_config"]["env"]}
+    params = StdioServerParameters(
+        command="node",
+        args=[str(packed_mcpb / manifest["server"]["entry_point"])],
+        env={**os.environ, **blank, "OPCUA_SERVER_URL": opcua_server},
+        cwd=str(packed_mcpb),
+    )
+    assert await _list_tools(params) >= CORE_TOOLS
+
+
+async def test_mcpb_server_lists_tools(packed_mcpb, opcua_server):
+    """The bundled server must actually start and serve tools/list over MCP.
+
+    The point of doing this against the *unpacked bundle* rather than the source:
+    bundling inlines the contract and rewrites node-opcua's CommonJS requires, and
+    a mistake in either shows up only here.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    params = StdioServerParameters(
+        command="node",
+        args=[str(packed_mcpb / manifest["server"]["entry_point"])],
+        env={**os.environ, "OPCUA_SERVER_URL": opcua_server},
+        cwd=str(packed_mcpb),
+    )
+    assert await _list_tools(params) >= CORE_TOOLS

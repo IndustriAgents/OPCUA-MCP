@@ -30,18 +30,20 @@ before cutting a release.
 ## Cutting a release
 
 ```bash
-# 1. Bump all three manifests together — they release as a unit and a test
+# 1. Bump all four manifests together — they release as a unit and a test
 #    enforces that they match.
 #    packages/server-node/package.json
 #    packages/server-python/pyproject.toml
 #    packages/mock-server/pyproject.toml
+#    packages/server-node/mcpb/manifest.json
 
 # 2. Move CHANGELOG entries from [Unreleased] into the new version, and add the
 #    comparison link at the bottom.
 
-# 3. Verify locally exactly as CI will.
+# 3. Verify locally exactly as CI will. The smoke tier builds the .mcpb bundle
+#    and both single-file executables, so it needs the packaging group.
 cd packages/server-node && npm ci && npm run build && npm test && cd ../..
-uv sync --all-packages
+uv sync --all-packages --group packaging
 uv run ruff check . && uv run ruff format --check .
 cd tests && uv run --no-sync pytest && uv run --no-sync pytest -m smoke smoke/
 
@@ -51,6 +53,25 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The `publish.yml` workflow then runs the full suite plus the artifact smoke
 tests, and only publishes if they pass.
+
+## The downloadable artifacts
+
+`release.yml` runs off the same tag and handles what `publish.yml` cannot: the
+`.mcpb` MCP bundle, and a single-file executable per runtime per platform. Those
+executables embed the interpreter they were built with, so they cannot be
+cross-compiled — the workflow builds them on Linux, macOS and Windows runners,
+checks each one starts and reports the right version, and attaches everything to
+the GitHub release (creating it from the tag if it does not exist yet).
+
+It is a separate workflow on purpose: a macOS runner being unavailable must not
+be able to hold up an npm or PyPI publish. Uploads use `--clobber`, so re-running
+after a partial failure is safe. `workflow_dispatch` builds the artifacts without
+cutting a tag, which is the way to test a change to the build scripts.
+
+macOS binaries are ad-hoc signed rather than notarised, and Windows binaries are
+unsigned, so first launch needs a Gatekeeper or SmartScreen override. That is
+documented in [install.md](install.md); proper signing needs an Apple Developer
+account and a Windows code-signing certificate, and is not set up.
 
 ## After the first `opcua-mcp-server` release
 
@@ -66,7 +87,9 @@ after 72 hours anyway.
 
 ## Why the smoke tests gate the release
 
-They build the real tarball and wheel, install them somewhere isolated, and drive
-the installed entry points. Everything else in CI runs from the source tree and
-from `uv.lock`, so it cannot see packaging faults or a dependency range that
-resolves to a breaking major. Both have already shipped broken releases here.
+They build every artifact a user can download — tarball, wheel, `.mcpb` bundle
+and both executables — install them somewhere isolated, and drive them over MCP.
+Everything else in CI runs from the source tree and from `uv.lock`, so it cannot
+see packaging faults, a dependency range that resolves to a breaking major, or a
+bundling change that only breaks once `node_modules` is no longer on disk. The
+first two have already shipped broken releases here.

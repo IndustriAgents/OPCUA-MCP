@@ -1,0 +1,181 @@
+name: Release artifacts
+
+# Builds the downloadable artifacts and attaches them to the GitHub release:
+# the `.mcpb` MCP bundle for Claude Desktop, and a single-file executable per
+# platform for everything else.
+#
+# Separate from publish.yml on purpose. That workflow ships to npm and PyPI,
+# where the artifact is the same everywhere and one Linux runner can produce it.
+# These cannot be cross-compiled — a single-file executable embeds the
+# interpreter it was built with — so they need one runner per operating system,
+# and a failure here must not be able to hold up a registry publish.
+#
+# Tag-triggered for the same reason publish.yml is: a release should never depend
+# on somebody remembering to run a command. `workflow_dispatch` is there so the
+# build can be exercised without cutting a tag.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  # The same gate publish.yml applies, for the same reason and with the same
+  # wording. Without it the two workflows disagree about what a tag means: a
+  # `v0.3.0` pushed while the manifests still say `0.2.1` would be rejected by
+  # publish.yml but accepted here, and this workflow would build 0.2.1 artifacts
+  # and create a public `v0.3.0` release containing them — a mismatched "latest"
+  # that people download.
+  #
+  # Its own job so a bad tag fails in seconds rather than after two platform
+  # builds. The step, not the job, is conditional: a skipped job would skip
+  # everything that needs it, which would make `workflow_dispatch` a no-op.
+  verify-tag:
+    name: Tag matches the manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match the manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./packages/server-node/package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version $PKG"
+            exit 1
+          fi
+
+  # Platform-independent: the bundle contains no compiled code, only the server
+  # and its dependencies as one JavaScript file. Claude Desktop supplies Node.
+  mcpb:
+    name: MCP bundle (.mcpb)
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/server-node/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: packages/server-node
+        run: npm ci
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # Packs the bundle and drives the server inside it against the mock OPC UA
+      # server, so nothing gets uploaded that has not actually served a tool call.
+      - name: Build and verify the bundle
+        working-directory: tests
+        run: uv run --no-sync pytest -v -m smoke smoke/test_artifacts.py -k mcpb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpb
+          path: packages/server-node/dist/*.mcpb
+          if-no-files-found: error
+
+  binaries:
+    name: Executables — ${{ matrix.os }}
+    needs: verify-tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # Node 20+ is a build-time floor: `--experimental-sea-config` does not
+      # exist before it. The server itself still supports Node 18.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/server-node/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: packages/server-node
+        run: npm ci
+
+      - name: Sync workspace
+        run: uv sync --all-packages --group packaging
+
+      - name: Build the Node executable
+        working-directory: packages/server-node
+        run: npm run build:sea
+
+      - name: Build the Python executable
+        run: >
+          uv run --group packaging pyinstaller --noconfirm
+          --distpath packages/server-python/dist
+          --workpath packages/server-python/build-pyinstaller
+          packages/server-python/packaging/opcua-mcp-server.spec
+
+      # Nothing here needs an OPC UA server, which is what makes it safe to run
+      # on all three platforms: it is the frozen-app failure mode that matters —
+      # a binary that cannot find its embedded contract, or reports no version,
+      # or writes a config entry naming arguments it cannot itself accept.
+      - name: Verify every executable runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(node -p "require('./packages/server-node/package.json').version")
+          found=0
+          for binary in packages/*/dist/opcua-mcp-server-*; do
+            case "$binary" in *.mcpb) continue ;; esac
+            found=$((found + 1))
+            echo "--- $binary"
+            version=$("$binary" --version)
+            test "$version" = "$expected" || {
+              echo "::error::$binary reports $version, expected $expected"; exit 1;
+            }
+            HOME="$RUNNER_TEMP/scratch-home" \
+            USERPROFILE="$RUNNER_TEMP/scratch-home" \
+            APPDATA="$RUNNER_TEMP/scratch-home/AppData/Roaming" \
+              "$binary" --install claude-desktop --dry-run
+          done
+          test "$found" -eq 2 || { echo "::error::expected 2 executables, found $found"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.os }}
+          path: |
+            packages/server-node/dist/opcua-mcp-server-node-*
+            packages/server-python/dist/opcua-mcp-server-python-*
+          if-no-files-found: error
+
+  attach:
+    name: Attach to the GitHub release
+    needs: [mcpb, binaries]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # `--clobber` so a re-run after a partial failure is safe, matching how the
+      # npm and PyPI jobs are made idempotent in publish.yml.
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
+          gh release upload "$TAG" artifacts/* --clobber

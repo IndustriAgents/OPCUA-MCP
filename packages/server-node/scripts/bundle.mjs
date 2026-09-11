@@ -21,7 +21,8 @@
 // Bundling is verified end to end, not assumed: tests/smoke/test_artifacts.py
 // drives the packed .mcpb against a live OPC UA server over MCP.
 import * as esbuild from "esbuild";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { createRequire } from "module";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -101,4 +102,37 @@ export async function bundle({
     logLevel: "warning",
   });
   return outfile;
+}
+
+/** Absolute path to a dependency's CLI entry point, from its declared `bin`.
+ *
+ * Used instead of `npx <name>`, which cannot be spawned without a shell on
+ * Windows: npm installs those as `.cmd` shims and `spawnSync` rejects them with
+ * ENOENT. Handing the resolved JavaScript file to `process.execPath` sidesteps
+ * the shell, `PATH`, and any question about a path with a space in it — the same
+ * reasoning as the absolute paths `--install` writes into a client config.
+ *
+ * Walks up from the package's main entry rather than resolving the bin path
+ * directly, because a package may declare an `exports` map that refuses deep
+ * subpaths — `@anthropic-ai/mcpb` does — and may move its bin between versions.
+ */
+export function resolveCli(packageName) {
+  const require_ = createRequire(import.meta.url);
+  let dir = dirname(require_.resolve(packageName));
+
+  for (;;) {
+    const manifestPath = join(dir, "package.json");
+    if (existsSync(manifestPath)) {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (manifest.name === packageName) {
+        const bin =
+          typeof manifest.bin === "string" ? manifest.bin : Object.values(manifest.bin)[0];
+        if (!bin) throw new Error(`${packageName} declares no bin entry`);
+        return join(dir, bin);
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error(`could not find the package root for ${packageName}`);
+    dir = parent;
+  }
 }

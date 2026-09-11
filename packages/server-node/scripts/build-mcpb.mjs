@@ -20,7 +20,7 @@ import { spawnSync } from "child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { PKG_ROOT, REPO_ROOT, VERSION, bundle } from "./bundle.mjs";
+import { PKG_ROOT, REPO_ROOT, VERSION, bundle, resolveCli } from "./bundle.mjs";
 
 const STAGING = join(PKG_ROOT, "build-mcpb");
 const DIST = join(PKG_ROOT, "dist");
@@ -54,10 +54,11 @@ async function main() {
   // in, which is the point of using it rather than zipping the directory
   // ourselves: an invalid manifest fails the build instead of failing silently
   // in somebody's Claude Desktop.
-  const mcpb = spawnSync("npx", ["--no-install", "mcpb", "pack", STAGING, OUTPUT], {
-    cwd: PKG_ROOT,
-    stdio: "inherit",
-  });
+  const mcpb = spawnSync(
+    process.execPath,
+    [resolveCli("@anthropic-ai/mcpb"), "pack", STAGING, OUTPUT],
+    { cwd: PKG_ROOT, stdio: "inherit" }
+  );
   if (mcpb.status !== 0) {
     throw new Error(`mcpb pack failed with status ${mcpb.status}`);
   }

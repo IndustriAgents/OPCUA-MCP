@@ -25,6 +25,7 @@ NODE_PKG = ROOT / "packages" / "server-node" / "package.json"
 PYTHON_PYPROJECT = ROOT / "packages" / "server-python" / "pyproject.toml"
 MOCK_PYPROJECT = ROOT / "packages" / "mock-server" / "pyproject.toml"
 MCPB_MANIFEST = ROOT / "packages" / "server-node" / "mcpb" / "manifest.json"
+NODE_LOCKFILE = ROOT / "packages" / "server-node" / "package-lock.json"
 
 
 def _node_version() -> str:
@@ -66,3 +67,18 @@ def test_no_hardcoded_version_in_node_source():
         if 'version: "' in path.read_text()
     ]
     assert not offenders, f"hardcoded version literal in: {offenders}"
+
+
+def test_the_npm_lockfile_records_the_package_version():
+    """`package-lock.json` carries the root version twice, and a bump misses both.
+
+    npm writes it at the top level and again under `packages[""]`. Neither breaks
+    the build when stale, which is exactly the problem: the released tarball
+    carries inconsistent metadata, and the next unrelated `npm install` quietly
+    produces a version diff nobody asked for. Regenerate with
+    `npm install --package-lock-only` rather than editing by hand.
+    """
+    lock = json.loads(NODE_LOCKFILE.read_text())
+    expected = _node_version()
+    assert lock["version"] == expected, "package-lock.json top-level version is stale"
+    assert lock["packages"][""]["version"] == expected, 'packages[""] version is stale'

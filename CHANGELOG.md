@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-09-11
+
 ### Added
 - **OPC UA connection security is configurable** on both runtimes, through the
   same environment variables: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`,
@@ -288,7 +292,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/midhunxavier/OPCUA-MCP/releases/tag/v0.1.2

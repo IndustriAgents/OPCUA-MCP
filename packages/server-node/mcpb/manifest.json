@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "opcua-mcp-server",
   "display_name": "OPC UA",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Read industrial sensors and control equipment on any OPC UA server.",
   "long_description": "Connects Claude to any OPC UA server \u2014 a PLC, a SCADA gateway, a historian or a simulator \u2014 and exposes it as MCP tools: read and write nodes, browse the address space, call methods, and read history and server-side aggregates.\n\nSet the endpoint below to your OPC UA server's URL, for example `opc.tcp://192.168.0.10:4840`.\n\n**Security:** the remaining settings are optional and default to an unencrypted, anonymous connection, which is fine for a simulator or a lab server. Against real equipment, set a security policy (Basic256Sha256 unless your server is older) with a client certificate and key, and a username and password. Note that this server can **write nodes and call methods**, so scope the OPC UA account it logs in as to exactly what you intend Claude to be able to do.",
   "author": {

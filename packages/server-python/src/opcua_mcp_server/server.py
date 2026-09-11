@@ -512,5 +512,4 @@ def main() -> None:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
 
-
     mcp.run(transport="stdio")

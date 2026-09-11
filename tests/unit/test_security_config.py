@@ -196,6 +196,22 @@ def test_rejects_a_password_without_a_username():
     assert str(excinfo.value) == "OPCUA_PASSWORD requires OPCUA_USERNAME"
 
 
+def test_blank_credentials_mean_anonymous_rather_than_a_usage_error():
+    """A blank password with no username can only mean "not configured".
+
+    An empty password *is* a credential when paired with a username (above), but
+    an empty one on its own is how "unset" arrives from an MCP client config —
+    those routinely carry empty ``env`` entries — and from an MCP bundle, where
+    every optional ``user_config`` field substitutes as an empty string. Treating
+    that as a usage error made an anonymous connection impossible to express in
+    the bundle: it refused to start until the user typed a username *and* a
+    password.
+    """
+    assert parse({"OPCUA_USERNAME": "", "OPCUA_PASSWORD": ""}).username is None
+    assert parse({"OPCUA_USERNAME": "", "OPCUA_PASSWORD": ""}).password is None
+    assert parse({"OPCUA_PASSWORD": ""}).password is None
+
+
 def test_warns_whenever_the_channel_is_unencrypted():
     """A username authenticates the session; it does not encrypt anything."""
     warnings = security_warnings(parse({"OPCUA_USERNAME": "operator", "OPCUA_PASSWORD": "x"}))

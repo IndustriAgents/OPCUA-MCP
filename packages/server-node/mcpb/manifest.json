@@ -4,7 +4,7 @@
   "display_name": "OPC UA",
   "version": "0.2.1",
   "description": "Read industrial sensors and control equipment on any OPC UA server.",
-  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools: read and write nodes, browse the address space, call methods, and read history and server-side aggregates.\n\nSet the endpoint below to your OPC UA server's URL, for example `opc.tcp://192.168.0.10:4840`.\n\n**Security:** this release connects with no encryption and no authentication, and it can write nodes and call methods on whatever it is pointed at. Use it against a simulator or a lab server, not against production equipment, and scope the OPC UA account it connects with to exactly what you intend Claude to be able to do.",
+  "long_description": "Connects Claude to any OPC UA server \u2014 a PLC, a SCADA gateway, a historian or a simulator \u2014 and exposes it as MCP tools: read and write nodes, browse the address space, call methods, and read history and server-side aggregates.\n\nSet the endpoint below to your OPC UA server's URL, for example `opc.tcp://192.168.0.10:4840`.\n\n**Security:** the remaining settings are optional and default to an unencrypted, anonymous connection, which is fine for a simulator or a lab server. Against real equipment, set a security policy (Basic256Sha256 unless your server is older) with a client certificate and key, and a username and password. Note that this server can **write nodes and call methods**, so scope the OPC UA account it logs in as to exactly what you intend Claude to be able to do.",
   "author": {
     "name": "Midhun Xavier",
     "url": "https://github.com/midhunxavier"
@@ -25,7 +25,13 @@
       "command": "node",
       "args": ["${__dirname}/server/index.mjs"],
       "env": {
-        "OPCUA_SERVER_URL": "${user_config.opcua_server_url}"
+        "OPCUA_SERVER_URL": "${user_config.opcua_server_url}",
+        "OPCUA_SECURITY_POLICY": "${user_config.opcua_security_policy}",
+        "OPCUA_SECURITY_MODE": "${user_config.opcua_security_mode}",
+        "OPCUA_CLIENT_CERT": "${user_config.opcua_client_cert}",
+        "OPCUA_CLIENT_KEY": "${user_config.opcua_client_key}",
+        "OPCUA_USERNAME": "${user_config.opcua_username}",
+        "OPCUA_PASSWORD": "${user_config.opcua_password}"
       }
     }
   },
@@ -36,6 +42,43 @@
       "description": "URL of the OPC UA server to connect to, e.g. opc.tcp://192.168.0.10:4840",
       "default": "opc.tcp://localhost:4840",
       "required": true
+    },
+    "opcua_security_policy": {
+      "type": "string",
+      "title": "Security policy",
+      "description": "Encryption suite to negotiate: None, Basic128Rsa15, Basic256, Basic256Sha256, Aes128_Sha256_RsaOaep or Aes256_Sha256_RsaPss. Leave blank for an unencrypted connection. Anything other than None needs the certificate and key below.",
+      "required": false
+    },
+    "opcua_security_mode": {
+      "type": "string",
+      "title": "Security mode",
+      "description": "Sign or SignAndEncrypt. Leave blank to let the policy choose, which means SignAndEncrypt.",
+      "required": false
+    },
+    "opcua_client_cert": {
+      "type": "file",
+      "title": "Client certificate",
+      "description": "PEM or DER certificate this client presents. Required by any policy other than None.",
+      "required": false
+    },
+    "opcua_client_key": {
+      "type": "file",
+      "title": "Client private key",
+      "description": "Private key matching the certificate above.",
+      "required": false
+    },
+    "opcua_username": {
+      "type": "string",
+      "title": "Username",
+      "description": "Leave blank to connect anonymously.",
+      "required": false
+    },
+    "opcua_password": {
+      "type": "string",
+      "title": "Password",
+      "description": "Required if a username is set. Sent in clear text unless a security policy is configured.",
+      "sensitive": true,
+      "required": false
     }
   },
   "tools_generated": true,

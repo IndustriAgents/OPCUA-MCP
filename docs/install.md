@@ -10,10 +10,16 @@ Four ways in, roughly in order of how little you need already installed.
 | [Editing the config by hand](#4-editing-the-config-by-hand) | Node or Python | Scripted rollouts, unusual clients, or auditing exactly what runs. |
 
 > [!WARNING]
-> Whichever route you take, this release connects to OPC UA with **no encryption
-> and no authentication**, and it can **write nodes and call methods**. Point it
-> at the bundled mock or a lab server, not at production equipment, and scope the
-> OPC UA account it connects with to exactly what you intend the assistant to be
+> Whichever route you take, the **default** is an unencrypted, anonymous
+> connection — fine for the bundled mock or a lab server, not for production
+> equipment. Set a security policy and credentials before pointing it at anything
+> real: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`, `OPCUA_CLIENT_CERT`,
+> `OPCUA_CLIENT_KEY`, `OPCUA_USERNAME` and `OPCUA_PASSWORD` (the `.mcpb` bundle
+> offers all of these as settings fields). Both servers warn on stderr while
+> running unsecured.
+>
+> Note also that this server can **write nodes and call methods**, so scope the
+> OPC UA account it logs in as to exactly what you intend the assistant to be
 > able to do. See [SECURITY.md](../SECURITY.md).
 
 ## 1. MCP bundle (`.mcpb`) — Claude Desktop
@@ -29,6 +35,10 @@ at startup.
 2. In Claude Desktop, open **Settings → Extensions**.
 3. Drag the file onto that pane.
 4. Set **OPC UA endpoint** to your server's URL, e.g. `opc.tcp://192.168.0.10:4840`.
+5. For anything other than a simulator, fill in the security fields below it —
+   policy (`Basic256Sha256` unless your server is older), client certificate and
+   key, username and password. Left blank, the connection is unencrypted and
+   anonymous.
 
 To upgrade, install a newer bundle over the old one. To remove it, use the same
 Extensions pane — nothing is left behind elsewhere on the machine.

@@ -306,6 +306,58 @@ def test_mcpb_exposes_the_endpoint_as_user_config(packed_mcpb):
     assert env["OPCUA_SERVER_URL"] == "${user_config.opcua_server_url}"
 
 
+def test_mcpb_exposes_every_security_setting(packed_mcpb):
+    """The bundle must be able to express a secured connection.
+
+    Claude Desktop passes the server exactly the env this manifest declares and
+    nothing else, so a security variable missing here is one a bundle user can
+    never set — the one-click install would be permanently stuck on the
+    unencrypted, anonymous default. Pinned against the runtime's own variable
+    names so the two cannot drift apart in silence.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    env = manifest["server"]["mcp_config"]["env"]
+
+    required = {
+        "OPCUA_SECURITY_POLICY",
+        "OPCUA_SECURITY_MODE",
+        "OPCUA_CLIENT_CERT",
+        "OPCUA_CLIENT_KEY",
+        "OPCUA_USERNAME",
+        "OPCUA_PASSWORD",
+    }
+    assert required <= set(env), f"not settable from the bundle: {sorted(required - set(env))}"
+
+    # Every one must be wired to a user_config field, not hardcoded.
+    for name in required:
+        assert env[name].startswith("${user_config."), f"{name} is not user-settable"
+        key = env[name].removeprefix("${user_config.").rstrip("}")
+        assert key in manifest["user_config"], f"{name} points at a missing field {key}"
+
+    assert manifest["user_config"]["opcua_password"].get("sensitive") is True, (
+        "the password field must be marked sensitive so it is masked and encrypted"
+    )
+
+
+async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):
+    """Unset optional fields arrive as empty strings, and must mean "not configured".
+
+    This is how the bundle runs for anyone who only fills in the endpoint — the
+    common case. It once failed outright: an empty `OPCUA_PASSWORD` was read as
+    half a credential and the server exited with a configuration error before
+    serving anything.
+    """
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    blank = {name: "" for name in manifest["server"]["mcp_config"]["env"]}
+    params = StdioServerParameters(
+        command="node",
+        args=[str(packed_mcpb / manifest["server"]["entry_point"])],
+        env={**os.environ, **blank, "OPCUA_SERVER_URL": opcua_server},
+        cwd=str(packed_mcpb),
+    )
+    assert await _list_tools(params) >= CORE_TOOLS
+
+
 async def test_mcpb_server_lists_tools(packed_mcpb, opcua_server):
     """The bundled server must actually start and serve tools/list over MCP.
 

@@ -5,7 +5,7 @@ description = "MCP server exposing OPC UA read/write/browse/method/history tools
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "cryptography>=45.0.2",
+    "cryptography>=50.0.1",
     "httpx>=0.28.1",
     # Upper bound is load-bearing: mcp 2.x renamed FastMCP to MCPServer, so an
     # unbounded install resolves 2.x and crashes on import. Migrating to the 2.x

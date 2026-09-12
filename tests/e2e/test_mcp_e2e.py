@@ -416,6 +416,7 @@ async def test_history_rejects_a_malformed_timestamp_identically(server):
         "Use ISO 8601, e.g. 2026-04-23T17:40:00Z"
     )
     assert expected in text_of(result), f"{impl}: got {text_of(result)!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
 
 
 # --- data-change subscriptions (issue #3) --------------------------------------

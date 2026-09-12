@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- **Node tool failures now return MCP error results** (#61). The shared
+  `callTool` error handler sets `isError: true`, so clients can reliably detect
+  failed tool calls instead of having to inspect the returned error text.
 
 ### Added
 - **Real-time data-change subscriptions** (#3). Three tools on both servers —

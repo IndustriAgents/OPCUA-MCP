@@ -129,12 +129,12 @@ jobs:
   # release workflow builds and checks macOS and Windows.
   smoke:
     # NOTE: this name is a required status check in the `main-protection`
-    # ruleset, which matches on the exact string. Renaming it here without
-    # updating the ruleset makes the required check one that never runs, and the
-    # merge gate can then never be satisfied — which is exactly what happened
-    # when this job was briefly called "Downloadable artifacts". The name now
-    # understates what the job covers; the comment above is the accurate version.
-    name: Packaged artifacts (npm tarball + wheel)
+    # ruleset, which matches on the exact string. Changing it here alone makes
+    # the required check one that never runs, and the merge gate can then never
+    # be satisfied — which is what happened when it was renamed once already.
+    # Change both, in this order: push the workflow so a run reports under the
+    # new name, then update the ruleset to require it.
+    name: Downloadable artifacts (npm, wheel, .mcpb, executables)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -14,19 +14,29 @@ are importable without a server anywhere in sight.
 from __future__ import annotations
 
 from .config import SERVER_URL
-from .contract import CONTRACT, DESC, HISTORY_NODE_ID, load_contract
+from .contract import CONTRACT, DESC, HISTORY_NODE_ID, RESOURCES, load_contract
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .records import history_record, history_records, scalar_to_json, variant_to_json
 from .security import SecurityConfig, create_client, parse_security_config, security_config
+from .subscriptions import (
+    SUBSCRIPTIONS,
+    SubscriptionManager,
+    delete_failed_message,
+    resolve_options,
+)
 from .version import package_version
 
 __all__ = [
     "CONTRACT",
     "DESC",
     "HISTORY_NODE_ID",
+    "RESOURCES",
     "SERVER_URL",
+    "SUBSCRIPTIONS",
     "SecurityConfig",
+    "SubscriptionManager",
     "create_client",
+    "delete_failed_message",
     "format_iso_utc",
     "history_record",
     "history_records",
@@ -36,6 +46,7 @@ __all__ = [
     "package_version",
     "parse_iso_datetime",
     "parse_security_config",
+    "resolve_options",
     "scalar_to_json",
     "security_config",
     "variant_to_json",

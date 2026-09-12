@@ -14,6 +14,7 @@ A Node / TypeScript Model Context Protocol (MCP) server for OPC UA operations, r
 - **Connection Management**: Automatic connection handling with graceful disconnection
 - **Read History OPC UA Node**: Read the historical values of a specific OPC UA node (if supported by the server)
 - **Read Aggregate OPC UA Node**: Calculate the historical aggregates (if supported by the server)
+- **Data-Change Subscriptions**: Watch a node and read back the values it has delivered, instead of polling it
 
 ## Installation & Usage
 
@@ -100,6 +101,10 @@ OPCUA_USERNAME=mcp-operator OPCUA_PASSWORD=… \
 ## Tools
 
 This server exposes the shared OPC UA MCP tool set. See the full per-tool reference (inputs, outputs, node-ID map) in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)**. The tool surface is defined once in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**, which this server builds its `tools/list` from.
+
+## Resources
+
+One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
 
 ## Integration with Cursor/Claude
 

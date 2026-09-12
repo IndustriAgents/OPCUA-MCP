@@ -10,10 +10,15 @@ This MCP server acts as a bridge between AI assistants and OPC UA servers, allow
 - Browsing OPC UA node hierarchies
 - Calling OPC UA methods for system operations
 - Batch operations for multiple nodes
+- Subscribing to data changes, so a node can be watched rather than polled
 
 ## Tools
 
 See the central per-tool reference in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)**; the shared tool surface is defined in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**.
+
+## Resources
+
+One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
 
 ## Features
 
@@ -23,6 +28,7 @@ See the central per-tool reference in **[docs/examples.md](https://github.com/mi
 - **Type-Safe Operations**: Automatic type conversion based on existing node data types
 - **Error Handling**: Comprehensive error reporting for debugging and monitoring
 - **Async Support**: Built on the `mcp` SDK's `MCPServer` for efficient asynchronous operations
+- **Data-Change Subscriptions**: Monitored items buffered as they arrive, torn down with the session
 - **Configurable**: Environment-based endpoint, security policy and credentials
 
 ## Installation

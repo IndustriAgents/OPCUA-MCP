@@ -51,7 +51,13 @@ CORE_TOOLS = {
     "write_multiple_opcua_nodes",
     "call_opcua_method",
     "get_all_variables",
+    "subscribe_opcua_node",
+    "list_subscriptions",
+    "unsubscribe_opcua_node",
 }
+
+# The resource carrying what the subscriptions have delivered.
+SUBSCRIPTIONS_URI = "opcua://subscriptions"
 
 # Both implementations expose the history tool under the same name.
 HISTORY_TOOL = {
@@ -160,6 +166,29 @@ async def wait_for_node_value(
             return text
         await asyncio.sleep(delay)
     return text
+
+
+async def wait_for_changes(
+    session, subscription_id: str, at_least: int = 2, attempts: int = 10, delay: float = 1.0
+) -> dict:
+    """Poll `list_subscriptions` until one subscription has buffered enough changes.
+
+    Polling rather than sleeping a fixed time: how fast the OPC UA server
+    publishes is its decision, not ours, and the mock's simulation loop only
+    moves the sensors once a second. Returns whatever the last look found, so a
+    caller that never reaches `at_least` still gets a record to assert against.
+    """
+    record = {}
+    for _ in range(attempts):
+        result = await session.call_tool("list_subscriptions", {})
+        for candidate in records_of(result):
+            if candidate["subscription_id"] == subscription_id:
+                record = candidate
+                break
+        if record.get("change_count", 0) >= at_least:
+            return record
+        await asyncio.sleep(delay)
+    return record
 
 
 # --- tests ---------------------------------------------------------------------
@@ -379,6 +408,192 @@ async def test_history_rejects_a_malformed_timestamp_identically(server):
         "Use ISO 8601, e.g. 2026-04-23T17:40:00Z"
     )
     assert expected in text_of(result), f"{impl}: got {text_of(result)!r}"
+
+
+# --- data-change subscriptions (issue #3) --------------------------------------
+
+
+async def test_subscribe_observes_value_changes(server):
+    """Subscribe to a live sensor and watch the values arrive without polling it.
+
+    The mock's Temperature node moves once a second, so a subscription publishing
+    every 200ms should accumulate several distinct readings.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        created = await session.call_tool(
+            "subscribe_opcua_node",
+            {"node_id": NODE["Temperature"], "publishing_interval": 200, "buffer_size": 10},
+        )
+        assert not created.is_error, text_of(created)
+
+        [record] = records_of(created)
+        assert record["node_id"] == NODE["Temperature"]
+        assert record["publishing_interval"] == 200
+        # 0 means "sample at the publishing interval", resolved before answering.
+        assert record["sampling_interval"] == 200
+        assert record["buffer_size"] == 10
+
+        record = await wait_for_changes(session, record["subscription_id"], at_least=3)
+
+    assert record["change_count"] >= 3, f"{impl}: only {record.get('change_count')} changes"
+    changes = record["changes"]
+    assert changes, f"{impl}: change_count moved but nothing was buffered"
+    for change in changes:
+        assert set(change) == {"value", "timestamp", "status"}, (
+            f"{impl}: buffered change fields {sorted(change)} are not the contract's"
+        )
+        assert change["status"] == "Good", f"{impl}: unexpected status: {change}"
+        assert isinstance(change["value"], (int, float)) and not isinstance(
+            change["value"], bool
+        ), f"{impl}: value is not a number: {change!r}"
+        assert ISO_UTC_TIMESTAMP.match(change["timestamp"]), (
+            f"{impl}: timestamp is not ISO-8601 UTC: {change['timestamp']!r}"
+        )
+    # The sensor really is moving, so the subscription is reporting changes
+    # rather than the same reading over and over.
+    assert len({change["value"] for change in changes}) > 1, (
+        f"{impl}: every buffered value is identical: {changes!r}"
+    )
+
+
+async def test_buffer_size_bounds_what_is_retained(server):
+    """`change_count` counts everything; `changes` keeps only the newest few."""
+    impl, params = server
+    async with connect(params) as session:
+        created = await session.call_tool(
+            "subscribe_opcua_node",
+            {"node_id": NODE["Temperature"], "publishing_interval": 200, "buffer_size": 2},
+        )
+        assert not created.is_error, text_of(created)
+        [record] = records_of(created)
+        record = await wait_for_changes(session, record["subscription_id"], at_least=4)
+
+    assert record["change_count"] >= 4, f"{impl}: only {record.get('change_count')} changes"
+    assert len(record["changes"]) == 2, (
+        f"{impl}: buffer_size=2 retained {len(record['changes'])} changes"
+    )
+
+
+async def test_list_and_cancel_subscriptions(server):
+    """Two subscriptions, both listed, one cancelled, the other left alone."""
+    impl, params = server
+    async with connect(params) as session:
+        first = records_of(
+            await session.call_tool("subscribe_opcua_node", {"node_id": NODE["Temperature"]})
+        )[0]
+        second = records_of(
+            await session.call_tool("subscribe_opcua_node", {"node_id": NODE["Pressure"]})
+        )[0]
+        assert first["subscription_id"] != second["subscription_id"]
+
+        listed = await session.call_tool("list_subscriptions", {})
+        assert not listed.is_error, text_of(listed)
+        by_id = {r["subscription_id"]: r for r in records_of(listed)}
+        assert set(by_id) == {first["subscription_id"], second["subscription_id"]}
+        assert by_id[first["subscription_id"]]["node_id"] == NODE["Temperature"]
+        assert by_id[second["subscription_id"]]["node_id"] == NODE["Pressure"]
+
+        cancelled = await session.call_tool(
+            "unsubscribe_opcua_node", {"subscription_id": first["subscription_id"]}
+        )
+        assert not cancelled.is_error, text_of(cancelled)
+        assert first["subscription_id"] in text_of(cancelled)
+        assert NODE["Temperature"] in text_of(cancelled)
+
+        remaining = records_of(await session.call_tool("list_subscriptions", {}))
+        assert [r["subscription_id"] for r in remaining] == [second["subscription_id"]], (
+            f"{impl}: cancelling one subscription did not leave exactly the other"
+        )
+
+
+async def test_list_subscriptions_is_empty_before_subscribing(server):
+    """No subscriptions means zero records, not an error and not a placeholder."""
+    _impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool("list_subscriptions", {})
+    assert not result.is_error, text_of(result)
+    assert records_of(result) == []
+
+
+async def test_unsubscribe_rejects_an_unknown_id_identically(server):
+    """Both servers refuse an unknown subscription with the same sentence.
+
+    The same reasoning as the malformed-timestamp test above: the Python SDK only
+    forwards a `ToolError`'s message, so anything else would reach the caller as
+    `Error executing tool …` and leave them nothing to act on.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool("unsubscribe_opcua_node", {"subscription_id": "sub-9999"})
+    assert "No such subscription: sub-9999" in text_of(result), f"{impl}: got {text_of(result)!r}"
+
+
+async def test_subscribing_to_an_unknown_node_fails_identically(server):
+    """A node the server does not have must not leave a subscription behind.
+
+    Only the prefix is shared: each OPC UA client library words the underlying
+    rejection its own way, and both name the status (`BadNodeIdUnknown`).
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool("subscribe_opcua_node", {"node_id": "ns=2;i=999999"})
+        text = text_of(result)
+        assert "Failed to subscribe to node ns=2;i=999999" in text, f"{impl}: got {text!r}"
+        assert "BadNodeIdUnknown" in text, f"{impl}: got {text!r}"
+
+        listed = await session.call_tool("list_subscriptions", {})
+    assert records_of(listed) == [], f"{impl}: a failed subscribe left a subscription behind"
+
+
+async def test_the_subscriptions_resource_tracks_the_tools(server):
+    """The resource is the same state the tools report, re-readable for free."""
+    impl, params = server
+    async with connect(params) as session:
+        listed = {str(r.uri) for r in (await session.list_resources()).resources}
+        assert SUBSCRIPTIONS_URI in listed, f"{impl}: resources are {sorted(listed)}"
+
+        before = json.loads((await session.read_resource(SUBSCRIPTIONS_URI)).contents[0].text)
+        assert before == {"subscriptions": []}
+
+        [record] = records_of(
+            await session.call_tool(
+                "subscribe_opcua_node",
+                {"node_id": NODE["Temperature"], "publishing_interval": 200},
+            )
+        )
+        await wait_for_changes(session, record["subscription_id"], at_least=2)
+
+        after = json.loads((await session.read_resource(SUBSCRIPTIONS_URI)).contents[0].text)
+        assert [r["subscription_id"] for r in after["subscriptions"]] == [record["subscription_id"]]
+        assert after["subscriptions"][0]["changes"], f"{impl}: the resource buffered nothing"
+
+        await session.call_tool(
+            "unsubscribe_opcua_node", {"subscription_id": record["subscription_id"]}
+        )
+        emptied = json.loads((await session.read_resource(SUBSCRIPTIONS_URI)).contents[0].text)
+    assert emptied == {"subscriptions": []}
+
+
+async def test_subscriptions_do_not_survive_a_session(server):
+    """Each MCP session starts clean, which is the visible half of teardown.
+
+    A subscription left behind by the previous session would show up here — and
+    the OPC UA server would still be publishing to it. The other half, that the
+    subscription is actually deleted rather than merely forgotten, is asserted
+    against a stand-in in the unit suites on both sides.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        created = await session.call_tool(
+            "subscribe_opcua_node", {"node_id": NODE["Temperature"], "publishing_interval": 200}
+        )
+        assert not created.is_error, text_of(created)
+        await asyncio.sleep(1)
+
+    async with connect(params) as session:
+        result = await session.call_tool("list_subscriptions", {})
+    assert records_of(result) == [], f"{impl}: a subscription outlived its MCP session"
 
 
 # --- browse parsing (server output formats differ) -----------------------------

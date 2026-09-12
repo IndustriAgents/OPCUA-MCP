@@ -19,9 +19,13 @@ OPCUA_CLIENT_CERT=/etc/opcua/client.pem
 OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
 OPCUA_USERNAME=mcp-operator
 OPCUA_PASSWORD=…
-# and, when the server checks it against the certificate:
-OPCUA_APPLICATION_URI=urn:plant:mcp-client
 ```
+
+The ApplicationUri the session announces is taken from the `subjectAltName` of
+the client certificate, which is what servers check it against;
+`OPCUA_APPLICATION_URI` overrides that, for a certificate that carries no URI.
+Generating a certificate servers accept, and getting it into a server's trust
+list, is [docs/certificates.md](docs/certificates.md).
 
 An unusable combination — a mode without a policy, a policy without a client
 certificate, a username without a password, a certificate path that does not
@@ -32,7 +36,9 @@ What this does **not** do, and you should still plan for:
 - **Server certificate verification.** The server's certificate is taken from
   its endpoint description during the handshake; neither runtime pins it or
   validates it against a trust list, so encryption here protects against passive
-  eavesdropping, not against an attacker who can impersonate the endpoint.
+  eavesdropping, not against an attacker who can impersonate the endpoint. The
+  other direction is checked by the server: it decides whether to trust the
+  client certificate you configure.
 - **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
   `OPCUA_PASSWORD` without a security policy is authentication, not
   confidentiality: both client libraries send the password in clear text when

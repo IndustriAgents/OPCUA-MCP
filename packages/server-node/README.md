@@ -64,16 +64,16 @@ npm start
 
 The server is configured entirely through environment variables:
 
-| Variable                | Default                                                 | Meaning                                                                                                                          |
-| ----------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `OPCUA_SERVER_URL`      | `opc.tcp://localhost:4840`                              | OPC UA endpoint to connect to                                                                                                    |
-| `OPCUA_SECURITY_POLICY` | `None`                                                  | `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256`, `Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`                           |
-| `OPCUA_SECURITY_MODE`   | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt`                                                                                               |
-| `OPCUA_CLIENT_CERT`     | —                                                       | Client certificate (PEM/DER). Required for any policy other than `None`                                                          |
-| `OPCUA_CLIENT_KEY`      | —                                                       | Private key for `OPCUA_CLIENT_CERT`                                                                                              |
-| `OPCUA_APPLICATION_URI` | —                                                       | Application URI announced to the server; set it to the `subjectAltName` URI of `OPCUA_CLIENT_CERT`, which some servers insist on |
-| `OPCUA_USERNAME`        | —                                                       | Username identity; the session is anonymous when unset                                                                           |
-| `OPCUA_PASSWORD`        | —                                                       | Password for `OPCUA_USERNAME`                                                                                                    |
+| Variable                | Default                                                 | Meaning                                                                                                |
+| ----------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `OPCUA_SERVER_URL`      | `opc.tcp://localhost:4840`                              | OPC UA endpoint to connect to                                                                          |
+| `OPCUA_SECURITY_POLICY` | `None`                                                  | `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256`, `Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss` |
+| `OPCUA_SECURITY_MODE`   | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt`                                                                     |
+| `OPCUA_CLIENT_CERT`     | —                                                       | Client certificate (PEM/DER). Required for any policy other than `None`                                |
+| `OPCUA_CLIENT_KEY`      | —                                                       | Private key for `OPCUA_CLIENT_CERT`                                                                    |
+| `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT`         | Application URI announced to the server. Set it only for a certificate that carries no URI of its own  |
+| `OPCUA_USERNAME`        | —                                                       | Username identity; the session is anonymous when unset                                                 |
+| `OPCUA_PASSWORD`        | —                                                       | Password for `OPCUA_USERNAME`                                                                          |
 
 Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
 An unusable combination — a mode without a policy, a policy without a
@@ -81,6 +81,8 @@ certificate, a username without a password — is refused at startup with a
 message naming the variable. With no security configured the connection is
 unencrypted and unauthenticated, and the server says so on stderr; see
 [SECURITY.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/SECURITY.md).
+Making a client certificate and getting it trusted:
+[docs/certificates.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/certificates.md).
 
 Examples:
 

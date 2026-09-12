@@ -179,7 +179,7 @@ Both runtimes read the same environment variables:
 | `OPCUA_SECURITY_MODE` | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt` |
 | `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
 | `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
-| `OPCUA_APPLICATION_URI` | — | Application URI announced to the server; set it to the `subjectAltName` URI of `OPCUA_CLIENT_CERT`, which some servers insist on |
+| `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
 | `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
 | `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
 
@@ -210,6 +210,9 @@ without a certificate, a username without a password — is refused at startup
 with a message naming the variable, rather than failing later against live
 equipment. The server certificate is taken from the endpoint description during
 the handshake, so no server certificate file is needed.
+
+Generating a client certificate the server will accept, and getting it into its
+trust list, is **[docs/certificates.md](docs/certificates.md)**.
 
 `OPCUA_USERNAME` / `OPCUA_PASSWORD` authenticate the session but encrypt
 nothing: without a security policy the password crosses the network in clear
@@ -304,7 +307,9 @@ Full guide, including the MCP Inspector and AI-agent walkthroughs:
 > a warning to stderr while running without security.
 
 See [SECURITY.md](SECURITY.md) for the security posture, what the servers do and
-do not verify, and how to report a vulnerability.
+do not verify, and how to report a vulnerability;
+[docs/certificates.md](docs/certificates.md) for client certificates and trust
+setup.
 
 Note also that this server can **write** to nodes and **call methods** on real
 equipment. Scope the OPC UA user account you connect with to exactly what you

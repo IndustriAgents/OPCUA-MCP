@@ -201,13 +201,16 @@ export OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4843/mcp/secure
 export OPCUA_SECURITY_POLICY=Basic256Sha256
 export OPCUA_CLIENT_CERT=/tmp/opcua-pki/client.pem
 export OPCUA_CLIENT_KEY=/tmp/opcua-pki/client_key.pem
-export OPCUA_APPLICATION_URI=urn:opcua-mcp:test-client
 export OPCUA_USERNAME=operator OPCUA_PASSWORD=hunter2
 
 npx @modelcontextprotocol/inspector node packages/server-node/build/index.js
 # or the Python server:
 npx @modelcontextprotocol/inspector uv --directory packages/server-python run opcua-mcp-server
 ```
+
+No `OPCUA_APPLICATION_URI`: both runtimes announce the `subjectAltName` URI of
+the client certificate (`urn:opcua-mcp:test-client` here), and the mock refuses
+any other — as equipment that checks does.
 
 The server logs `Connected to OPC UA server (policy=Basic256Sha256
 mode=SignAndEncrypt user="operator")` on stderr; `Temperature` is `ns=2;i=2`.
@@ -218,7 +221,8 @@ fall back to), or change the password (`BadUserAccessDenied`).
 client certificate; a real server keeps a trust list and will reject yours until
 an operator moves it into the trusted folder — usually after one failed
 connection puts it in the rejected folder. Expect to do that first connection by
-hand.
+hand. Generating a certificate that real servers accept, and the trust dance
+itself, are in [certificates.md](certificates.md).
 
 ---
 
@@ -233,7 +237,8 @@ hand.
 | **Project MCP servers `⏸ Pending approval`** | Normal — approve them in a new `claude` session or via `/mcp` |
 | **Server exits at once with `Configuration error: …`** | A security variable is set to a combination OPC UA cannot honour; the message names the variable to fix |
 | **`BadUserAccessDenied` / `BadIdentityTokenRejected` on every tool** | `OPCUA_USERNAME` / `OPCUA_PASSWORD` rejected by the server |
-| **`BadSecurityChecksFailed`, or the server refuses the session** | The client certificate is not trusted by the OPC UA server, or `OPCUA_APPLICATION_URI` does not match its `subjectAltName` |
+| **`BadSecurityChecksFailed`, or the server refuses the session** | The client certificate is not in the OPC UA server's trust list — see [certificates.md](certificates.md) |
+| **`BadCertificateUriInvalid`** | The announced ApplicationUri is not the certificate's `subjectAltName` URI; usually a stale `OPCUA_APPLICATION_URI`, which can simply be unset |
 | **Values "snap back" after a write** | Expected — the mock republishes sensor/actuator state every ~1s; use command variables/methods for lasting changes |
 | **Node value lags after a method call** | The mock propagates method effects via its 1 Hz loop; re-read after ~1s |
 | **Works in the terminal, fails in Claude Desktop** | Desktop apps do not inherit a login shell's `PATH`, so a bare `"command": "npx"` or `"node"` cannot be found. Use absolute paths — `--install claude-desktop` writes them for you |

@@ -42,8 +42,11 @@ export interface SecurityConfig {
    *
    * OPC UA servers may reject a session whose ApplicationDescription URI does
    * not match the `subjectAltName` URI of the client certificate, so this has
-   * to be settable alongside the certificate. Unset leaves node-opcua's derived
-   * default (`urn:<hostname>:<applicationName>`).
+   * to be settable alongside the certificate. Unset, node-opcua takes the URI
+   * out of `clientCert` itself, falling back to `urn:<hostname>:<applicationName>`
+   * when there is no certificate or it carries no URI. The Python runtime now
+   * does the same (`certificate_application_uri` in its `security.py`), so the
+   * same files announce the same identity on either runtime.
    */
   applicationUri?: string;
   /** Username identity; anonymous when unset. */

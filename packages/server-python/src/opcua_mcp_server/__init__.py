@@ -17,7 +17,13 @@ from .config import SERVER_URL
 from .contract import CONTRACT, DESC, HISTORY_NODE_ID, load_contract
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .records import history_record, history_records, scalar_to_json, variant_to_json
-from .security import SecurityConfig, create_client, parse_security_config, security_config
+from .security import (
+    SecurityConfig,
+    certificate_application_uri,
+    create_client,
+    parse_security_config,
+    security_config,
+)
 from .version import package_version
 
 __all__ = [
@@ -26,6 +32,7 @@ __all__ = [
     "HISTORY_NODE_ID",
     "SERVER_URL",
     "SecurityConfig",
+    "certificate_application_uri",
     "create_client",
     "format_iso_utc",
     "history_record",

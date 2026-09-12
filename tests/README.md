@@ -65,6 +65,7 @@ Every test runs against **both** server implementations.
 | `test_reads_and_writes_over_a_secured_connection` | Read/write work over Basic256Sha256, in `Sign` and in `SignAndEncrypt` |
 | `test_the_password_never_reaches_the_logs` | `OPCUA_PASSWORD` appears nowhere in the server's stderr |
 | `test_default_mode_is_sign_and_encrypt` | A policy with no explicit mode negotiates the strongest endpoint, not the weakest |
+| `test_the_application_uri_comes_from_the_certificate` | With no `OPCUA_APPLICATION_URI`, both runtimes announce the certificate's own `subjectAltName` URI |
 | `test_a_wrong_password_is_rejected` | Bad credentials yield `BadUserAccessDenied`, never a working session |
 | `test_an_unsecured_client_cannot_use_the_secured_server` | With no security configured there is no endpoint to fall back to, and the server warns |
 
@@ -81,7 +82,7 @@ colliding (#46):
 |------|------|
 | `packages/mock-server` (python-opcua) | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
 | `packages/mock-server-aggregate` (node-opcua) | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
-| `tests/fixtures/secure_opcua_server.py` (python-opcua) | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. |
+| `tests/fixtures/secure_opcua_server.py` (python-opcua) | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. `--check-client-uri` adds the ApplicationUri-against-certificate check that real servers make and python-opcua's does not. |
 
 The main mock cannot serve aggregates even in principle: python-opcua answers
 `ReadProcessedDetails` with `BadNotImplemented`.

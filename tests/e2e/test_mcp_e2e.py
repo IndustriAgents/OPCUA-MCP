@@ -39,6 +39,8 @@ NODE = {
     "ProductionRate": "ns=2;i=21",
     "StartProductionCommand": "ns=2;i=23",  # Double command variable
     "StopProductionCommand": "ns=2;i=24",  # Boolean command variable
+    "EmergencyStopCommand": "ns=2;i=25",  # Boolean command variable
+    "ResetSystemCommand": "ns=2;i=26",  # Boolean command variable
     "IndustrialControlSystem": "ns=2;i=1",
     "Methods": "ns=2;i=27",
 }
@@ -51,6 +53,12 @@ CORE_TOOLS = {
     "write_multiple_opcua_nodes",
     "call_opcua_method",
     "get_all_variables",
+    # Events and Alarms & Conditions: not capability-gated, so a server that
+    # raises nothing still advertises them. Exercised in e2e/test_events_e2e.py.
+    "subscribe_events",
+    "read_events",
+    "list_active_alarms",
+    "acknowledge_alarm",
 }
 
 # Both implementations expose the history tool under the same name.

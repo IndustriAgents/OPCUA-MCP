@@ -51,6 +51,7 @@ NATIVE = {
     "guid": ua.Variant(uuid.UUID("72962B91-FA75-4AE6-8D28-B404DC7DAF63"), ua.VariantType.Guid),
     "bytestring": ua.Variant(b"abc", ua.VariantType.ByteString),
     "nodeid": ua.Variant(ua.NodeId(3, 2), ua.VariantType.NodeId),
+    "nodeid_namespace_zero": ua.Variant(ua.NodeId(2253), ua.VariantType.NodeId),
     "statuscode": ua.Variant(ua.StatusCode(0), ua.VariantType.StatusCode),
     "qualifiedname": ua.Variant(ua.QualifiedName("Temperature", 2), ua.VariantType.QualifiedName),
     "localizedtext": ua.Variant(

@@ -20,6 +20,14 @@ import { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { OpcuaConnection } from "./connection.js";
 import { CONTRACT } from "./contract.js";
 import { toDate } from "./dates.js";
+import {
+  DEFAULT_NOTIFIER,
+  EVENT_DEFAULTS,
+  EventRecord,
+  EventSubscriptions,
+  acknowledgeAlarm,
+  listActiveAlarms,
+} from "./events.js";
 import { toHistoryRecords } from "./records.js";
 
 /** A history/aggregate response: one text block per canonical record.
@@ -30,8 +38,13 @@ import { toHistoryRecords } from "./records.js";
  * single array — the two servers' responses are then read the same way.
  */
 function historyResult(dataValues: DataValue[] | null | undefined) {
+  return recordResult(toHistoryRecords(dataValues));
+}
+
+/** One text block per record — the framing the two servers share. */
+function recordResult(records: object[]) {
   return {
-    content: toHistoryRecords(dataValues).map((record) => ({
+    content: records.map((record) => ({
       type: "text",
       text: JSON.stringify(record, null, 2),
     })),
@@ -40,6 +53,7 @@ function historyResult(dataValues: DataValue[] | null | undefined) {
 
 export class OpcuaTools {
   private aggregateFunctions: string[] = [];
+  private events = new EventSubscriptions();
 
   constructor(private readonly conn: OpcuaConnection) {}
 
@@ -144,6 +158,32 @@ export class OpcuaTools {
 
         case "get_all_variables":
           return await this.getAllVariables();
+
+        case "subscribe_events":
+          return await this.subscribeEvents(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
+            (args?.buffer_size as number) || EVENT_DEFAULTS.bufferSize
+          );
+
+        case "read_events":
+          return this.readEvents(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.limit as number) || EVENT_DEFAULTS.readLimit
+          );
+
+        case "list_active_alarms":
+          return await this.listActiveAlarms(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
+          );
+
+        case "acknowledge_alarm":
+          return await this.acknowledgeAlarm(
+            args?.event_id as string,
+            (args?.comment as string) ?? "",
+            args?.condition_id as string | undefined
+          );
 
         default:
           throw new Error(`Unknown tool: ${name}`);
@@ -534,6 +574,106 @@ export class OpcuaTools {
         `Failed to call method ${methodNodeId} on object ${objectNodeId}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  // --- events and Alarms & Conditions ------------------------------------------
+  // The wording of every message below is shared with the Python server's
+  // `events` tools, so a model that has learned one runtime's replies reads the
+  // other's the same way. See packages/server-python/.../server.py.
+
+  private async subscribeEvents(nodeId: string, severityMin: number, bufferSize: number) {
+    if (!this.session) {
+      throw new Error("No OPC UA session available");
+    }
+
+    try {
+      await this.events.subscribe(this.session, nodeId, severityMin, bufferSize);
+    } catch (error) {
+      throw new Error(
+        `Failed to subscribe to events from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Subscribed to events from node ${nodeId}, buffering up to ${bufferSize} ` +
+            `events of severity ${severityMin} or above. Read them with read_events.`,
+        },
+      ],
+    };
+  }
+
+  private readEvents(nodeId: string, limit: number) {
+    if (!this.session) {
+      throw new Error("No OPC UA session available");
+    }
+
+    const drained = this.events.drain(this.session, nodeId, limit);
+    if (drained === null) {
+      throw new Error(`Not subscribed to events from node ${nodeId}. Call subscribe_events first.`);
+    }
+    if (drained.dropped > 0) {
+      console.error(
+        `Event buffer for ${nodeId} overflowed; ${drained.dropped} of the oldest events were dropped`
+      );
+    }
+    return recordResult(drained.records);
+  }
+
+  private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {
+    if (!this.session) {
+      throw new Error("No OPC UA session available");
+    }
+
+    let alarms: EventRecord[];
+    try {
+      alarms = await listActiveAlarms(this.session, nodeId, timeoutSeconds);
+    } catch (error) {
+      throw new Error(
+        `Failed to list active alarms from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    this.events.remember(alarms);
+    return recordResult(alarms);
+  }
+
+  private async acknowledgeAlarm(eventId: string, comment: string, conditionId?: string) {
+    if (!this.session) {
+      throw new Error("No OPC UA session available");
+    }
+
+    const condition = conditionId || this.events.conditionFor(eventId);
+    if (!condition) {
+      throw new Error(
+        `Unknown event_id "${eventId}". Call list_active_alarms first, or pass the ` +
+          "condition_id of the alarm to acknowledge."
+      );
+    }
+
+    let statusCode;
+    try {
+      statusCode = await acknowledgeAlarm(this.session, condition, eventId, comment);
+    } catch (error) {
+      throw new Error(
+        `Failed to acknowledge alarm ${condition}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    if (statusCode !== StatusCodes.Good) {
+      throw new Error(`Failed to acknowledge alarm ${condition}: ${statusCode.toString()}`);
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Acknowledged alarm ${condition} (event ${eventId})`,
+        },
+      ],
+    };
   }
 
   private async getAllVariables() {

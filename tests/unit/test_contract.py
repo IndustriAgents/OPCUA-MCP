@@ -19,7 +19,10 @@ CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
 TOOLS = CONTRACT["tools"]
 CAPABILITIES = CONTRACT["capabilities"]
 RESULT_SHAPES = {k: v for k, v in CONTRACT["resultShapes"].items() if not k.startswith("$")}
+EVENTS = CONTRACT["events"]
+EVENT_FIELDS = EVENTS["fields"]
 TOOL_IDS = [t["name"] for t in TOOLS]
+EVENT_TOOL_NAMES = {"subscribe_events", "read_events", "list_active_alarms", "acknowledge_alarm"}
 SHAPE_IDS = sorted(RESULT_SHAPES)
 
 
@@ -110,6 +113,67 @@ def test_result_shape_records_are_coherent(name):
         assert spec.get("description", "").strip(), (
             f"{name}.{field} has no description — the model relies on it"
         )
+
+
+# --- the Alarms & Conditions section -------------------------------------------
+# `events` is read by both servers to build one EventFilter and name one record,
+# so a mistake here is a mistake in both at once — and one that only shows up
+# against a server that actually raises events.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "defaultNotifierNodeId",
+        "baseEventTypeNodeId",
+        "conditionTypeNodeId",
+        "conditionRefreshMethodNodeId",
+        "acknowledgeMethodNodeId",
+        "refreshStartEventTypeNodeId",
+        "refreshEndEventTypeNodeId",
+    ],
+)
+def test_event_node_ids_are_written_the_way_the_servers_compare_them(name):
+    """Spelled out with their namespace, because that is how both servers render
+    a NodeId back — `event_type` is compared against these strings directly."""
+    assert EVENTS[name].startswith("ns=0;i="), f"{name} is {EVENTS[name]!r}"
+
+
+def test_event_fields_are_the_event_record_shape():
+    """One list, two jobs: the select clauses and the record's fields.
+
+    If they could differ, a field could be selected and never reported, or
+    reported and never selected — and the servers would disagree about which.
+    """
+    record = RESULT_SHAPES["eventRecords"]["items"]
+    assert [field["key"] for field in EVENT_FIELDS] == list(record["properties"]), (
+        "contract events.fields and resultShapes.eventRecords must list the same "
+        "fields, in the same order"
+    )
+
+
+@pytest.mark.parametrize("field", EVENT_FIELDS, ids=[f["key"] for f in EVENT_FIELDS])
+def test_event_field_is_well_formed(field):
+    assert set(field) == {"key", "path"}, f"unexpected keys in {field!r}"
+    assert field["key"] and field["path"], f"empty entry: {field!r}"
+    assert field["key"] == field["key"].lower(), "record fields are snake_case"
+
+
+def test_event_defaults_cover_every_promised_default():
+    defaults = {k: v for k, v in EVENTS["defaults"].items() if not k.startswith("$")}
+    assert set(defaults) == {"severityMin", "bufferSize", "readLimit", "refreshTimeoutSeconds"}
+    assert all(isinstance(value, int) and value >= 0 for value in defaults.values())
+
+
+def test_the_event_family_shares_one_result_shape():
+    """Four tools, two servers, one shape — the lesson of #23 applied up front."""
+    event_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["name"] in EVENT_TOOL_NAMES}
+    assert event_family == {
+        "subscribe_events": None,
+        "read_events": "eventRecords",
+        "list_active_alarms": "eventRecords",
+        "acknowledge_alarm": None,
+    }
 
 
 def test_the_history_family_shares_one_result_shape():

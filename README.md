@@ -26,8 +26,9 @@
 
 Two interchangeable implementations — **Python** and **TypeScript/Node** — expose
 the same OPC UA operations as MCP tools: read and write nodes, browse the address
-space, call methods, and read history and server-side aggregates. Both connect to
-any OPC UA server. Pick whichever runtime fits your stack.
+space, call methods, read history and server-side aggregates, and subscribe to
+events and alarms. Both connect to any OPC UA server. Pick whichever runtime fits
+your stack.
 
 ```mermaid
 flowchart LR
@@ -97,7 +98,7 @@ All four routes, and what to do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same nine tools, defined once in
+Both servers expose the same thirteen tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |
@@ -109,6 +110,10 @@ Both servers expose the same nine tools, defined once in
 | `browse_opcua_node_children` | List a node's children |
 | `call_opcua_method` | Invoke a method on an object node |
 | `get_all_variables` | Inventory every variable in the address space |
+| `subscribe_events` | Start collecting events from a notifier node |
+| `read_events` | Read the events collected since the last read |
+| `list_active_alarms` | The alarms the server is currently retaining |
+| `acknowledge_alarm` | Acknowledge one of them, with a comment |
 | `read_history_opcua_node` † | Read historical, timestamped values |
 | `read_aggregate_opcua_node` † | Server-computed aggregates (Average, Min, Max, …) |
 
@@ -130,6 +135,8 @@ Once configured, you can ask in plain language:
 - *"What was the temperature over the last hour?"*
 - *"Start production on line 1 at 100 units/hour"*
 - *"Give me the hourly average temperature for today"*
+- *"What alarms are active right now?"*
+- *"Acknowledge the high-temperature alarm — I'm looking into it"*
 
 Real responses from the bundled mock plant, via the published package:
 
@@ -154,12 +161,34 @@ get_all_variables
 read_history_opcua_node  node_id="ns=2;i=3"  num_values=2
 → { "value": 24.231991377989036, "timestamp": "2026-09-10T13:15:12.214Z", "status": "Good" }
   { "value": 26.089859958260515, "timestamp": "2026-09-10T13:15:11.208Z", "status": "Good" }
+
+list_active_alarms
+→ { "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=",
+    "event_type": "ns=0;i=9341",
+    "source_node": "ns=1;i=1001",
+    "source_name": "Temperature",
+    "time": "2026-09-10T13:15:12.214Z",
+    "message": "Condition is 100.000 and state is High",
+    "severity": 700,
+    "condition_id": "ns=1;i=1002",
+    "condition_name": "HighTemperatureAlarm",
+    "active": true, "acked": false, "retain": true }
+
+acknowledge_alarm  event_id="ZjW7HJrVSFzDV2sMsX7sEQAAAAE="  comment="on it"
+→ Acknowledged alarm ns=1;i=1002 (event ZjW7HJrVSFzDV2sMsX7sEQAAAAE=)
 ```
 
 Both runtimes return that same record shape — one record per historical value —
-for `read_history_opcua_node` and `read_aggregate_opcua_node` alike. It is
-defined in `contract/tools.json` (`resultShapes.historyRecords`) and enforced
-against both servers by the test suite.
+for `read_history_opcua_node` and `read_aggregate_opcua_node` alike, and a second
+shape for the event family (`read_events`, `list_active_alarms`). Both are
+defined in `contract/tools.json` (`resultShapes`) and enforced against both
+servers by the test suite.
+
+Events are collected, not pushed: MCP is request/response, so `subscribe_events`
+starts a real OPC UA subscription in the background and `read_events` hands over
+what has arrived since you last asked. `list_active_alarms` does not need one —
+it asks the server for its retained conditions directly (ConditionRefresh), and
+says so plainly when the server has no Alarms & Conditions support to ask.
 
 Bad input is rejected identically by both runtimes:
 
@@ -263,8 +292,9 @@ here, where they would drift.
 
 ## Try it against the mock
 
-The repo ships a simulated industrial plant — sensors, actuators, methods and
-history — so you can try the tools without touching real equipment.
+The repo ships a simulated industrial plant — sensors, actuators, methods,
+history and alarm events — so you can try the tools without touching real
+equipment.
 
 ```bash
 git clone https://github.com/midhunxavier/OPCUA-MCP.git && cd OPCUA-MCP

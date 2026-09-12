@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Alarms & Conditions: four new tools, on both servers** (#4). Industrial
+  systems report abnormal states through the A&C model rather than as plain
+  variables, and none of it was reachable before.
+
+  * `subscribe_events` — start collecting events from a notifier node (the
+    Server object by default), with an optional severity floor and buffer size.
+  * `read_events` — hand over what has arrived since the last read, oldest
+    first, and remove it from the buffer.
+  * `list_active_alarms` — the conditions the server is retaining right now.
+  * `acknowledge_alarm` — acknowledge one, with a comment.
+
+  Events are collected rather than pushed, because MCP is request/response and an
+  OPC UA event arrives when the server decides: `subscribe_events` starts a real
+  subscription whose monitored item parks what arrives, and `read_events` drains
+  it. `list_active_alarms` needs no subscription of yours — it makes its own,
+  calls ConditionRefresh, and collects the conditions the server replays between
+  the RefreshStart and RefreshEnd events.
+
+  `acknowledge_alarm` takes only the `event_id` that was just reported. OPC UA
+  needs the condition's NodeId as well, but only one of the two is worth asking a
+  model to carry around, so both servers remember which condition each event they
+  reported came from. `condition_id` can still be passed for an event from
+  elsewhere.
+
+  The tools are **not** capability-gated, unlike history and aggregates: every
+  OPC UA server has a Server object with an EventNotifier, and one that raises
+  nothing simply buffers nothing. A server without A&C is told apart at call time
+  instead — `list_active_alarms` reports that its ConditionRefresh failed and
+  that the server may not implement A&C, rather than returning an empty list a
+  model would read as "no alarms".
+
+  Both servers build one EventFilter from one list of browse paths in
+  `contract/tools.json` -> `events`, which is also the field order of the new
+  `resultShapes.eventRecords`, so neither can select a field the other reports or
+  name it differently. Two details of that list are load-bearing: every path is
+  resolved against BaseEventType, which Part 4 §7.4.4.5 says makes a server
+  evaluate it without regard to the event's own type (so one filter can select
+  `AckedState/Id` from a condition and get `null`, not an error, from a plain
+  event); and ConditionId is not a component of ConditionType at all but the
+  NodeId attribute of the condition instance, which is what the Acknowledge
+  method is called on.
+- **The bundled mock raises events.** It announces every change of its alarm
+  state — severity 700 for `Alarm active: <reason>`, 100 for `Alarm cleared` —
+  so `subscribe_events` and `read_events` have something real to collect. Trigger
+  one by writing `true` to `EmergencyStopCommand` (`ns=2;i=25`) and clear it with
+  `ResetSystemCommand` (`ns=2;i=26`).
+- **A third mock server, `packages/mock-server-alarms`** (node-opcua), with a
+  real `ExclusiveLimitAlarm` on a writable `Temperature`. python-opcua's server
+  has no condition model at all, so the main mock cannot answer a
+  ConditionRefresh or offer an Acknowledge method to call — which makes it the
+  right server to prove the *absence* case reads clearly, and the wrong one to
+  prove the tools work. This one is a genuine Part 9 implementation, so
+  `list_active_alarms` and `acknowledge_alarm` are tested against a real
+  condition instance rather than against our own idea of one.
+
 ### Changed
 - **The Python server now targets the `mcp` 2.x API.** 0.3.0 pinned `mcp[cli]<2`
   because 2.x renamed `FastMCP` to `MCPServer` and the server died on import
@@ -51,6 +107,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **A NodeId in namespace 0 is now spelled the same by both servers.** python-opcua
+  omits a zero namespace from a NodeId's text form (`i=2253`) where node-opcua
+  writes it out (`ns=0;i=2253`); the Python server passed that difference
+  straight through. It surfaced with the event tools, where an `event_type` is
+  almost always in namespace 0 and `source_node` often is, but it was always
+  reachable through a history value of type NodeId. Both now emit the namespace
+  explicitly, and `tests/fixtures/value-encoding.json` pins the case.
 - **The e2e suite no longer borrows another checkout's mock OPC UA server** (#46).
   Each mock fixture picked a fixed port (4840/4841/4843) and, finding something
   already listening there, adopted it. With one developer on one checkout that was

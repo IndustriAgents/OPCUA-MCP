@@ -46,7 +46,7 @@ Every test runs against **both** server implementations.
 
 | Test | What it verifies |
 |------|------------------|
-| `test_lists_core_tools` | All 7 core tools are advertised |
+| `test_lists_core_tools` | All 11 always-on tools are advertised |
 | `test_history_tool_exposed_when_supported` | History tool appears because the mock enables history |
 | `test_aggregate_tool_hidden_when_unsupported` | Aggregate tool is **hidden** (mock advertises no aggregate functions) — capability gating |
 | `test_aggregate_tool_exposed_when_supported` | Aggregate tool **appears** against the aggregate-capable mock |
@@ -61,6 +61,15 @@ Every test runs against **both** server implementations.
 | `test_write_boolean_node` | Writing a `Boolean` node with `"true"` succeeds (bool-handling regression) |
 | `test_call_method_start_then_stop` | `call_opcua_method` drives `StartProduction`/`StopProduction` and `SystemMode` reacts |
 | `test_read_history` | The history tool (`read_history_opcua_node`) returns timestamped records |
+| `test_event_tools_are_always_advertised` | The four event tools are not capability-gated |
+| `test_subscribe_then_read_receives_an_event` | `subscribe_events` + `read_events` deliver an event the mock raised, in the canonical record shape |
+| `test_reading_twice_drains_the_buffer` | An event is handed over once, never twice |
+| `test_severity_floor_drops_quieter_events` | `severity_min` keeps the alarm (700) and drops its clearing (100) |
+| `test_reading_without_subscribing_says_so` | Both runtimes word that mistake identically |
+| `test_a_server_without_conditions_says_so` | A server with no Alarms & Conditions gets a legible error, not an empty list |
+| `test_lists_and_acknowledges_a_real_alarm` | Against the alarms mock: list a retained, unacknowledged condition and acknowledge it by `event_id` |
+| `test_an_unknown_event_id_cannot_be_acknowledged` | An `event_id` the server never reported has no condition to act on |
+| `test_condition_events_reach_the_buffer_too` | A condition is an event: `read_events` sees it, with its condition fields filled in |
 | `test_refuses_to_start_without_the_certificate_the_policy_needs` | A security policy with no certificate exits with the same `Configuration error: …` on both runtimes |
 | `test_reads_and_writes_over_a_secured_connection` | Read/write work over Basic256Sha256, in `Sign` and in `SignAndEncrypt` |
 | `test_the_password_never_reaches_the_logs` | `OPCUA_PASSWORD` appears nowhere in the server's stderr |
@@ -73,7 +82,7 @@ and only when the server advertises `AccessHistoryDataCapability`.
 
 ## Mock servers
 
-Three are used, on purpose. Each is started by its fixture on a **fresh
+Four are used, on purpose. Each is started by its fixture on a **fresh
 ephemeral port** per session, so two checkouts can run the suite at once without
 colliding (#46):
 
@@ -81,10 +90,16 @@ colliding (#46):
 |------|------|
 | `packages/mock-server` (python-opcua) | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
 | `packages/mock-server-aggregate` (node-opcua) | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
+| `packages/mock-server-alarms` (node-opcua) | Has a real `ExclusiveLimitAlarm` on a writable `Temperature` (`ns=1;i=1001`), so ConditionRefresh and Acknowledge are exercised against a genuine condition instance. Starts with the alarm active, and a test re-arms it by writing below then above the limit. |
 | `tests/fixtures/secure_opcua_server.py` (python-opcua) | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. |
 
 The main mock cannot serve aggregates even in principle: python-opcua answers
-`ReadProcessedDetails` with `BadNotImplemented`.
+`ReadProcessedDetails` with `BadNotImplemented`. It cannot serve conditions
+either — python-opcua has no condition model, so there is no ConditionRefresh to
+call and no Acknowledge method to invoke. It *does* raise plain events (it
+announces every change of its alarm state), which is what the
+`subscribe_events` / `read_events` tests need, and its lack of conditions is
+what makes the "a server without A&C says so" assertion meaningful.
 
 The secured mock accepts any client certificate, because python-opcua's server
 has no trust list. Real equipment does: a Siemens, Kepware or Prosys server
@@ -102,6 +117,8 @@ be verified by hand against the real server.
   (aggregate tests are **skipped** if its `node_modules` is missing, or on Node <20 —
   `node-opcua-aggregates` pulls dependencies that require it. This limits the test
   fixture only; the shipped Node server needs Node 22.13+).
+- Install the alarms mock once: `cd packages/mock-server-alarms && npm install`
+  (the Alarms & Conditions tests are **skipped** on the same terms).
 
 ## Running
 
@@ -122,11 +139,14 @@ history for the tests that read it back is then yours:
 ```bash
 OPCUA_SERVER_URL="opc.tcp://localhost:4840/freeopcua/server/" uv run --no-sync pytest -v
 OPCUA_AGGREGATE_SERVER_URL="opc.tcp://localhost:4841/UA/Aggregate" uv run --no-sync pytest -v
+OPCUA_ALARM_SERVER_URL="opc.tcp://localhost:4842/UA/Alarms" uv run --no-sync pytest -v
 ```
 
 A standalone mock defaults to `:4840` (`uv run opcua-mock-server`, overridable
 with `--endpoint`); the aggregate mock defaults to `:4841` (`npm start` in
-`packages/mock-server-aggregate`, overridable with `AGGREGATE_MOCK_PORT`).
+`packages/mock-server-aggregate`, overridable with `AGGREGATE_MOCK_PORT`); the
+alarms mock defaults to `:4842` (`npm start` in `packages/mock-server-alarms`,
+overridable with `ALARM_MOCK_PORT`).
 
 Select a single implementation:
 
@@ -146,3 +166,7 @@ also match test *names* like `test_read_opcua_node`.
 - Writes to sensor/actuator nodes may be overwritten within ~1s by the
   simulation loop; only the command variables (`StartProductionCommand`, …) and
   methods persist.
+- The event tests drive the main mock's alarm state through those command
+  variables (emergency stop, then reset) and reset it again on the way out: the
+  whole session shares one mock, and a test that leaves the plant latched in
+  MAINTENANCE hands the next one a different machine.

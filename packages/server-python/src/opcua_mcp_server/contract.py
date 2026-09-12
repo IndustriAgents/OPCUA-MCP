@@ -61,3 +61,6 @@ CONTRACT = load_contract()
 DESC = {t["name"]: t["description"] for t in CONTRACT["tools"]}
 HISTORY_NODE_ID = CONTRACT["capabilities"]["history"]["nodeId"]
 AGGREGATE_NODE_ID = CONTRACT["capabilities"]["aggregate"]["nodeId"]
+#: Alarms & Conditions wiring: the well-known node IDs, the event field list both
+#: servers select on, and the defaults their tool descriptions promise.
+EVENTS = CONTRACT["events"]

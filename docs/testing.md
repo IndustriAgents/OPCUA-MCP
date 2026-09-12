@@ -43,8 +43,16 @@ uv run --no-sync pytest -v -k "[node]"   # only the Node server
 ```
 
 The suite starts its own mocks. To point it at a server you manage instead, set
-`OPCUA_SERVER_URL` (or `OPCUA_AGGREGATE_SERVER_URL`). See
-[../tests/README.md](../tests/README.md) for the full matrix.
+`OPCUA_SERVER_URL` (or `OPCUA_AGGREGATE_SERVER_URL` / `OPCUA_ALARM_SERVER_URL`).
+See [../tests/README.md](../tests/README.md) for the full matrix.
+
+The aggregate and Alarms & Conditions tests need their mocks installed once, and
+skip cleanly until they are:
+
+```bash
+(cd packages/mock-server-aggregate && npm install)
+(cd packages/mock-server-alarms && npm install)
+```
 
 ---
 
@@ -84,6 +92,11 @@ Things to try:
 | `read_history_opcua_node` | `node_id` = `ns=2;i=3`, `start_time` = `nope` | clear error: *Use ISO 8601…* |
 | `write_opcua_node` | `node_id` = `ns=2;i=13`, `value` = `80` | `Successfully wrote 80…` |
 | `call_opcua_method` | `object_node_id` = `ns=2;i=27`, `method_node_id` = `ns=2;i=28`, `arguments` = `["60"]` | `…Result: true` (SystemMode → AUTO within ~1s) |
+| `subscribe_events` | *(none)* | `Subscribed to events from node ns=0;i=2253…` |
+| `write_opcua_node` | `node_id` = `ns=2;i=25`, `value` = `true` | emergency stop — the mock raises an alarm event |
+| `read_events` | *(none)* | one record, `message` = `Alarm active: emergency stop`, `severity` 700 |
+| `write_opcua_node` | `node_id` = `ns=2;i=26`, `value` = `true` | reset — the next `read_events` shows `Alarm cleared` |
+| `list_active_alarms` | *(none)* | a clear *ConditionRefresh failed…* error: python-opcua has no condition model. Point at the alarms mock below for the working path |
 
 ### CLI mode (scriptable, no browser)
 
@@ -106,6 +119,26 @@ $BIN --method tools/call --tool-name call_opcua_method \
 
 For the Python server, swap the command for
 `uv --directory packages/server-python run opcua-mcp-server`.
+
+### Alarms & Conditions, against the alarms mock
+
+The bundled mock raises events but has no condition model, so
+`list_active_alarms` and `acknowledge_alarm` need the node-opcua mock instead:
+
+```bash
+cd packages/mock-server-alarms && npm install && npm start
+# READY endpoint=opc.tcp://localhost:4842/UA/Alarms temperatureNodeId=ns=1;i=1001 …
+```
+
+Point either MCP server at `opc.tcp://localhost:4842/UA/Alarms`. It starts with
+its `HighTemperatureAlarm` already active and unacknowledged:
+
+| Tool | Arguments | Expected |
+|------|-----------|----------|
+| `list_active_alarms` | *(none)* | one record, `condition_name` = `HighTemperatureAlarm`, `acked` = `false` |
+| `acknowledge_alarm` | `event_id` = *(the `event_id` above)*, `comment` = `on it` | `Acknowledged alarm ns=1;i=1002 …`, and `acked` is `true` next time you list |
+| `write_opcua_node` | `node_id` = `ns=1;i=1001`, `value` = `20` | below the limit: the alarm goes inactive |
+| `write_opcua_node` | `node_id` = `ns=1;i=1001`, `value` = `100` | above it again: a fresh, unacknowledged alarm |
 
 ---
 
@@ -137,6 +170,9 @@ Then, in a **new** Claude Code session started in this directory:
    - *"Show me the last 5 temperature history readings."* → `read_history_opcua_node`
    - *"Give me a full inventory of all variables on the server."*
    - *"Start production at 60 units/hour, check the system mode, then stop it."*
+   - *"Watch for events, trigger the emergency stop, then tell me what came in."*
+   - *"What alarms are active, and can you acknowledge the temperature one?"*
+     (needs the alarms mock — see above)
    - *"Use the opcua-node server to read node ns=2;i=4 history between 11:00 and 12:00 UTC today."*
 
 > Both servers expose the same tool names (namespaced `opcua-python` /
@@ -229,6 +265,8 @@ hand.
 | **List Tools is empty or errors** | Mock server not running → `uv run --no-sync opcua-mock-server` |
 | **`read_history_opcua_node` not listed** | Connected to a server without history, or wrong `OPCUA_SERVER_URL` |
 | **`read_aggregate_opcua_node` not listed** | Expected — the bundled mock advertises no aggregate functions, so the tool is correctly hidden |
+| **`read_events` returns nothing** | Nothing has been raised since the last read. The bundled mock only raises an event when its alarm state *changes* — write `true` to `ns=2;i=25`, then to `ns=2;i=26` |
+| **`list_active_alarms` reports `ConditionRefresh failed`** | The server implements no Alarms & Conditions. Expected against the bundled mock; use `packages/mock-server-alarms` |
 | **`Address already in use` on :4840** | Another mock is on the default port; stop it (`lsof -tiTCP:4840 -sTCP:LISTEN \| xargs kill`) or pass `--endpoint`. The test suite is unaffected — it picks its own port. |
 | **Project MCP servers `⏸ Pending approval`** | Normal — approve them in a new `claude` session or via `/mcp` |
 | **Server exits at once with `Configuration error: …`** | A security variable is set to a combination OPC UA cannot honour; the message names the variable to fix |

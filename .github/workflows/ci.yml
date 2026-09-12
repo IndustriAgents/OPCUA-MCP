@@ -111,6 +111,10 @@ jobs:
         working-directory: packages/mock-server-aggregate
         run: npm ci
 
+      - name: Install alarms mock OPC UA server
+        working-directory: packages/mock-server-alarms
+        run: npm ci
+
       - name: Sync workspace (all packages)
         run: uv sync --all-packages --python ${{ matrix.python-version }}
 

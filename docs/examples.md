@@ -40,6 +40,8 @@ Discover these any time with `get_all_variables` or `browse_opcua_node_children`
 | SystemStatus / ProductionRate | `ns=2;i=21` | Double | read |
 | SystemStatus / StartProductionCommand | `ns=2;i=23` | Double | write |
 | SystemStatus / StopProductionCommand | `ns=2;i=24` | Boolean | write |
+| SystemStatus / EmergencyStopCommand | `ns=2;i=25` | Boolean | write |
+| SystemStatus / ResetSystemCommand | `ns=2;i=26` | Boolean | write |
 | Methods folder | `ns=2;i=27` | Object | — |
 | Methods / StartProduction | `ns=2;i=28` | Method | call (1 Double arg) |
 | Methods / StopProduction | `ns=2;i=31` | Method | call |
@@ -194,6 +196,94 @@ record per interval:
 ```
 
 > Prompt: *"What was the average temperature per minute over the last hour?"*
+
+---
+
+## Events & alarms (added for issue #4)
+
+These four are never hidden: any OPC UA server has a Server object that events
+are raised from, and a server that raises none simply has none to hand over.
+
+### `subscribe_events`
+Start collecting events. Returns immediately — the subscription runs in the
+background, because MCP has no way for the server to push one at you.
+```json
+{ "node_id": "ns=0;i=2253", "severity_min": 500, "buffer_size": 100 }
+```
+```
+Subscribed to events from node ns=0;i=2253, buffering up to 100 events of
+severity 500 or above. Read them with read_events.
+```
+Every argument is optional: the default notifier is the Server object
+(`ns=0;i=2253`), where most servers raise everything they have. Subscribing to
+the same node again restarts it with the new settings.
+> Prompt: *"Watch for anything serious happening on the plant."*
+
+### `read_events`
+Hand over what has arrived, oldest first. The events returned are **removed**
+from the buffer, so a second call returns only what is new.
+```json
+{ "node_id": "ns=0;i=2253", "limit": 50 }
+```
+One content block per event:
+```json
+{ "event_id": "ZDAzNzVmNzlhYzM0NDNjMWI3MzdhMmJhMmRmNzFiN2E=",
+  "event_type": "ns=0;i=2041", "source_node": "ns=2;i=1",
+  "source_name": "IndustrialControlSystem", "time": "2026-09-12T08:36:07.280Z",
+  "message": "Alarm active: emergency stop", "severity": 700,
+  "condition_id": null, "condition_name": null,
+  "active": null, "acked": null, "retain": null }
+```
+Every field is present on every event; the condition fields are `null` for a
+plain event like this one. The mock raises exactly this when its alarm state
+changes — write `true` to `ns=2;i=25` to see it, and to `ns=2;i=26` to clear it.
+> Prompt: *"Anything happen since we last looked?"*
+
+### `list_active_alarms`
+The alarms the server is retaining right now — active, unacknowledged, or both.
+Needs no prior `subscribe_events`: it asks the server directly, with
+ConditionRefresh.
+```json
+{ "node_id": "ns=0;i=2253", "timeout_seconds": 5 }
+```
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=", "event_type": "ns=0;i=9341",
+  "source_node": "ns=1;i=1001", "source_name": "Temperature",
+  "time": "2026-09-12T08:34:21.872Z",
+  "message": "Condition is 100.000 and state is High", "severity": 700,
+  "condition_id": "ns=1;i=1002", "condition_name": "HighTemperatureAlarm",
+  "active": true, "acked": false, "retain": true }
+```
+Against a server with no Alarms & Conditions support — the bundled mock included
+— this says so rather than returning an empty list:
+```
+Error: Failed to list active alarms from node ns=0;i=2253: ConditionRefresh
+failed with status: BadNothingToDo (0x800f0000). The server may not implement
+OPC UA Alarms & Conditions.
+```
+To try the working path, run the alarms mock instead:
+`cd packages/mock-server-alarms && npm install && npm start` (:4842).
+> Prompt: *"What alarms are active right now?"*
+
+### `acknowledge_alarm`
+Acknowledge one, by the `event_id` that reported it. The condition behind that
+event is remembered from the call that reported it, so it need not be repeated.
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=", "comment": "on it — checking the cooler" }
+```
+```
+Acknowledged alarm ns=1;i=1002 (event ZjW7HJrVSFzDV2sMsX7sEQAAAAE=)
+```
+Acknowledging tells the server an operator has seen the alarm. It does not clear
+the underlying condition: `active` stays `true` until the plant says otherwise.
+Pass `condition_id` explicitly for an event that came from somewhere other than
+this server's own `read_events` / `list_active_alarms`.
+> Prompt: *"Acknowledge the high-temperature alarm, note that I'm on it."*
+
+The record shape above is defined once, in `../contract/tools.json` under
+`resultShapes.eventRecords`, with the OPC UA browse path behind each field in
+the neighbouring `events.fields`. Both servers are held to it by
+`../tests/e2e/test_events_e2e.py`.
 
 ---
 

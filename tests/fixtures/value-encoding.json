@@ -80,6 +80,12 @@
       "expected": "ns=2;i=3"
     },
     {
+      "name": "nodeid_namespace_zero",
+      "type": "NodeId",
+      "expected": "ns=0;i=2253",
+      "note": "The namespace is always spelled out, including when it is 0. python-opcua omits it (\"i=2253\") and node-opcua does not, which the event tools surfaced: every EventType and most SourceNodes live in namespace 0."
+    },
+    {
       "name": "statuscode",
       "type": "StatusCode",
       "expected": "Good",

@@ -64,6 +64,23 @@ def _bytes_to_json(value: bytes | bytearray | memoryview) -> str:
     return b64encode(bytes(value)).decode("ascii")
 
 
+def _node_id_to_json(value: Any) -> str:
+    """A NodeId as its canonical text form, namespace always spelled out.
+
+    Two divergences from the Node server in one place. ``str(NodeId)`` is a Python
+    repr — ``"NumericNodeId(ns=2;i=3)"`` — where node-opcua gives ``"ns=2;i=3"``,
+    so the ``to_string`` form is used instead. And python-opcua *omits* a zero
+    namespace from that form while node-opcua writes it, so ``ns=0;`` is put back:
+    an event's EventType and SourceNode are almost always in namespace 0, and the
+    two servers would otherwise report ``"i=2253"`` and ``"ns=0;i=2253"`` for the
+    same node.
+    """
+    text = value.to_string() if hasattr(value, "to_string") else str(value)
+    # Only the plain identifier forms; an ExpandedNodeId carrying a server index
+    # or a namespace URI ("svr=1;nsu=…") has no zero namespace to restore.
+    return f"ns=0;{text}" if text[:2] in ("i=", "s=", "g=", "b=") else text
+
+
 def scalar_to_json(value: Any, type_name: str = "") -> Any:
     """One scalar OPC UA value as JSON, given its variant type name."""
     if value is None:
@@ -87,9 +104,7 @@ def scalar_to_json(value: Any, type_name: str = "") -> Any:
         # The text only; the locale is not part of the reading.
         return getattr(value, "Text", None) or ""
     if type_name in ("NodeId", "ExpandedNodeId"):
-        # `str(NodeId)` is a Python repr — "NumericNodeId(ns=2;i=3)". The Node
-        # server emits the canonical "ns=2;i=3", so use the method that gives it.
-        return value.to_string() if hasattr(value, "to_string") else str(value)
+        return _node_id_to_json(value)
     if type_name == "QualifiedName":
         return f"{value.NamespaceIndex}:{value.Name}"
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 from .config import SERVER_URL
 from .contract import CONTRACT, DESC, HISTORY_NODE_ID, RESOURCES, load_contract
 from .datetimes import format_iso_utc, parse_iso_datetime
+from .events import EventSubscriptions, event_filter, event_record
 from .records import history_record, history_records, scalar_to_json, variant_to_json
 from .security import (
     SecurityConfig,
@@ -39,11 +40,14 @@ __all__ = [
     "RESOURCES",
     "SERVER_URL",
     "SUBSCRIPTIONS",
+    "EventSubscriptions",
     "SecurityConfig",
     "SubscriptionManager",
     "certificate_application_uri",
     "create_client",
     "delete_failed_message",
+    "event_filter",
+    "event_record",
     "format_iso_utc",
     "history_record",
     "history_records",

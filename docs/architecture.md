@@ -30,11 +30,12 @@ The contract also pins what the tools *return*, where the answer is more than
 free text. A tool names a shape from `resultShapes`; the history family
 (`read_history_opcua_node`, `read_aggregate_opcua_node`) shares
 `historyRecords`, one flat `{value, timestamp, status}` record per historical
-value or aggregate interval. The `value` encoding keys on the OPC UA data type
-rather than the language one — python-opcua and node-opcua represent the same
-reading with entirely different native types (a ByteString is `bytes` vs a
-`Buffer`, an Int64 a plain int vs a `[high, low]` pair), so anything reaching for
-the runtime type diverges by construction. `tests/fixtures/value-encoding.json`
+value or aggregate interval, and the event family (`read_events`,
+`list_active_alarms`) shares `eventRecords`. Encoding a value keys on the OPC UA
+data type rather than the language one — python-opcua and node-opcua represent
+the same reading with entirely different native types (a ByteString is `bytes`
+vs a `Buffer`, an Int64 a plain int vs a `[high, low]` pair), so anything
+reaching for the runtime type diverges by construction. `tests/fixtures/value-encoding.json`
 is the shared table, and both unit suites build the native value for every case
 in it and assert the same JSON comes out. That was the second half of interchangeability, and
 for a while it was missing: both servers matched on names and parameters but the
@@ -110,11 +111,50 @@ The probes are **best-effort by design**: any failure yields "not supported"
 rather than an error. A transient OPC UA outage must not strip the core tools
 from `tools/list`.
 
-> There are two mocks, on purpose. The main one (`packages/mock-server/`, :4840)
-> enables history and advertises **no** aggregate functions, so the suite can
-> assert the aggregate tool stays hidden when unsupported. The second
+> There are three mocks, on purpose. The main one (`packages/mock-server/`,
+> :4840) enables history and advertises **no** aggregate functions, so the suite
+> can assert the aggregate tool stays hidden when unsupported. The second
 > (`packages/mock-server-aggregate/`, :4841) advertises aggregates, so the read
-> path itself is covered on both runtimes.
+> path itself is covered on both runtimes. The third
+> (`packages/mock-server-alarms/`, :4842) has a real alarm condition — see below.
+
+The event tools are deliberately **not** gated. Every OPC UA server has a Server
+object with an EventNotifier, and a server that raises nothing simply buffers
+nothing; there is no capability to probe that would make hiding them more honest
+than offering them. A server without Alarms & Conditions is told apart at call
+time instead: `list_active_alarms` reports that its ConditionRefresh call failed
+and that the server may not implement A&C, rather than returning an empty list a
+model would read as "no alarms".
+
+## Events and Alarms & Conditions
+
+Events are buffered exactly as the data-change subscriptions above are, for the
+same reason, and their subscriptions come down on the same teardown path:
+`subscribe_events` starts an OPC UA subscription whose monitored item parks what
+arrives, and `read_events` drains it. What differs is what is asked for — an
+event filter rather than a monitored value — and that `list_active_alarms`
+sidesteps the buffer entirely: it makes its own short-lived subscription, calls
+ConditionRefresh, and collects the retained conditions the server replays
+between the RefreshStart and RefreshEnd events.
+
+`contract/tools.json` -> `events` is what keeps the two runtimes saying the same
+thing: one list of OPC UA browse paths that is simultaneously the EventFilter
+select clauses both servers send and the field order of an `eventRecords`
+record. Two details of it are load-bearing and non-obvious:
+
+- Every path is resolved against **BaseEventType**, which Part 4 §7.4.4.5 says
+  makes a server evaluate it without regard to the event's own type. That is how
+  one filter selects `AckedState/Id` from a condition and gets `null` — rather
+  than an error — from a plain event, and so how one record shape covers both.
+- **ConditionId** is not a component of ConditionType at all; it is the NodeId
+  attribute of the condition instance, selected with an empty browse path. It is
+  also what `acknowledge_alarm` calls the Acknowledge method on, so getting it
+  wrong is not cosmetic — the tool would have nothing to acknowledge.
+
+`acknowledge_alarm` takes only the `event_id` a model has just seen, because both
+servers remember which condition each event they reported came from. The
+condition can still be passed explicitly for an event that came from somewhere
+else.
 
 ## The three invariants
 
@@ -149,17 +189,19 @@ green, so both are built and driven over MCP in `tests/smoke/`. See
 contract/tools.json          single source of truth for the tool + resource surface
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
-                             · capabilities · aggregates · records · subscriptions
-                             · version · install · cli · server
+                             · capabilities · aggregates · records
+                             · subscriptions · events · version · install
+                             · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
-                             · subscriptions · connection · tools · install
-                             · index · sea
+                             · subscriptions · events · connection · tools
+                             · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
 packages/mock-server-aggregate/  aggregate-capable mock (:4841)
+packages/mock-server-alarms/     Alarms & Conditions mock (:4842)
 tests/                       unit/ (fast) · e2e/ (both servers, secured and not)
                              · smoke/ (artifacts) · fixtures/ (secured mock, PKI)
 examples/                    standalone demo scripts

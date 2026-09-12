@@ -62,6 +62,10 @@ DESC = {t["name"]: t["description"] for t in CONTRACT["tools"]}
 HISTORY_NODE_ID = CONTRACT["capabilities"]["history"]["nodeId"]
 AGGREGATE_NODE_ID = CONTRACT["capabilities"]["aggregate"]["nodeId"]
 
+#: Alarms & Conditions wiring: the well-known node IDs, the event field list both
+#: servers select on, and the defaults their tool descriptions promise.
+EVENTS = CONTRACT["events"]
+
 #: The resources both servers expose, keyed by URI, and the one this server
 #: registers. Sourced from the contract for the same reason the descriptions are:
 #: an MCP client that has learned one runtime's resource surface must find the

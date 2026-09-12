@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
+  AttributeIds,
   DataType,
   LocalizedText,
   MessageSecurityMode,
@@ -25,6 +26,13 @@ import {
 } from "node-opcua-client";
 
 import { toDate } from "../build/dates.js";
+import {
+  EVENT_DEFAULTS,
+  droppedEventsMessage,
+  eventSelectClauses,
+  refreshTimedOutMessage,
+  toEventRecord,
+} from "../build/events.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "../build/records.js";
 import {
   clientSecurityOptions,
@@ -143,6 +151,7 @@ const NATIVE = {
   guid: scalar(DataType.Guid, "72962B91-FA75-4AE6-8D28-B404DC7DAF63"),
   bytestring: scalar(DataType.ByteString, Buffer.from("abc")),
   nodeid: scalar(DataType.NodeId, coerceNodeId("ns=2;i=3")),
+  nodeid_namespace_zero: scalar(DataType.NodeId, coerceNodeId("ns=0;i=2253")),
   statuscode: scalar(DataType.StatusCode, StatusCodes.Good),
   qualifiedname: scalar(
     DataType.QualifiedName,
@@ -656,6 +665,132 @@ describe("SubscriptionManager teardown", () => {
       message: unknownSubscriptionMessage("sub-9"),
     });
     assert.equal(unknownSubscriptionMessage("sub-9"), "No such subscription: sub-9");
+  });
+});
+
+// Events and Alarms & Conditions (contract -> events / resultShapes.eventRecords).
+// The Python server's equivalents are asserted in tests/unit/test_events.py; the
+// two runtimes are compared against each other, live, in tests/e2e.
+describe("event filter", () => {
+  const CONTRACT = JSON.parse(readFileSync(join(ROOT, "build", "contract.json"), "utf8"));
+  const FIELDS = CONTRACT.events.fields;
+  const KEYS = FIELDS.map((field) => field.key);
+
+  test("selects one clause per contract field, in the record's own order", () => {
+    assert.equal(eventSelectClauses().length, FIELDS.length);
+  });
+
+  test("ConditionId is the NodeId attribute of the condition, not a browse path", () => {
+    // Part 9's exception: selecting it as a path returns null from every server,
+    // and acknowledge_alarm then has nothing to call the Acknowledge method on.
+    const clause = eventSelectClauses()[KEYS.indexOf("condition_id")];
+    assert.deepEqual(clause.browsePath, []);
+    assert.equal(clause.attributeId, AttributeIds.NodeId);
+    assert.equal(clause.typeDefinitionId.toString(), CONTRACT.events.conditionTypeNodeId);
+  });
+
+  test("every other field is a Value browse path resolved against BaseEventType", () => {
+    // Part 4 §7.4.4.5 — which is what lets one filter select `AckedState/Id`
+    // from a condition and get null, not an error, from a plain event.
+    for (const key of KEYS.filter((k) => k !== "condition_id")) {
+      const clause = eventSelectClauses()[KEYS.indexOf(key)];
+      assert.equal(clause.attributeId, AttributeIds.Value);
+      assert.equal(clause.typeDefinitionId.toString(), CONTRACT.events.baseEventTypeNodeId);
+      assert.deepEqual(
+        clause.browsePath.map((name) => name.name),
+        FIELDS[KEYS.indexOf(key)].path.split(".")
+      );
+    }
+  });
+
+  test("a two-step path stays two qualified names", () => {
+    // `AckedState.Id` is the boolean; `AckedState` alone is the display text.
+    const clause = eventSelectClauses()[KEYS.indexOf("acked")];
+    assert.deepEqual(
+      clause.browsePath.map((name) => name.name),
+      ["AckedState", "Id"]
+    );
+  });
+});
+
+describe("event records", () => {
+  const CONTRACT = JSON.parse(readFileSync(join(ROOT, "build", "contract.json"), "utf8"));
+  const KEYS = CONTRACT.events.fields.map((field) => field.key);
+  const NULL = new Variant({ dataType: DataType.Null, value: null });
+
+  /** Event field values, in the contract's order; anything unnamed is Null. */
+  const fields = (values) => KEYS.map((key) => values[key] ?? NULL);
+
+  const CONDITION = {
+    event_id: scalar(DataType.ByteString, Buffer.from([1, 2])),
+    event_type: scalar(DataType.NodeId, coerceNodeId("ns=0;i=9341")),
+    source_node: scalar(DataType.NodeId, coerceNodeId("ns=1;i=1001")),
+    source_name: scalar(DataType.String, "Temperature"),
+    time: scalar(DataType.DateTime, new Date("2026-09-09T13:36:01.468Z")),
+    message: scalar(DataType.LocalizedText, new LocalizedText({ text: "Condition is High" })),
+    severity: scalar(DataType.UInt16, 700),
+    condition_id: scalar(DataType.NodeId, coerceNodeId("ns=1;i=1002")),
+    condition_name: scalar(DataType.String, "HighTemperatureAlarm"),
+    active: scalar(DataType.Boolean, true),
+    acked: scalar(DataType.Boolean, false),
+    retain: scalar(DataType.Boolean, true),
+  };
+
+  test("a condition event maps to the canonical record", () => {
+    assert.deepEqual(toEventRecord(fields(CONDITION)), {
+      event_id: "AQI=",
+      event_type: "ns=0;i=9341",
+      source_node: "ns=1;i=1001",
+      source_name: "Temperature",
+      time: "2026-09-09T13:36:01.468Z",
+      message: "Condition is High",
+      severity: 700,
+      condition_id: "ns=1;i=1002",
+      condition_name: "HighTemperatureAlarm",
+      active: true,
+      acked: false,
+      retain: true,
+    });
+  });
+
+  test("a plain event still carries every field, as null", () => {
+    // Null, not absent: one record shape has to describe both kinds of event.
+    const record = toEventRecord(
+      fields({ event_type: scalar(DataType.NodeId, coerceNodeId("ns=0;i=2041")) })
+    );
+    assert.deepEqual(Object.keys(record), KEYS);
+    assert.equal(record.event_type, "ns=0;i=2041");
+    assert.equal(record.condition_id, null);
+    assert.equal(record.acked, null);
+  });
+
+  // Both sentences are asserted verbatim in tests/unit/test_events.py too, so
+  // neither runtime can drift into wording the other does not use.
+  test("an unfinished ConditionRefresh is worded the way Python words it", () => {
+    assert.equal(
+      refreshTimedOutMessage(5, 2),
+      "ConditionRefresh did not finish within 5s: the server sent 2 condition(s) " +
+        "but no RefreshEnd, so there may be more. Retry with a larger timeout_seconds."
+    );
+  });
+
+  test("a dropped-event notice is worded the way Python words it", () => {
+    assert.equal(
+      droppedEventsMessage(1, 2),
+      "Note: 1 older event(s) were dropped before this read — the buffer of 2 " +
+        "filled up. Raise buffer_size or read more often."
+    );
+  });
+
+  test("the defaults are the ones the contract promises", () => {
+    // The tool descriptions state these numbers; both servers read them here.
+    assert.deepEqual(EVENT_DEFAULTS, {
+      $comment: EVENT_DEFAULTS.$comment,
+      severityMin: 0,
+      bufferSize: 100,
+      readLimit: 50,
+      refreshTimeoutSeconds: 5,
+    });
   });
 });
 

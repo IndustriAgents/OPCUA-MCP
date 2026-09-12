@@ -20,6 +20,15 @@ import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { OpcuaConnection } from "./connection.js";
 import { CONTRACT } from "./contract.js";
 import { toDate } from "./dates.js";
+import {
+  DEFAULT_NOTIFIER,
+  EVENT_DEFAULTS,
+  EventRecord,
+  EventSubscriptions,
+  acknowledgeAlarm,
+  droppedEventsMessage,
+  listActiveAlarms,
+} from "./events.js";
 import { toHistoryRecords } from "./records.js";
 import { SubscriptionManager, SubscriptionRecord } from "./subscriptions.js";
 
@@ -39,6 +48,11 @@ function subscriptionResult(records: SubscriptionRecord[]) {
   return recordBlocks(records);
 }
 
+/** And for the event family (resultShapes.eventRecords). */
+function eventResult(records: EventRecord[]) {
+  return recordBlocks(records);
+}
+
 function recordBlocks(records: unknown[]) {
   return {
     content: records.map((record) => ({
@@ -51,6 +65,7 @@ function recordBlocks(records: unknown[]) {
 export class OpcuaTools {
   private aggregateFunctions: string[] = [];
   private readonly subs = new SubscriptionManager();
+  private readonly events = new EventSubscriptions();
 
   constructor(private readonly conn: OpcuaConnection) {}
 
@@ -58,10 +73,12 @@ export class OpcuaTools {
    *
    * Called before the session is closed, on every shutdown path. Closing the
    * session alone would leave the OPC UA server publishing to nobody until the
-   * subscription's lifetime expired.
+   * subscription's lifetime expired. Event subscriptions are subscriptions too,
+   * and cost the server the same until they expire.
    */
-  shutdown(): Promise<void> {
-    return this.subs.closeAll();
+  async shutdown(): Promise<void> {
+    await this.subs.closeAll();
+    await this.events.closeAll();
   }
 
   // Delegations that keep the tool bodies below identical to their previous
@@ -212,6 +229,32 @@ export class OpcuaTools {
 
         case "unsubscribe_opcua_node":
           return await this.unsubscribeOpcuaNode(args?.subscription_id as string);
+
+        case "subscribe_events":
+          return await this.subscribeEvents(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
+            (args?.buffer_size as number) || EVENT_DEFAULTS.bufferSize
+          );
+
+        case "read_events":
+          return this.readEvents(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.limit as number) || EVENT_DEFAULTS.readLimit
+          );
+
+        case "list_active_alarms":
+          return await this.listActiveAlarms(
+            (args?.node_id as string) || DEFAULT_NOTIFIER,
+            (args?.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
+          );
+
+        case "acknowledge_alarm":
+          return await this.acknowledgeAlarm(
+            args?.event_id as string,
+            (args?.comment as string) ?? "",
+            args?.condition_id as string | undefined
+          );
 
         default:
           throw new Error(`Unknown tool: ${name}`);
@@ -623,6 +666,94 @@ export class OpcuaTools {
         `Failed to call method ${methodNodeId} on object ${objectNodeId}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  // --- events and Alarms & Conditions ------------------------------------------
+  // The wording of every message below is shared with the Python server's
+  // `events` tools, so a model that has learned one runtime's replies reads the
+  // other's the same way. See packages/server-python/.../server.py.
+
+  private async subscribeEvents(nodeId: string, severityMin: number, bufferSize: number) {
+    try {
+      await this.events.subscribe(this.requireSession(), nodeId, severityMin, bufferSize);
+    } catch (error) {
+      throw new Error(
+        `Failed to subscribe to events from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Subscribed to events from node ${nodeId}, buffering up to ${bufferSize} ` +
+            `events of severity ${severityMin} or above. Read them with read_events.`,
+        },
+      ],
+    };
+  }
+
+  private readEvents(nodeId: string, limit: number) {
+    const drained = this.events.drain(this.requireSession(), nodeId, limit);
+    if (drained === null) {
+      throw new Error(`Not subscribed to events from node ${nodeId}. Call subscribe_events first.`);
+    }
+    const result = eventResult(drained.records);
+    if (drained.dropped > 0) {
+      // In the response, not only on stderr: an agent that cannot tell a
+      // complete event stream from one that lost alarms reads the gap as quiet.
+      result.content.push({
+        type: "text",
+        text: droppedEventsMessage(drained.dropped, drained.size),
+      });
+    }
+    return result;
+  }
+
+  private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {
+    let alarms: EventRecord[];
+    try {
+      alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
+    } catch (error) {
+      throw new Error(
+        `Failed to list active alarms from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    this.events.remember(alarms);
+    return eventResult(alarms);
+  }
+
+  private async acknowledgeAlarm(eventId: string, comment: string, conditionId?: string) {
+    const condition = conditionId || this.events.conditionFor(eventId);
+    if (!condition) {
+      throw new Error(
+        `Unknown event_id "${eventId}". Call list_active_alarms first, or pass the ` +
+          "condition_id of the alarm to acknowledge."
+      );
+    }
+
+    let statusCode;
+    try {
+      statusCode = await acknowledgeAlarm(this.requireSession(), condition, eventId, comment);
+    } catch (error) {
+      throw new Error(
+        `Failed to acknowledge alarm ${condition}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    if (statusCode !== StatusCodes.Good) {
+      throw new Error(`Failed to acknowledge alarm ${condition}: ${statusCode.toString()}`);
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Acknowledged alarm ${condition} (event ${eventId})`,
+        },
+      ],
+    };
   }
 
   private async getAllVariables() {

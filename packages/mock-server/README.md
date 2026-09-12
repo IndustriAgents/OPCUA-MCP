@@ -49,6 +49,23 @@ A comprehensive mockup OPC UA server for industrial control systems, featuring r
 5. **CalibrateSensors(sensorName: String) → Boolean**
    - Simulates sensor calibration process
 
+### 🔔 **Events**
+The server raises a plain `BaseEventType` event whenever its alarm state
+*changes* — severity 700 for `Alarm active: <reason>`, 100 for `Alarm cleared` —
+so `subscribe_events` and `read_events` have something real to collect. Trigger
+one by writing `true` to `EmergencyStopCommand`, and clear it with
+`ResetSystemCommand`.
+
+Events are emitted from the **Server** object (`ns=0;i=2253`), because
+python-opcua delivers an event only to monitored items on the node that emitted
+it — it does not propagate one up the notifier hierarchy. `SourceNode` and
+`SourceName` still name the plant, so the event says what it is about.
+
+There are no **conditions** here: python-opcua has no condition model, so
+`ConditionRefresh` is not implemented and there is nothing to acknowledge.
+`packages/mock-server-alarms` is the mock for `list_active_alarms` and
+`acknowledge_alarm`.
+
 ## Installation
 
 1. Ensure you have Python 3.10+ installed
@@ -113,7 +130,7 @@ The server simulates realistic industrial process behavior:
 - **Vibration** correlates with motor and conveyor speeds
 
 ### Safety Features
-- Automatic alarms for out-of-range conditions
+- Automatic alarms for out-of-range conditions, announced as OPC UA events
 - Emergency stop functionality
 - Auto-shutdown for critical conditions (>100°C, >1300 hPa)
 
@@ -176,6 +193,7 @@ To add new sensors or actuators:
 2. Create nodes in respective `_create_*_variables` methods
 3. Update simulation logic in `_update_sensors` method
 4. Add any new methods in `_create_control_methods`
+5. Announce anything worth an operator's attention from `_emit_alarm_transitions`
 
 ## Troubleshooting
 

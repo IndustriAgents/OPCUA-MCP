@@ -16,13 +16,21 @@ aggregate tests. It is kept separate from the main mock on purpose: the main moc
 must keep advertising *no* aggregate functions so the suite can assert that both
 MCP servers hide `read_aggregate_opcua_node` when it is unsupported.
 
-A third, *secured* mock (`fixtures/secure_opcua_server.py`) backs the
-connection-security tests. It is separate for the same reason: it offers no
-unsecured endpoint at all, which is what makes those assertions mean something.
+A third, *alarms* mock (`packages/mock-server-alarms`) backs the Alarms &
+Conditions tests. Separate again, and for a reason the main mock cannot fix:
+python-opcua's server has no condition model at all, so there is no
+ConditionRefresh to ask it for retained alarms and no Acknowledge method to call
+on one. The main mock does raise plain events, which is what `subscribe_events`
+and `read_events` are tested against.
+
+A fourth, *secured* mock (`fixtures/secure_opcua_server.py`) backs the
+connection-security tests. It is separate for the same reason as the first two:
+it offers no unsecured endpoint at all, which is what makes those assertions mean
+something.
 
 To point the suite at a server you manage yourself — one left running while
-iterating, or a real device — set `OPCUA_SERVER_URL` or
-`OPCUA_AGGREGATE_SERVER_URL`. The fixture then starts nothing, and the warmup is
+iterating, or a real device — set `OPCUA_SERVER_URL`, `OPCUA_AGGREGATE_SERVER_URL`
+or `OPCUA_ALARM_SERVER_URL`. The fixture then starts nothing, and the warmup is
 yours to arrange.
 """
 
@@ -70,10 +78,25 @@ AGGREGATE_WARMUP_SECONDS = 20
 # installs cleanly on Node 18.
 AGGREGATE_MOCK_MIN_NODE = 20
 
+# --- Alarms & Conditions mock (packages/mock-server-alarms) ---------------------
+ALARM_PATH = "/UA/Alarms"
+ALARM_SERVER_URL_OVERRIDE = os.environ.get("OPCUA_ALARM_SERVER_URL")
+ALARM_MOCK_DIR = ROOT / "packages" / "mock-server-alarms"
+
+# Node ID of the writable Temperature variable that drives the alarm, and the
+# limit it alarms above — both as reported on the mock's READY line.
+ALARM_TEMPERATURE_NODE_ID = "ns=1;i=1001"
+ALARM_HIGH_LIMIT = 80
+
+# The alarms mock pulls the full `node-opcua` server, whose transitive deps
+# require Node 20 — the same fixture limitation as the aggregate mock, and not
+# one of the shipped Node server, whose own dependency tree installs on Node 18.
+ALARM_MOCK_MIN_NODE = 20
+
 # --- secured mock (tests/fixtures/secure_opcua_server.py) -----------------------
-# A third mock, on its own port, offering *only* Basic256Sha256 endpoints and
-# requiring a username. The other two must stay unsecured — the rest of the suite
-# depends on connecting to them with no security at all.
+# A fourth mock, on its own port, offering *only* Basic256Sha256 endpoints and
+# requiring a username. The other three must stay unsecured — the rest of the
+# suite depends on connecting to them with no security at all.
 SECURE_PATH = "/mcp/secure"
 SECURE_SERVER_URI = SERVER_URI
 SECURE_CLIENT_URI = CLIENT_URI
@@ -191,6 +214,46 @@ def aggregate_opcua_server() -> str:
         _await_listening(proc, port, "aggregate mock OPC UA server")
         time.sleep(AGGREGATE_WARMUP_SECONDS)  # let history build up to aggregate over
         yield f"opc.tcp://{HOST}:{port}{AGGREGATE_PATH}"
+    finally:
+        _terminate(proc)
+
+
+@pytest.fixture(scope="session")
+def alarm_opcua_server() -> str:
+    """Start the Alarms & Conditions mock OPC UA server on a port of its own.
+
+    Skips the dependent tests when the mock's dependencies are not installed,
+    mirroring how the Node tests skip on a missing build.
+
+    Yields the server endpoint URL.
+    """
+    if ALARM_SERVER_URL_OVERRIDE:
+        yield ALARM_SERVER_URL_OVERRIDE
+        return
+
+    if not (ALARM_MOCK_DIR / "node_modules").is_dir():
+        pytest.skip("alarms mock not installed — run `npm install` in packages/mock-server-alarms")
+
+    if _node_major() < ALARM_MOCK_MIN_NODE:
+        pytest.skip(
+            f"alarms mock needs Node >={ALARM_MOCK_MIN_NODE} "
+            f"(node-opcua pulls @peculiar/x509, which requires it); "
+            f"found Node {_node_major()}"
+        )
+
+    port = _free_port()
+    proc = subprocess.Popen(
+        ["node", "server.mjs"],
+        cwd=ALARM_MOCK_DIR,
+        env={**os.environ, "ALARM_MOCK_PORT": str(port)},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        # No warmup: the mock starts with its alarm already active, precisely so
+        # a test has something to find without waiting for one.
+        _await_listening(proc, port, "alarms mock OPC UA server")
+        yield f"opc.tcp://{HOST}:{port}{ALARM_PATH}"
     finally:
         _terminate(proc)
 

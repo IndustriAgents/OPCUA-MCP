@@ -15,6 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from opcua import ua
 from opcua.ua import NodeClass
 
+from . import events
 from .aggregates import validate_aggregate_function
 from .capabilities import server_aggregate_functions, server_supports_history
 from .config import SERVER_URL
@@ -45,10 +46,12 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         SUBSCRIPTIONS.attach(client)
         yield {"opcua_client": client}
     finally:
-        # Drop the data-change subscriptions before the session that carries
-        # them. Disconnecting first would leave the OPC UA server publishing to
-        # nobody until each subscription's lifetime expired.
+        # Drop the subscriptions before the session that carries them —
+        # the event ones as much as the data-change ones. Disconnecting first
+        # would leave the OPC UA server publishing to nobody until each
+        # subscription's lifetime expired.
         await asyncio.to_thread(SUBSCRIPTIONS.close_all)
+        await asyncio.to_thread(_EVENTS.close_all)
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(client.disconnect)
         print("Disconnected from OPC UA server", file=sys.stderr)
@@ -618,6 +621,142 @@ def get_all_variables(ctx: Context) -> str:
 
     except Exception as e:
         return f"Error while finding variables: {e!s}"
+
+
+# --- events and Alarms & Conditions --------------------------------------------
+# The wording of every message below is shared with the Node server's `events`
+# tools, so a model that has learned one runtime's replies reads the other's the
+# same way. See packages/server-node/src/tools.ts.
+
+#: Event subscriptions live for as long as the process does, not for one tool
+#: call: `subscribe_events` starts them and `read_events` drains them later.
+_EVENTS = events.EventSubscriptions()
+
+
+@mcp.tool(description=DESC["subscribe_events"])
+def subscribe_events(
+    ctx: Context,
+    node_id: str = events.DEFAULT_NOTIFIER,
+    severity_min: int = events.DEFAULTS["severityMin"],
+    buffer_size: int = events.DEFAULTS["bufferSize"],
+) -> str:
+    """
+    Start buffering OPC UA events from a notifier node.
+
+    Parameters:
+        node_id (str): The notifier node to subscribe to (default: the Server object).
+        severity_min (int): Buffer only events of at least this severity (1-1000).
+        buffer_size (int): How many events to hold before dropping the oldest.
+
+    Returns:
+        str: Confirmation that the subscription is running.
+    """
+    # 0 means "unset" for a size, as it does everywhere else in both servers:
+    # the Node side gets this from `||`, and a buffer that keeps nothing would be
+    # a strange thing to have asked for.
+    buffer_size = buffer_size or events.DEFAULTS["bufferSize"]
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    try:
+        _EVENTS.subscribe(client, node_id, severity_min, buffer_size)
+    except Exception as e:
+        raise ToolError(f"Failed to subscribe to events from node {node_id}: {e!s}") from e
+    return (
+        f"Subscribed to events from node {node_id}, buffering up to {buffer_size} "
+        f"events of severity {severity_min} or above. Read them with read_events."
+    )
+
+
+@mcp.tool(description=DESC["read_events"])
+def read_events(
+    node_id: str = events.DEFAULT_NOTIFIER,
+    limit: int = events.DEFAULTS["readLimit"],
+) -> list[dict | str]:
+    """
+    Read and drain the events buffered by subscribe_events.
+
+    Parameters:
+        node_id (str): The subscribed notifier node (default: the Server object).
+        limit (int): Maximum number of events to return.
+
+    Returns:
+        list[dict | str]: One record per event, oldest first, shaped by the
+            shared ``resultShapes.eventRecords`` in ``contract/tools.json``,
+            followed by a plain-text notice when the buffer overflowed.
+    """
+    drained = _EVENTS.drain(node_id, limit or events.DEFAULTS["readLimit"])
+    if drained is None:
+        raise ToolError(
+            f"Not subscribed to events from node {node_id}. Call subscribe_events first."
+        )
+    records, _remaining, dropped, size = drained
+    if dropped:
+        # In the response, not only on stderr: an agent that cannot tell a
+        # complete event stream from one that lost alarms reads the gap as quiet.
+        # A bare string in the returned list becomes a plain text block, which is
+        # exactly what the Node server appends — the notice reads the same on
+        # both, and neither dresses it up as a record.
+        return [*records, events.dropped_events_message(dropped, size)]
+    return records
+
+
+@mcp.tool(description=DESC["list_active_alarms"])
+def list_active_alarms(
+    ctx: Context,
+    node_id: str = events.DEFAULT_NOTIFIER,
+    timeout_seconds: float = events.DEFAULTS["refreshTimeoutSeconds"],
+) -> list[dict]:
+    """
+    List the alarm/condition instances the server is currently retaining.
+
+    Parameters:
+        node_id (str): The notifier node whose conditions to list.
+        timeout_seconds (float): How long to wait for the server to finish.
+
+    Returns:
+        list[dict]: One record per retained condition, shaped by the shared
+            ``resultShapes.eventRecords`` in ``contract/tools.json``.
+    """
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    try:
+        alarms = events.list_active_alarms(client, node_id, timeout_seconds)
+    except Exception as e:
+        raise ToolError(f"Failed to list active alarms from node {node_id}: {e!s}") from e
+    _EVENTS.remember(alarms)
+    return alarms
+
+
+@mcp.tool(description=DESC["acknowledge_alarm"])
+def acknowledge_alarm(
+    event_id: str,
+    ctx: Context,
+    comment: str = "",
+    condition_id: str | None = None,
+) -> str:
+    """
+    Acknowledge an alarm or condition by the event_id that reported it.
+
+    Parameters:
+        event_id (str): The reported event's ``event_id`` (base64).
+        comment (str): Comment to record with the acknowledgement.
+        condition_id (str): NodeId of the condition, when this server has not
+                            seen the event itself.
+
+    Returns:
+        str: Confirmation naming the condition that was acknowledged.
+    """
+    condition = condition_id or _EVENTS.condition_for(event_id)
+    if not condition:
+        raise ToolError(
+            f'Unknown event_id "{event_id}". Call list_active_alarms first, or pass the '
+            "condition_id of the alarm to acknowledge."
+        )
+
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    try:
+        events.acknowledge_alarm(client, condition, event_id, comment)
+    except Exception as e:
+        raise ToolError(f"Failed to acknowledge alarm {condition}: {e!s}") from e
+    return f"Acknowledged alarm {condition} (event {event_id})"
 
 
 # Run the server

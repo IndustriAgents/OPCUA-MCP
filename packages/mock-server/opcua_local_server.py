@@ -43,6 +43,12 @@ class IndustrialControlSystem:
         # Node references for efficient updates
         self.nodes = {}
 
+        # Event emission (see `setup_events`). The generator is created once the
+        # server is running; until then, transitions are simply not announced.
+        self.event_generator = None
+        self.alarm_reason = ""
+        self._alarm_was_active = False
+
     def setup_address_space(self):
         """Setup the OPC UA address space with industrial control structure."""
 
@@ -87,6 +93,52 @@ class IndustrialControlSystem:
                 )
 
         logging.info("historize completed")
+
+    def setup_events(self):
+        """Announce alarm transitions as OPC UA events.
+
+        Emitted from the **Server** object (`ns=0;i=2253`) rather than from the
+        plant folder, because python-opcua's server delivers an event only to
+        monitored items on the node that emits it — it does not propagate one up
+        the notifier hierarchy the way a spec-complete server does. A client
+        subscribing to the Server object, which is where clients look first and
+        what both MCP servers subscribe to by default, would otherwise never see
+        these. `SourceNode`/`SourceName` still name the plant, so the event says
+        what it is about.
+
+        These are plain `BaseEventType` events, not conditions: python-opcua has
+        no condition model, so there is nothing here to acknowledge and
+        `ConditionRefresh` is not implemented. `packages/mock-server-alarms` is
+        the mock that covers that half.
+        """
+        self.event_generator = self.server.get_event_generator()
+        plant = self.server.get_objects_node().get_child("2:IndustrialControlSystem")
+        self.event_generator.event.SourceNode = plant.nodeid
+        self.event_generator.event.SourceName = "IndustrialControlSystem"
+        logging.info("event generator ready")
+
+    def _emit_alarm_transitions(self):
+        """Fire an event when the alarm state changes, and only then."""
+        if self.event_generator is None:
+            return
+
+        active = bool(self.system_state["alarm_active"])
+        if active == self._alarm_was_active:
+            return
+        self._alarm_was_active = active
+
+        if active:
+            self.event_generator.event.Severity = ua.Variant(700, ua.VariantType.UInt16)
+            message = f"Alarm active: {self.alarm_reason or 'unspecified condition'}"
+        else:
+            self.event_generator.event.Severity = ua.Variant(100, ua.VariantType.UInt16)
+            message = "Alarm cleared"
+
+        try:
+            self.event_generator.trigger(message=message)
+            logging.info(f"event: {message}")
+        except Exception as e:
+            logging.error(f"Error triggering alarm event: {e}")
 
     def _create_sensor_variables(self, parent_folder: Node):
         """Create sensor variables with proper data types and descriptions."""
@@ -279,6 +331,7 @@ class IndustrialControlSystem:
     def emergency_stop_callback(self, parent, *args):
         """Trigger emergency stop."""
         logging.warning("EMERGENCY STOP TRIGGERED!")
+        self.alarm_reason = "emergency stop"
         self.system_state["emergency_stop"] = True
         self.system_state["system_mode"] = "MAINTENANCE"
         self.system_state["production_rate"] = 0.0
@@ -327,6 +380,9 @@ class IndustrialControlSystem:
                 # Update all OPC UA nodes
                 self._update_opcua_nodes()
 
+                # Announce any change in the alarm state
+                self._emit_alarm_transitions()
+
                 time.sleep(1.0)  # Update every second
 
             except Exception as e:
@@ -363,6 +419,7 @@ class IndustrialControlSystem:
             emergency_cmd = self.nodes["emergency_stop_command"].get_value()
             if emergency_cmd:
                 logging.warning("EMERGENCY STOP TRIGGERED!")
+                self.alarm_reason = "emergency stop"
                 self.system_state["emergency_stop"] = True
                 self.system_state["system_mode"] = "MAINTENANCE"
                 self.system_state["production_rate"] = 0.0
@@ -442,12 +499,17 @@ class IndustrialControlSystem:
         """Process effects of actuator changes."""
 
         # Check for alarm conditions
-        if (
-            self.system_state["temperature"] > 80.0
-            or self.system_state["pressure"] > 1200.0
-            or self.system_state["tank_level"] < 10.0
-            or self.system_state["vibration"] > 2.0
-        ):
+        reasons = []
+        if self.system_state["temperature"] > 80.0:
+            reasons.append(f"temperature {self.system_state['temperature']:.1f}")
+        if self.system_state["pressure"] > 1200.0:
+            reasons.append(f"pressure {self.system_state['pressure']:.1f}")
+        if self.system_state["tank_level"] < 10.0:
+            reasons.append(f"tank level {self.system_state['tank_level']:.1f}")
+        if self.system_state["vibration"] > 2.0:
+            reasons.append(f"vibration {self.system_state['vibration']:.2f}")
+        if reasons:
+            self.alarm_reason = ", ".join(reasons)
             self.system_state["alarm_active"] = True
 
         # Auto-safety: stop system if emergency conditions
@@ -531,6 +593,7 @@ def main():
         # Start the server
         server.start()
         industrial_system.historize()
+        industrial_system.setup_events()
         logging.info(f"OPC UA Server started at {args.endpoint}")
         logging.info("Server is running and ready for connections")
 

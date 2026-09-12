@@ -70,7 +70,110 @@
         ],
         "additionalProperties": false
       }
+    },
+    "eventRecords": {
+      "$comment": "Returned as one MCP text content block per event, each block the JSON object described by \"items\". No events is zero blocks. `read_events` appends one further block, plain prose rather than a record, when its buffer overflowed since the last read — losing events silently would let an agent read a burst of alarms as quiet. The Python server additionally returns the array as structured content. Every field is present on every record; a field the event does not carry — the condition fields of a plain BaseEventType, say — is null. The field order and the OPC UA browse paths behind it are \"events.fields\" below, which is what both servers build their EventFilter select clauses from.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": ["string", "null"],
+            "description": "Server-assigned identifier of this event notification, base64 (it is a ByteString). Pass it back to acknowledge_alarm."
+          },
+          "event_type": {
+            "type": ["string", "null"],
+            "description": "NodeId of the event's type, e.g. 'ns=0;i=2041' (BaseEventType) or 'ns=0;i=9341' (ExclusiveLimitAlarmType)."
+          },
+          "source_node": {
+            "type": ["string", "null"],
+            "description": "NodeId of the node the event is about."
+          },
+          "source_name": {
+            "type": ["string", "null"],
+            "description": "Human-readable name of that source, e.g. 'Temperature'."
+          },
+          "time": {
+            "type": ["string", "null"],
+            "description": "When the event occurred, ISO-8601 UTC with a trailing 'Z'."
+          },
+          "message": {
+            "type": ["string", "null"],
+            "description": "The event's message text, without its locale."
+          },
+          "severity": {
+            "type": ["number", "null"],
+            "description": "OPC UA severity, 1 (least) to 1000 (most urgent)."
+          },
+          "condition_id": {
+            "type": ["string", "null"],
+            "description": "NodeId of the condition instance, for events that are conditions; null for a plain event. This is what acknowledge_alarm calls the Acknowledge method on."
+          },
+          "condition_name": {
+            "type": ["string", "null"],
+            "description": "The condition instance's name, e.g. 'HighTemperatureAlarm'."
+          },
+          "active": {
+            "type": ["boolean", "null"],
+            "description": "ActiveState/Id: true while the alarm's condition is met. Null for a condition that is not an alarm."
+          },
+          "acked": {
+            "type": ["boolean", "null"],
+            "description": "AckedState/Id: false until someone acknowledges the condition."
+          },
+          "retain": {
+            "type": ["boolean", "null"],
+            "description": "Retain: true while the server considers the condition worth showing to an operator. list_active_alarms returns only retained conditions."
+          }
+        },
+        "required": [
+          "event_id",
+          "event_type",
+          "source_node",
+          "source_name",
+          "time",
+          "message",
+          "severity",
+          "condition_id",
+          "condition_name",
+          "active",
+          "acked",
+          "retain"
+        ],
+        "additionalProperties": false
+      }
     }
+  },
+  "events": {
+    "$comment": "Alarms & Conditions wiring, shared so both servers ask the same questions of a server and name the answers the same way. The node IDs are the spec's own well-known ones (OPC UA Part 9); \"fields\" is both the EventFilter select clause list and the field order of \"resultShapes.eventRecords\". A path is a dotted OPC UA browse path relative to the event type, resolved against BaseEventType — Part 4 §7.4.4.5 says a server evaluates the path without regard to the type when the operand names BaseEventType, which is how one filter can select condition fields that a plain event does not have (they come back null). \"ConditionId\" is the exception the spec calls out: it is not a component of ConditionType but the NodeId attribute of the condition instance itself, so it is selected as an empty browse path against ConditionType.",
+    "defaultNotifierNodeId": "ns=0;i=2253",
+    "baseEventTypeNodeId": "ns=0;i=2041",
+    "conditionTypeNodeId": "ns=0;i=2782",
+    "conditionRefreshMethodNodeId": "ns=0;i=3875",
+    "acknowledgeMethodNodeId": "ns=0;i=9111",
+    "refreshStartEventTypeNodeId": "ns=0;i=2787",
+    "refreshEndEventTypeNodeId": "ns=0;i=2788",
+    "defaults": {
+      "$comment": "The values the tool descriptions above promise, single-sourced so the two servers cannot promise the same default and apply different ones.",
+      "severityMin": 0,
+      "bufferSize": 100,
+      "readLimit": 50,
+      "refreshTimeoutSeconds": 5
+    },
+    "fields": [
+      { "key": "event_id", "path": "EventId" },
+      { "key": "event_type", "path": "EventType" },
+      { "key": "source_node", "path": "SourceNode" },
+      { "key": "source_name", "path": "SourceName" },
+      { "key": "time", "path": "Time" },
+      { "key": "message", "path": "Message" },
+      { "key": "severity", "path": "Severity" },
+      { "key": "condition_id", "path": "ConditionId" },
+      { "key": "condition_name", "path": "ConditionName" },
+      { "key": "active", "path": "ActiveState.Id" },
+      { "key": "acked", "path": "AckedState.Id" },
+      { "key": "retain", "path": "Retain" }
+    ]
   },
   "capabilities": {
     "history": {
@@ -273,6 +376,92 @@
           }
         },
         "required": ["subscription_id"]
+      }
+    },
+    {
+      "name": "subscribe_events",
+      "capability": null,
+      "description": "Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. Returns at once; the events themselves are collected in the background and read with read_events. Calling this again for the same node restarts the subscription with the new settings",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The notifier node to subscribe to. Defaults to the Server object 'ns=0;i=2253', which is where most servers publish every event they raise."
+          },
+          "severity_min": {
+            "type": "integer",
+            "description": "Buffer only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event."
+          },
+          "buffer_size": {
+            "type": "integer",
+            "description": "How many events to hold before the oldest are dropped (default 100)."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "read_events",
+      "resultShape": "eventRecords",
+      "capability": null,
+      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, a note saying how many events were lost follows them",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The subscribed notifier node to read from, as passed to subscribe_events. Defaults to the Server object 'ns=0;i=2253'."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of events to return (default 50)."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "list_active_alarms",
+      "resultShape": "eventRecords",
+      "capability": null,
+      "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the server's own current set and needs no prior subscription. Fails rather than answering with a partial list if the server does not finish within timeout_seconds",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The notifier node whose conditions to list. Defaults to the Server object 'ns=0;i=2253'."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "acknowledge_alarm",
+      "capability": null,
+      "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The 'event_id' of the event that reported the alarm, exactly as returned (base64)."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Comment to record with the acknowledgement, e.g. who is dealing with it."
+          },
+          "condition_id": {
+            "type": "string",
+            "description": "NodeId of the condition instance to acknowledge. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
+          }
+        },
+        "required": ["event_id"]
       }
     },
     {

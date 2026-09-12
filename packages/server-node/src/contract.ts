@@ -8,6 +8,22 @@ export const BUILD_DIR = dirname(fileURLToPath(import.meta.url));
 
 export const CONTRACT: {
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
+  events: {
+    defaultNotifierNodeId: string;
+    baseEventTypeNodeId: string;
+    conditionTypeNodeId: string;
+    conditionRefreshMethodNodeId: string;
+    acknowledgeMethodNodeId: string;
+    refreshStartEventTypeNodeId: string;
+    refreshEndEventTypeNodeId: string;
+    defaults: {
+      severityMin: number;
+      bufferSize: number;
+      readLimit: number;
+      refreshTimeoutSeconds: number;
+    };
+    fields: Array<{ key: string; path: string }>;
+  };
   resources: Array<{
     uri: string;
     name: string;

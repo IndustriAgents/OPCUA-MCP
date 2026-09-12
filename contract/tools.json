@@ -242,7 +242,7 @@
             "description": "How often (ms) the OPC UA server samples the node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
           },
           "buffer_size": {
-            "type": "number",
+            "type": "integer",
             "description": "How many of the most recent changes to retain for this subscription; older ones are discarded. Default 20, clamped to 1..1000."
           }
         },
@@ -296,7 +296,7 @@
             "description": "End of the retrieval"
           },
           "num_values": {
-            "type": "number",
+            "type": "integer",
             "description": "Number of values to read (default: unlimited)"
           }
         },

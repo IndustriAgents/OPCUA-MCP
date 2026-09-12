@@ -89,6 +89,35 @@ def _props_required(schema: dict) -> tuple[set, set]:
     return set(schema.get("properties", {})), set(schema.get("required", []))
 
 
+def _declared_types(schema: dict) -> dict[str, set]:
+    """Each property's advertised JSON-Schema type(s), for those that declare any.
+
+    Compared across runtimes because the *type* is as much a part of the wire
+    contract as the name: the Python server derives its schema from the function
+    annotations, so an `int` where the contract says `number` both advertises a
+    different schema and makes the SDK reject an input the Node server accepts.
+
+    A set rather than one name, because `MCPServer` renders an optional
+    `T | None` parameter as `anyOf: [{type: T}, {type: "null"}]` and not as a
+    bare `type`. The contract declares the type of the *value*; "or null" is
+    just how one runtime spells "you may omit this". Properties neither side
+    types are skipped rather than guessed at.
+    """
+    types = {}
+    for name, spec in (schema or {}).get("properties", {}).items():
+        names = set()
+        declared = spec.get("type")
+        if declared is not None:
+            names |= {declared} if isinstance(declared, str) else set(declared)
+        for branch in [*spec.get("anyOf", []), *spec.get("oneOf", [])]:
+            branch_type = branch.get("type")
+            if branch_type is not None:
+                names |= {branch_type} if isinstance(branch_type, str) else set(branch_type)
+        if names:
+            types[name] = names
+    return types
+
+
 @pytest.fixture(params=["python", "node"])
 def impl_params(request, opcua_server):
     impl = request.param
@@ -127,6 +156,18 @@ async def test_servers_match_contract(impl_params):
             f"{impl}/{name}: params {got_props} != contract {want_props}"
         )
         assert got_req == want_req, f"{impl}/{name}: required {got_req} != contract {want_req}"
+
+        # Types too. Without this, `buffer_size: int` on the Python side passed
+        # while advertising `integer` against the contract's `number` — and
+        # rejected a `7.9` the Node server happily truncated.
+        want_types = _declared_types(spec["inputSchema"])
+        got_types = _declared_types(tool.input_schema or {})
+        for prop, wanted in want_types.items():
+            offered = got_types.get(prop, set())
+            assert wanted <= offered, (
+                f"{impl}/{name}.{prop}: advertises {sorted(offered)}, "
+                f"which does not cover the contract's {sorted(wanted)}"
+            )
 
 
 async def test_history_result_matches_the_contract_shape(impl_params):

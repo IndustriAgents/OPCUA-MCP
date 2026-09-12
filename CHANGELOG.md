@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry the new `resultShapes.subscriptionRecords` shape, whose `changes` are
   ordinary `historyRecords`.
 
+  An explicit `unsubscribe_opcua_node` reports a delete the OPC UA server
+  refuses, rather than answering "success" for a subscription that may still be
+  publishing; the caller no longer holds an ID to retry with, so swallowing it
+  would hide the leak. Shutdown stays quiet, where a refused delete is the
+  normal case rather than news.
+
   Subscriptions do not outlive the MCP session. Deleting them *before* closing
   the OPC UA session is the part that is easy to get wrong — a session closed
   with subscriptions still attached leaves the OPC UA server publishing into the
@@ -40,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `notify_resource_updated` on the floor. Offering it on one runtime only would
   break the interchangeability this repo is built around, so neither does; see
   [docs/architecture.md](docs/architecture.md#why-the-subscriptions-resource-is-polled-not-pushed).
+- **The contract-parity test now compares each parameter's declared *type***, not
+  only its name and whether it is required. That gap let a real divergence
+  through in review: `buffer_size` was annotated `int` in Python and declared
+  `number` in the contract, so the Python server advertised `integer` and the
+  SDK rejected a `7.9` the Node server truncated to 7. `buffer_size` and the
+  pre-existing `num_values` are both counts and are now declared `integer`,
+  which is what the Python server has always derived from their annotations. An
+  optional `T | None` parameter renders as `anyOf: [{type: T}, {type: null}]`
+  rather than a bare `type`, so the check flattens those branches.
 - **The contract now defines the resource surface too**, under a `resources` key,
   each entry naming the `resultShape` its document carries. Both servers build
   `resources/list` from it and `tests/e2e/test_contract_parity.py` reads the

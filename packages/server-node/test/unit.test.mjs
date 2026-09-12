@@ -36,6 +36,7 @@ import {
 import {
   SubscriptionManager,
   resolveOptions,
+  terminateFailedMessage,
   unknownSubscriptionMessage,
 } from "../build/subscriptions.js";
 
@@ -605,25 +606,45 @@ describe("SubscriptionManager teardown", () => {
     );
   });
 
+  // The stand-in whose terminate always fails, used by the two tests below.
+  function refusingSession() {
+    return {
+      async createSubscription2() {
+        return {
+          async terminate() {
+            throw new Error("session closed");
+          },
+          async monitor() {
+            return { on() {}, statusCode: StatusCodes.Good };
+          },
+        };
+      },
+    };
+  }
+
+  // An explicit cancel reports what shutdown is right to swallow: the caller
+  // asked for something specific, did not fully get it, and no longer holds an
+  // ID to retry with. The Python server raises the same sentence.
+  test("unsubscribe surfaces a refused terminate", async () => {
+    const manager = new SubscriptionManager();
+    await manager.subscribe(refusingSession(), "ns=2;i=3");
+
+    await assert.rejects(() => manager.unsubscribe("sub-1"), {
+      message: terminateFailedMessage("sub-1", "session closed"),
+    });
+    assert.deepEqual(manager.list(), [], "the refused terminate left the entry behind");
+    assert.equal(
+      terminateFailedMessage("sub-1", "session closed"),
+      "Cancelled sub-1 here, but the OPC UA server did not accept the delete: session closed. " +
+        "It may keep publishing until the subscription's lifetime expires."
+    );
+  });
+
   // Shutdown runs against an OPC UA server that has often already dropped the
   // session, so a failing terminate must not turn a tidy exit into a crash.
   test("closeAll survives a subscription that refuses to terminate", async () => {
     const manager = new SubscriptionManager();
-    await manager.subscribe(
-      {
-        async createSubscription2() {
-          return {
-            async terminate() {
-              throw new Error("session closed");
-            },
-            async monitor() {
-              return { on() {}, statusCode: StatusCodes.Good };
-            },
-          };
-        },
-      },
-      "ns=2;i=3"
-    );
+    await manager.subscribe(refusingSession(), "ns=2;i=3");
 
     await manager.closeAll();
     assert.deepEqual(manager.list(), []);

@@ -16,6 +16,7 @@ from opcua_mcp_server.subscriptions import (
     DEFAULT_BUFFER_SIZE,
     DEFAULT_PUBLISHING_INTERVAL,
     SubscriptionManager,
+    delete_failed_message,
     resolve_options,
     unknown_subscription_message,
 )
@@ -182,6 +183,23 @@ def test_unsubscribe_deletes_one_and_leaves_the_rest():
     assert [r["subscription_id"] for r in manager.list()] == ["sub-2"]
 
 
+def test_unsubscribe_surfaces_a_refused_delete():
+    """An explicit cancel reports what shutdown is right to swallow.
+
+    The entry is dropped either way — nothing in this process is listening to it
+    any more — but the caller asked for something specific, did not fully get it,
+    and no longer holds an ID to retry with. Saying "success" there would hide a
+    subscription the OPC UA server may still be publishing.
+    """
+    manager = manager_with(FakeClient([], fail_delete=True))
+    manager.subscribe("ns=2;i=3")
+
+    with pytest.raises(RuntimeError, match="did not accept the delete"):
+        manager.unsubscribe("sub-1")
+
+    assert manager.list() == [], "the refused delete left the entry behind"
+
+
 def test_close_all_survives_a_subscription_that_refuses_to_delete():
     """Shutdown often runs after the OPC UA server has dropped the session.
 
@@ -201,6 +219,15 @@ def test_an_unknown_id_is_refused():
         manager.unsubscribe("sub-9")
     # The wording the server turns that into, shared with the Node runtime.
     assert unknown_subscription_message("sub-9") == "No such subscription: sub-9"
+
+
+def test_the_refused_delete_wording_is_shared_with_the_node_runtime():
+    message = delete_failed_message("sub-1", "session closed")
+    assert message == (
+        "Cancelled sub-1 here, but the OPC UA server did not accept the delete: "
+        "session closed. It may keep publishing until the subscription's "
+        "lifetime expires."
+    )
 
 
 def test_subscribing_without_a_connected_client_is_refused_readably():

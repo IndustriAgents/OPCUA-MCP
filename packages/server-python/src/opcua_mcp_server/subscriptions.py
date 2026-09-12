@@ -73,6 +73,21 @@ def unknown_subscription_message(subscription_id: str) -> str:
     return f"No such subscription: {subscription_id}"
 
 
+def delete_failed_message(subscription_id: str, reason: str) -> str:
+    """The message both runtimes give when the server refuses an explicit cancel.
+
+    Worth saying out loud rather than swallowing: the subscription is gone from
+    this process either way, so the ID cannot be retried, but the OPC UA server
+    may still be publishing into the void. Only the explicit path reports this —
+    on shutdown a refused delete is the normal case, not news.
+    """
+    return (
+        f"Cancelled {subscription_id} here, but the OPC UA server did not accept "
+        f"the delete: {reason}. It may keep publishing until the subscription's "
+        f"lifetime expires."
+    )
+
+
 @dataclass
 class _Entry:
     """One live subscription, its monitored item, and what it has delivered."""
@@ -216,7 +231,13 @@ class SubscriptionManager:
         if entry is None:
             raise KeyError(subscription_id)
         record = entry.as_record()
-        _delete_quietly(entry.subscription)
+        try:
+            entry.subscription.delete()
+        except Exception as error:
+            # Unlike shutdown, an explicit cancel reports this. The caller asked
+            # for something specific and did not fully get it, and no longer
+            # holds an ID to retry with.
+            raise RuntimeError(delete_failed_message(subscription_id, str(error))) from error
         return record
 
     def close_all(self) -> None:
@@ -231,9 +252,10 @@ class SubscriptionManager:
 def _delete_quietly(subscription: Any) -> None:
     """Delete without letting a dead session's error escape.
 
-    Every caller is a cleanup path: an OPC UA server that has already dropped the
-    subscription (or the whole session) is the normal case on shutdown, and
-    failing there would turn a tidy exit into a crash.
+    The remaining callers are cleanup paths: an OPC UA server that has already
+    dropped the subscription (or the whole session) is the normal case on
+    shutdown, and failing there would turn a tidy exit into a crash. An explicit
+    ``unsubscribe`` does *not* go through here — see `delete_failed_message`.
     """
     try:
         subscription.delete()

@@ -99,6 +99,20 @@ export function unknownSubscriptionMessage(id: string): string {
   return `No such subscription: ${id}`;
 }
 
+/** The message both runtimes give when the OPC UA server refuses an explicit cancel.
+ *
+ * Worth saying out loud rather than swallowing: the subscription is gone from
+ * this process either way, so the ID cannot be retried, but the OPC UA server
+ * may still be publishing into the void. Only the explicit path reports this —
+ * on shutdown a refused delete is the normal case, not news.
+ */
+export function terminateFailedMessage(id: string, reason: string): string {
+  return (
+    `Cancelled ${id} here, but the OPC UA server did not accept the delete: ${reason}. ` +
+    `It may keep publishing until the subscription's lifetime expires.`
+  );
+}
+
 export class SubscriptionManager {
   private entries = new Map<string, Entry>();
   private counter = 0;
@@ -185,7 +199,16 @@ export class SubscriptionManager {
     // be told a subscription is still active when nothing is listening to it.
     this.entries.delete(id);
     const record = toRecord(entry);
-    await terminateQuietly(entry.subscription);
+    try {
+      await entry.subscription.terminate();
+    } catch (error) {
+      // Unlike shutdown, an explicit cancel reports this. The caller asked for
+      // something specific and did not fully get it, and no longer holds an ID
+      // to retry with.
+      throw new Error(
+        terminateFailedMessage(id, error instanceof Error ? error.message : String(error))
+      );
+    }
     return record;
   }
 
@@ -221,9 +244,10 @@ function toRecord(entry: Entry): SubscriptionRecord {
 
 /** Terminate without letting a dead session's error escape.
  *
- * Both callers are cleanup paths: an OPC UA server that has already dropped the
- * subscription (or the whole session) is the normal case on shutdown, and
- * failing there would turn a tidy exit into a crash.
+ * The remaining callers are cleanup paths: an OPC UA server that has already
+ * dropped the subscription (or the whole session) is the normal case on
+ * shutdown, and failing there would turn a tidy exit into a crash. An explicit
+ * `unsubscribe` does *not* go through here — see `terminateFailedMessage`.
  */
 async function terminateQuietly(subscription: ClientSubscription): Promise<void> {
   try {

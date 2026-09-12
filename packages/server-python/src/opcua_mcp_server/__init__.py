@@ -18,7 +18,12 @@ from .contract import CONTRACT, DESC, HISTORY_NODE_ID, RESOURCES, load_contract
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .records import history_record, history_records, scalar_to_json, variant_to_json
 from .security import SecurityConfig, create_client, parse_security_config, security_config
-from .subscriptions import SUBSCRIPTIONS, SubscriptionManager, resolve_options
+from .subscriptions import (
+    SUBSCRIPTIONS,
+    SubscriptionManager,
+    delete_failed_message,
+    resolve_options,
+)
 from .version import package_version
 
 __all__ = [
@@ -31,6 +36,7 @@ __all__ = [
     "SecurityConfig",
     "SubscriptionManager",
     "create_client",
+    "delete_failed_message",
     "format_iso_utc",
     "history_record",
     "history_records",

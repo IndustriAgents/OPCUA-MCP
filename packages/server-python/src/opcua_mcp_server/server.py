@@ -497,6 +497,10 @@ async def unsubscribe_opcua_node(subscription_id: str) -> str:
     except KeyError as e:
         # Both runtimes word an unknown ID identically; see subscriptions.py.
         raise ToolError(unknown_subscription_message(subscription_id)) from e
+    except RuntimeError as e:
+        # The OPC UA server refused the delete. Already worded for the caller by
+        # `delete_failed_message`, and shared with the Node server.
+        raise ToolError(str(e)) from e
     return (
         f"Unsubscribed {record['subscription_id']} from node {record['node_id']} "
         f"after {record['change_count']} value changes"

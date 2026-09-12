@@ -33,7 +33,19 @@ export const REPO_ROOT = join(PKG_ROOT, "..", "..");
 export const CONTRACT_PATH = join(REPO_ROOT, "contract", "tools.json");
 
 /** The version every generated artifact is stamped with. */
-export const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version;
+const PACKAGE = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"));
+
+export const VERSION = PACKAGE.version;
+
+/** Major Node version the package claims to support, from `engines.node`.
+ *
+ * The single-file build embeds whatever Node runs it, so it must not be built
+ * with an older one than the package supports — the binary would ship a runtime
+ * the code is not written for. Read from the manifest rather than restated,
+ * because the floor moves: it was 18, then 22.13, and a hardcoded copy of it in
+ * the build script silently stopped matching.
+ */
+export const NODE_FLOOR = Number(PACKAGE.engines.node.replace(/[^\d.]/g, "").split(".")[0]);
 
 // The CommonJS globals node-opcua's dependencies expect. Without `require` the
 // bundle dies on "Dynamic require of \"os\" is not supported"; without

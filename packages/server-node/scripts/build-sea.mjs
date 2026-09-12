@@ -28,7 +28,7 @@ import { spawnSync } from "child_process";
 import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { PKG_ROOT, bundle, resolveCli } from "./bundle.mjs";
+import { NODE_FLOOR, PKG_ROOT, bundle, resolveCli } from "./bundle.mjs";
 
 const STAGING = join(PKG_ROOT, "build-sea");
 const DIST = join(PKG_ROOT, "dist");
@@ -79,9 +79,10 @@ function thinUniversalBinary(path) {
 
 async function main() {
   const [major] = process.versions.node.split(".").map(Number);
-  if (major < 20) {
+  if (major < NODE_FLOOR) {
     throw new Error(
-      `building a single-file executable needs Node 20+, got ${process.versions.node}`
+      `building a single-file executable needs Node ${NODE_FLOOR}+ (the package's ` +
+        `engines.node floor, which the binary embeds), got ${process.versions.node}`
     );
   }
 

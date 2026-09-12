@@ -183,6 +183,24 @@ async def test_default_mode_is_sign_and_encrypt(impl, secure_opcua_server, secur
     assert "mode=SignAndEncrypt" in stderr_of(errlog)
 
 
+async def test_the_application_uri_comes_from_the_certificate(
+    impl, secure_opcua_server, secure_env, errlog
+):
+    """With no `OPCUA_APPLICATION_URI`, both runtimes announce the certificate's own URI.
+
+    The mock refuses any other URI (`--require-client-uri`), as equipment that
+    checks the ApplicationDescription against the `subjectAltName` does, so a
+    runtime announcing a library default — python-opcua's `urn:freeopcua:client`
+    — cannot get a session here.
+    """
+    env = {key: value for key, value in secure_env.items() if key != "OPCUA_APPLICATION_URI"}
+    params = _server_params(impl, secure_opcua_server, env)
+    async with connect(params, errlog) as session:
+        assert "value: " in text_of(
+            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+        )
+
+
 async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, secure_env, errlog):
     """Neither runtime may fall back to a working session when the login fails.
 

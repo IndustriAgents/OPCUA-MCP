@@ -15,12 +15,14 @@ silent downgrade.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 
+from cryptography import x509
 from opcua import Client, ua
-from opcua.crypto import security_policies
+from opcua.crypto import security_policies, uacrypto
 
 #: Policies this runtime can negotiate — the four both runtimes share.
 POLICIES = ("None", "Basic128Rsa15", "Basic256", "Basic256Sha256")
@@ -51,7 +53,7 @@ class SecurityConfig:
     #: Application URI announced to the server. OPC UA servers may reject a session
     #: whose ApplicationDescription URI does not match the ``subjectAltName`` URI of
     #: the client certificate, so it has to be settable alongside the certificate.
-    #: ``None`` leaves python-opcua's default (``urn:freeopcua:client``).
+    #: ``None`` means "take it from the certificate" — see :func:`create_client`.
     application_uri: str | None = None
     #: Username identity; anonymous when ``None``.
     username: str | None = None
@@ -202,6 +204,46 @@ def security_warnings(config: SecurityConfig) -> list[str]:
     return warnings
 
 
+def certificate_application_uri(path: str) -> str | None:
+    """The ``subjectAltName`` URI of the certificate at ``path``, if it has one.
+
+    This is the ApplicationUri an OPC UA client is supposed to announce: servers
+    check the ApplicationDescription of a session against the URI in the
+    certificate it presented, and reject the mismatch with
+    ``BadCertificateUriInvalid``. node-opcua reads it out of the certificate
+    itself; python-opcua never looks, and announces ``urn:freeopcua:client``
+    unless told otherwise — so without this, the same certificate and the same
+    variables reach a real server as two different identities depending on which
+    runtime you started.
+
+    PEM or DER is decided by the file extension, because that is the rule
+    python-opcua applies to this very file when it loads it for the handshake
+    (``.pem`` is PEM, anything else is DER). Returns ``None`` rather than
+    raising if the file cannot be read or carries no URI: this is a best-effort
+    default, and a certificate python-opcua cannot use fails the connection
+    itself, in its own words.
+    """
+    try:
+        certificate = uacrypto.load_certificate(path)
+        alt_names = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        uris = alt_names.value.get_values_for_type(x509.UniformResourceIdentifier)
+    except Exception:  # unreadable, not a certificate, or no subjectAltName
+        return None
+    return uris[0] if uris else None
+
+
+#: Messages already written to stderr, so that the capability probes — which
+#: build a client of their own before the server starts — do not repeat them.
+_warned: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log to stderr the first time this message comes up. stdout is the MCP transport."""
+    if message not in _warned:
+        _warned.add(message)
+        print(f"WARNING: {message}", file=sys.stderr)
+
+
 def create_client(url: str) -> Client:
     """An OPC UA client for ``url``, configured with the process's security.
 
@@ -212,8 +254,22 @@ def create_client(url: str) -> Client:
     client = Client(url)
     config = security_config()
 
+    certificate_uri = (
+        certificate_application_uri(config.client_cert) if config.client_cert else None
+    )
     if config.application_uri is not None:
         client.application_uri = config.application_uri
+        if certificate_uri is not None and certificate_uri != config.application_uri:
+            _warn_once(
+                f"OPCUA_APPLICATION_URI={config.application_uri} does not match the "
+                f"subjectAltName URI of OPCUA_CLIENT_CERT ({certificate_uri}); a server that "
+                f"checks the two will reject the session with BadCertificateUriInvalid. Unset "
+                f"OPCUA_APPLICATION_URI to announce the certificate's own URI."
+            )
+    elif certificate_uri is not None:
+        # The certificate is the authority on this, and the operator has not
+        # said otherwise. Matches what node-opcua does with the same files.
+        client.application_uri = certificate_uri
 
     if config.policy != "None":
         policy = getattr(security_policies, f"SecurityPolicy{config.policy}")

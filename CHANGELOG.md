@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resources/list` from it and `tests/e2e/test_contract_parity.py` reads the
   resource from each and checks it against that shape, exactly as it already did
   for tool output.
+- **[docs/certificates.md](docs/certificates.md): client certificates and trust
+  setup** (#5). Turning encryption on needs a certificate that OPC UA servers
+  accept — `subjectAltName` URI, all four key usages, `clientAuth`, RSA 2048 and
+  SHA-256 — and then an operator willing to move it from the server's rejected
+  list into its trusted one. Both were folklore, or were buried in a testing
+  walkthrough that uses throwaway certificates. The new page has an `openssl`
+  recipe, the naming and permission rules each runtime imposes, the trust dance
+  step by step, and a table mapping the certificate status codes back to what to
+  change.
 
 ### Changed
 - **The Python server now targets the `mcp` 2.x API.** 0.3.0 pinned `mcp[cli]<2`
@@ -105,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **The Python server now announces the client certificate's own ApplicationUri**
+  (#5). With a certificate configured but no `OPCUA_APPLICATION_URI`,
+  python-opcua announced its library default, `urn:freeopcua:client`, while
+  node-opcua reads the URI out of the certificate — so the same certificate and
+  the same variables reached a server as two different identities depending on
+  which runtime was started, and equipment that checks the ApplicationUri against
+  the `subjectAltName` (as the spec has it) refused the Python one with
+  `BadCertificateUriInvalid`. It now takes the URI from the certificate too, and
+  warns when an explicit `OPCUA_APPLICATION_URI` contradicts one. That also makes
+  a secured connection expressible from the `.mcpb` bundle, whose fields cover
+  the certificate but not the URI. The secured mock grew the check real servers
+  make (`--check-client-uri`), so the end-to-end tests can tell a derived
+  ApplicationUri from a default that happens to connect.
 - **The e2e suite no longer borrows another checkout's mock OPC UA server** (#46).
   Each mock fixture picked a fixed port (4840/4841/4843) and, finding something
   already listening there, adopted it. With one developer on one checkout that was

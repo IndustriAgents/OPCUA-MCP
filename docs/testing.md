@@ -30,8 +30,9 @@ Common nodes: Temperature `ns=2;i=3`, PumpEnabled `ns=2;i=12`, ValvePosition
 ## 1. Automated end-to-end suite
 
 Drives **both** servers over stdio with the official `mcp` client SDK and asserts
-on real responses, unsecured against the mock on `:4840` and secured against the
-mock on `:4843`.
+on real responses, against an unsecured mock and a secured one. Each mock is
+started by its fixture on a free ephemeral port, so several checkouts can run the
+suite at the same time.
 
 ```bash
 uv sync --all-packages         # one-time, from the repo root
@@ -41,7 +42,8 @@ uv run --no-sync pytest -v -k python     # only the Python server
 uv run --no-sync pytest -v -k "[node]"   # only the Node server
 ```
 
-The suite reuses a mock server already on `:4840`, or starts its own. See
+The suite starts its own mocks. To point it at a server you manage instead, set
+`OPCUA_SERVER_URL` (or `OPCUA_AGGREGATE_SERVER_URL`). See
 [../tests/README.md](../tests/README.md) for the full matrix.
 
 ---
@@ -227,7 +229,7 @@ hand.
 | **List Tools is empty or errors** | Mock server not running → `uv run --no-sync opcua-mock-server` |
 | **`read_history_opcua_node` not listed** | Connected to a server without history, or wrong `OPCUA_SERVER_URL` |
 | **`read_aggregate_opcua_node` not listed** | Expected — the bundled mock advertises no aggregate functions, so the tool is correctly hidden |
-| **`Address already in use` on :4840** | A mock server is already running; reuse it, or `lsof -tiTCP:4840 -sTCP:LISTEN \| xargs kill` |
+| **`Address already in use` on :4840** | Another mock is on the default port; stop it (`lsof -tiTCP:4840 -sTCP:LISTEN \| xargs kill`) or pass `--endpoint`. The test suite is unaffected — it picks its own port. |
 | **Project MCP servers `⏸ Pending approval`** | Normal — approve them in a new `claude` session or via `/mcp` |
 | **Server exits at once with `Configuration error: …`** | A security variable is set to a combination OPC UA cannot honour; the message names the variable to fix |
 | **`BadUserAccessDenied` / `BadIdentityTokenRejected` on every tool** | `OPCUA_USERNAME` / `OPCUA_PASSWORD` rejected by the server |

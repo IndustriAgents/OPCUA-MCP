@@ -1,3 +1,4 @@
+import argparse
 import logging
 import random
 import time
@@ -482,8 +483,22 @@ class IndustrialControlSystem:
         self.running = False
 
 
+DEFAULT_ENDPOINT = "opc.tcp://0.0.0.0:4840/freeopcua/server/"
+
+
 def main():
     """Main function to run the OPC UA server."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--endpoint",
+        default=DEFAULT_ENDPOINT,
+        help=(
+            "OPC UA endpoint to listen on (default: %(default)s). The test suite "
+            "passes an ephemeral port so parallel checkouts never share a server."
+        ),
+    )
+    args = parser.parse_args()
 
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -492,7 +507,7 @@ def main():
     server = Server()
 
     # Set server endpoint
-    server.set_endpoint("opc.tcp://0.0.0.0:4840/freeopcua/server/")
+    server.set_endpoint(args.endpoint)
 
     # Set server name and namespace
     server.set_server_name("Industrial Control System OPC UA Server")
@@ -516,7 +531,7 @@ def main():
         # Start the server
         server.start()
         industrial_system.historize()
-        logging.info("OPC UA Server started at opc.tcp://0.0.0.0:4840/freeopcua/server/")
+        logging.info(f"OPC UA Server started at {args.endpoint}")
         logging.info("Server is running and ready for connections")
 
         # Start process simulation in a separate thread

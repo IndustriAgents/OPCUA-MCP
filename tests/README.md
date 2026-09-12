@@ -73,13 +73,15 @@ and only when the server advertises `AccessHistoryDataCapability`.
 
 ## Mock servers
 
-Two are used, on purpose:
+Three are used, on purpose. Each is started by its fixture on a **fresh
+ephemeral port** per session, so two checkouts can run the suite at once without
+colliding (#46):
 
-| Mock | Port | Role |
-|------|------|------|
-| `packages/mock-server` (python-opcua) | 4840 | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
-| `packages/mock-server-aggregate` (node-opcua) | 4841 | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
-| `tests/fixtures/secure_opcua_server.py` (python-opcua) | 4843 | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. |
+| Mock | Role |
+|------|------|
+| `packages/mock-server` (python-opcua) | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
+| `packages/mock-server-aggregate` (node-opcua) | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
+| `tests/fixtures/secure_opcua_server.py` (python-opcua) | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. |
 
 The main mock cannot serve aggregates even in principle: python-opcua answers
 `ReadProcessedDetails` with `BadNotImplemented`.
@@ -111,15 +113,20 @@ uv run --no-sync pytest -v
 `pytest` runs the unit and e2e tiers; smoke is deselected by default via
 `addopts = "-ra -m 'not smoke'"` because it builds and installs packages.
 
-The suite reuses mock OPC UA servers already listening on `:4840` (the main mock)
-and `:4841` (the aggregate-capable mock); if none is running it starts them for
-the session (and waits a few seconds for history to accumulate). To force
-specific endpoints:
+The suite starts its own mock OPC UA servers, each on a free port picked for the
+session, and waits a few seconds for history to accumulate. To point it at a
+server you manage yourself instead — one left running while iterating, or a real
+device — set the endpoint explicitly; nothing is started, and arranging enough
+history for the tests that read it back is then yours:
 
 ```bash
 OPCUA_SERVER_URL="opc.tcp://localhost:4840/freeopcua/server/" uv run --no-sync pytest -v
 OPCUA_AGGREGATE_SERVER_URL="opc.tcp://localhost:4841/UA/Aggregate" uv run --no-sync pytest -v
 ```
+
+A standalone mock defaults to `:4840` (`uv run opcua-mock-server`, overridable
+with `--endpoint`); the aggregate mock defaults to `:4841` (`npm start` in
+`packages/mock-server-aggregate`, overridable with `AGGREGATE_MOCK_PORT`).
 
 Select a single implementation:
 

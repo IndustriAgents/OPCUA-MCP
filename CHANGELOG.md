@@ -50,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only reaches for client APIs, and takes the `.mcpb` from about 7 MB to under
   one.
 
+### Fixed
+- **The e2e suite no longer borrows another checkout's mock OPC UA server** (#46).
+  Each mock fixture picked a fixed port (4840/4841/4843) and, finding something
+  already listening there, adopted it. With one developer on one checkout that was
+  a convenience; with a worktree per task it meant two sessions sharing a mock as
+  it started, warmed up and was torn down, and failures that moved between tests
+  from run to run. The aggregate tests suffered most, because adopting a running
+  mock also skipped the 20s warmup their arithmetic over the ramp depends on.
+  Every mock is now started by its fixture on a free ephemeral port, so the warmup
+  always applies to the history the tests then read. `opcua-mock-server` takes
+  `--endpoint` for this (default unchanged); the aggregate mock already had
+  `AGGREGATE_MOCK_PORT`. Setting `OPCUA_SERVER_URL` or
+  `OPCUA_AGGREGATE_SERVER_URL` still points the suite at a server you manage
+  yourself, and is now the only way it will use one. Test harness only — no
+  change to either shipped server.
+
 ## [0.3.0] — 2026-09-11
 
 ### Added

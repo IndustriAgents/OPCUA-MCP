@@ -1,18 +1,29 @@
 """Shared pytest fixtures for the OPC UA MCP end-to-end suite.
 
 The suite drives the *actual* MCP servers (Python and Node) over stdio using the
-official `mcp` client SDK, pointed at the mock industrial OPC UA server. A single
-session-scoped fixture makes sure a mock server is available: if one is already
-listening on :4840 it is reused, otherwise one is started for the test session.
+official `mcp` client SDK, pointed at the mock industrial OPC UA server. A
+session-scoped fixture starts that mock on an ephemeral port and yields its
+endpoint, which the tests hand to the MCP servers under test.
 
-A second, aggregate-capable mock (`packages/mock-server-aggregate`, :4841) backs
-the aggregate tests. It is kept separate from the main mock on purpose: the main
-mock must keep advertising *no* aggregate functions so the suite can assert that
-both MCP servers hide `read_aggregate_opcua_node` when it is unsupported.
+Every mock gets a fresh port per session (#46). Fixed ports plus a "reuse
+whatever is already listening" branch meant two checkouts running the suite at
+once talked to each other's mock as it started, warmed up and was torn down,
+producing failures that moved between tests run to run. Owning the server also
+means the warmup sleeps below always apply to the history the tests then read.
 
-A third, *secured* mock (`fixtures/secure_opcua_server.py`, :4843) backs the
+A second, aggregate-capable mock (`packages/mock-server-aggregate`) backs the
+aggregate tests. It is kept separate from the main mock on purpose: the main mock
+must keep advertising *no* aggregate functions so the suite can assert that both
+MCP servers hide `read_aggregate_opcua_node` when it is unsupported.
+
+A third, *secured* mock (`fixtures/secure_opcua_server.py`) backs the
 connection-security tests. It is separate for the same reason: it offers no
 unsecured endpoint at all, which is what makes those assertions mean something.
+
+To point the suite at a server you manage yourself — one left running while
+iterating, or a real device — set `OPCUA_SERVER_URL` or
+`OPCUA_AGGREGATE_SERVER_URL`. The fixture then starts nothing, and the warmup is
+yours to arrange.
 """
 
 from __future__ import annotations
@@ -27,19 +38,19 @@ import pytest
 from fixtures.pki import CLIENT_URI, SERVER_URI, write_self_signed
 
 ROOT = Path(__file__).resolve().parent.parent
-SERVER_URL = os.environ.get("OPCUA_SERVER_URL", "opc.tcp://localhost:4840/freeopcua/server/")
-HOST = "localhost"
-PORT = 4840
+HOST = "127.0.0.1"
+SERVER_PATH = "/freeopcua/server/"
+
+# Set to talk to a server you manage yourself instead of one started per session.
+SERVER_URL_OVERRIDE = os.environ.get("OPCUA_SERVER_URL")
 
 # Seconds of runtime to allow the mock server to accumulate history before tests
 # read it back. The mock writes one history record per variable per second.
 HISTORY_WARMUP_SECONDS = 6
 
 # --- aggregate-capable mock (packages/mock-server-aggregate) --------------------
-AGGREGATE_PORT = 4841
-AGGREGATE_SERVER_URL = os.environ.get(
-    "OPCUA_AGGREGATE_SERVER_URL", f"opc.tcp://localhost:{AGGREGATE_PORT}/UA/Aggregate"
-)
+AGGREGATE_PATH = "/UA/Aggregate"
+AGGREGATE_SERVER_URL_OVERRIDE = os.environ.get("OPCUA_AGGREGATE_SERVER_URL")
 AGGREGATE_MOCK_DIR = ROOT / "packages" / "mock-server-aggregate"
 
 # The aggregate mock ramps its Temperature node by a fixed amount every tick, so
@@ -63,8 +74,7 @@ AGGREGATE_MOCK_MIN_NODE = 20
 # A third mock, on its own port, offering *only* Basic256Sha256 endpoints and
 # requiring a username. The other two must stay unsecured — the rest of the suite
 # depends on connecting to them with no security at all.
-SECURE_PORT = 4843
-SECURE_SERVER_URL = f"opc.tcp://127.0.0.1:{SECURE_PORT}/mcp/secure"
+SECURE_PATH = "/mcp/secure"
 SECURE_SERVER_URI = SERVER_URI
 SECURE_CLIENT_URI = CLIENT_URI
 SECURE_USERNAME = "operator"
@@ -86,57 +96,75 @@ def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def _free_port() -> int:
+    """A port nothing is listening on, for a mock this session will own.
+
+    There is a race between closing this socket and the mock binding the port,
+    but it is microseconds wide against a machine-local port space — far
+    narrower than the certainty of collision that fixed ports gave us.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((HOST, 0))
+        return sock.getsockname()[1]
+
+
+def _await_listening(proc: subprocess.Popen, port: int, name: str, timeout: float = 60) -> None:
+    """Block until `proc` is accepting connections on `port`, or fail loudly."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_open(HOST, port):
+            return
+        if proc.poll() is not None:
+            raise RuntimeError(f"{name} exited during startup")
+        time.sleep(0.2)
+    raise RuntimeError(f"{name} did not start within {timeout:.0f}s")
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 @pytest.fixture(scope="session")
 def opcua_server() -> str:
-    """Ensure a mock OPC UA server is reachable; reuse an existing one if present.
+    """Start the mock OPC UA server for this session on a port of its own.
 
     Yields the server endpoint URL.
     """
-    if _port_open(HOST, PORT):
-        # Something is already serving on :4840 — assume it is the mock server.
-        yield SERVER_URL
+    if SERVER_URL_OVERRIDE:
+        yield SERVER_URL_OVERRIDE
         return
 
+    port = _free_port()
+    url = f"opc.tcp://{HOST}:{port}{SERVER_PATH}"
     proc = subprocess.Popen(
-        ["uv", "run", "--no-sync", "opcua-mock-server"],
+        ["uv", "run", "--no-sync", "opcua-mock-server", "--endpoint", url],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            if _port_open(HOST, PORT):
-                break
-            if proc.poll() is not None:
-                raise RuntimeError("mock OPC UA server exited during startup")
-            time.sleep(1)
-        else:
-            raise RuntimeError("mock OPC UA server did not start within 60s")
-
+        _await_listening(proc, port, "mock OPC UA server")
         time.sleep(HISTORY_WARMUP_SECONDS)  # let some history build up
-        yield SERVER_URL
+        yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _terminate(proc)
 
 
 @pytest.fixture(scope="session")
 def aggregate_opcua_server() -> str:
-    """Ensure the aggregate-capable mock OPC UA server is reachable.
+    """Start the aggregate-capable mock OPC UA server on a port of its own.
 
-    Reuses an instance already listening on :4841, otherwise starts one for the
-    session. Skips the dependent tests when the mock's dependencies are not
-    installed, mirroring how the Node tests skip on a missing build.
+    Skips the dependent tests when the mock's dependencies are not installed,
+    mirroring how the Node tests skip on a missing build.
 
     Yields the server endpoint URL.
     """
-    if _port_open(HOST, AGGREGATE_PORT):
-        # Something is already serving on :4841 — assume it is the aggregate mock.
-        yield AGGREGATE_SERVER_URL
+    if AGGREGATE_SERVER_URL_OVERRIDE:
+        yield AGGREGATE_SERVER_URL_OVERRIDE
         return
 
     if not (AGGREGATE_MOCK_DIR / "node_modules").is_dir():
@@ -151,31 +179,20 @@ def aggregate_opcua_server() -> str:
             f"found Node {_node_major()}"
         )
 
+    port = _free_port()
     proc = subprocess.Popen(
         ["node", "server.mjs"],
         cwd=AGGREGATE_MOCK_DIR,
+        env={**os.environ, "AGGREGATE_MOCK_PORT": str(port)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            if _port_open(HOST, AGGREGATE_PORT):
-                break
-            if proc.poll() is not None:
-                raise RuntimeError("aggregate mock OPC UA server exited during startup")
-            time.sleep(1)
-        else:
-            raise RuntimeError("aggregate mock OPC UA server did not start within 60s")
-
+        _await_listening(proc, port, "aggregate mock OPC UA server")
         time.sleep(AGGREGATE_WARMUP_SECONDS)  # let history build up to aggregate over
-        yield AGGREGATE_SERVER_URL
+        yield f"opc.tcp://{HOST}:{port}{AGGREGATE_PATH}"
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _terminate(proc)
 
 
 @pytest.fixture(scope="session")
@@ -199,20 +216,12 @@ def secure_pki(tmp_path_factory) -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def secure_opcua_server(secure_pki) -> str:
-    """Start the secured mock OPC UA server for the session.
-
-    Unlike the unsecured mocks this one is never reused from a previous run: the
-    certificates are generated per session, so an already-running instance would
-    be presenting a different one.
+    """Start the secured mock OPC UA server for the session on a port of its own.
 
     Yields the server endpoint URL.
     """
-    if _port_open("127.0.0.1", SECURE_PORT):
-        pytest.skip(
-            f"port {SECURE_PORT} is already in use — stop whatever is listening on it "
-            f"so the secured mock can present this session's certificate"
-        )
-
+    port = _free_port()
+    url = f"opc.tcp://{HOST}:{port}{SECURE_PATH}"
     proc = subprocess.Popen(
         [
             "uv",
@@ -221,7 +230,7 @@ def secure_opcua_server(secure_pki) -> str:
             "python",
             str(ROOT / "tests" / "fixtures" / "secure_opcua_server.py"),
             "--endpoint",
-            SECURE_SERVER_URL,
+            url,
             "--cert",
             secure_pki["server_cert"],
             "--key",
@@ -234,20 +243,7 @@ def secure_opcua_server(secure_pki) -> str:
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            if _port_open("127.0.0.1", SECURE_PORT):
-                break
-            if proc.poll() is not None:
-                raise RuntimeError("secured mock OPC UA server exited during startup")
-            time.sleep(1)
-        else:
-            raise RuntimeError("secured mock OPC UA server did not start within 60s")
-
-        yield SECURE_SERVER_URL
+        _await_listening(proc, port, "secured mock OPC UA server")
+        yield url
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _terminate(proc)

@@ -8,6 +8,13 @@ export const BUILD_DIR = dirname(fileURLToPath(import.meta.url));
 
 export const CONTRACT: {
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
+  resources: Array<{
+    uri: string;
+    name: string;
+    description: string;
+    mimeType: string;
+    body: { recordsKey: string; resultShape: string };
+  }>;
   tools: Array<{ name: string; capability: string | null; description: string; inputSchema: any }>;
 } = JSON.parse(readFileSync(join(BUILD_DIR, "contract.json"), "utf8"));
 

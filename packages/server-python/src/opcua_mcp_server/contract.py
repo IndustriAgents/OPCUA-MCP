@@ -61,3 +61,10 @@ CONTRACT = load_contract()
 DESC = {t["name"]: t["description"] for t in CONTRACT["tools"]}
 HISTORY_NODE_ID = CONTRACT["capabilities"]["history"]["nodeId"]
 AGGREGATE_NODE_ID = CONTRACT["capabilities"]["aggregate"]["nodeId"]
+
+#: The resources both servers expose, keyed by URI, and the one this server
+#: registers. Sourced from the contract for the same reason the descriptions are:
+#: an MCP client that has learned one runtime's resource surface must find the
+#: other's identical.
+RESOURCES = {r["uri"]: r for r in CONTRACT["resources"]}
+SUBSCRIPTIONS_RESOURCE = RESOURCES["opcua://subscriptions"]

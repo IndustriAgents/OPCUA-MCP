@@ -84,6 +84,13 @@ Things to try:
 | `read_history_opcua_node` | `node_id` = `ns=2;i=3`, `start_time` = `nope` | clear error: *Use ISO 8601…* |
 | `write_opcua_node` | `node_id` = `ns=2;i=13`, `value` = `80` | `Successfully wrote 80…` |
 | `call_opcua_method` | `object_node_id` = `ns=2;i=27`, `method_node_id` = `ns=2;i=28`, `arguments` = `["60"]` | `…Result: true` (SystemMode → AUTO within ~1s) |
+| `subscribe_opcua_node` | `node_id` = `ns=2;i=3`, `publishing_interval` = `500` | one record, `change_count` 0 or 1 |
+| `list_subscriptions` | *(none)* | a few seconds later, the same record with `change_count` climbing and `changes` filling |
+| `unsubscribe_opcua_node` | `subscription_id` = `sub-1` | `Unsubscribed sub-1 from node ns=2;i=3 after N value changes` |
+
+The **Resources** tab lists one resource, `opcua://subscriptions`. Read it while
+a subscription is running and it carries the same records as `list_subscriptions`
+— that is the point of it: re-readable live state, no tool call spent.
 
 ### CLI mode (scriptable, no browser)
 
@@ -93,6 +100,10 @@ BIN="npx -y @modelcontextprotocol/inspector --cli node packages/server-node/buil
 
 # list tools
 $BIN --method tools/list
+
+# list resources, and read the subscription buffer
+$BIN --method resources/list
+$BIN --method resources/read --uri opcua://subscriptions
 
 # read history (note: quote node IDs because ';' is a shell separator)
 $BIN --method tools/call --tool-name read_history_opcua_node \
@@ -136,6 +147,7 @@ Then, in a **new** Claude Code session started in this directory:
    - *"Read the current temperature from the OPC UA server."*
    - *"Show me the last 5 temperature history readings."* → `read_history_opcua_node`
    - *"Give me a full inventory of all variables on the server."*
+   - *"Watch the tank level for the next 30 seconds and tell me what it did."* → `subscribe_opcua_node` / `list_subscriptions`
    - *"Start production at 60 units/hour, check the system mode, then stop it."*
    - *"Use the opcua-node server to read node ns=2;i=4 history between 11:00 and 12:00 UTC today."*
 

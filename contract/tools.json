@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for the OPC UA MCP tool surface shared by both servers. The Node server builds its tools/list response directly from this file (copied into build/ at build time). The Python (FastMCP) server reads tool descriptions and the capability node IDs from it; its signature-derived input schemas are checked against this file by tests/test_contract_parity.py. To add or change a tool: edit this file, then update each server's per-tool logic (Node: a case in the CallTool switch; Python: the @mcp.tool function), and add an E2E test. A tool whose output is more than free text also names a shape from \"resultShapes\"; tests/e2e/test_contract_parity.py checks both servers' actual output against it.",
+  "$comment": "Single source of truth for the OPC UA MCP tool and resource surface shared by both servers. The Node server builds its tools/list response directly from this file (copied into build/ at build time). The Python (FastMCP) server reads tool descriptions and the capability node IDs from it; its signature-derived input schemas are checked against this file by tests/test_contract_parity.py. To add or change a tool: edit this file, then update each server's per-tool logic (Node: a case in the CallTool switch; Python: the @mcp.tool function), and add an E2E test. A tool whose output is more than free text also names a shape from \"resultShapes\"; tests/e2e/test_contract_parity.py checks both servers' actual output against it. The \"resources\" key does the same for MCP resources: both servers build their resources/list from it, and the parity test reads each resource and checks its document against the shape its \"body\" names.",
   "resultShapes": {
     "$comment": "Canonical response shapes, referenced by a tool's \"resultShape\". Both servers must produce the referenced shape verbatim: a client (or a model) that learns one server's output must be able to read the other's. See issue #23.",
     "historyRecords": {
@@ -23,6 +23,53 @@
         "required": ["value", "timestamp", "status"],
         "additionalProperties": false
       }
+    },
+    "subscriptionRecords": {
+      "$comment": "Returned as one MCP text content block per record, each block the JSON object described by \"items\" — the same framing as \"historyRecords\". `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Handle for this subscription, unique within the running MCP server. Pass it to `unsubscribe_opcua_node`. Example: 'sub-1'."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The OPC UA node being monitored. Example: 'ns=2;i=3'."
+          },
+          "publishing_interval": {
+            "type": "number",
+            "description": "How often (ms) the OPC UA server was asked to publish queued changes."
+          },
+          "sampling_interval": {
+            "type": "number",
+            "description": "How often (ms) the OPC UA server was asked to sample the node. Equal to `publishing_interval` when the caller left it at 0."
+          },
+          "buffer_size": {
+            "type": "number",
+            "description": "How many of the most recent changes this subscription retains. Older ones are discarded."
+          },
+          "change_count": {
+            "type": "number",
+            "description": "Total data changes received since subscribing, including any discarded by the buffer. An OPC UA server sends the node's current value as the first change, so this reaches 1 without the value having moved."
+          },
+          "changes": {
+            "type": "array",
+            "description": "The retained changes, oldest first, at most `buffer_size` of them. Each is a record of the shape defined by \"historyRecords\": { value, timestamp, status }."
+          }
+        },
+        "required": [
+          "subscription_id",
+          "node_id",
+          "publishing_interval",
+          "sampling_interval",
+          "buffer_size",
+          "change_count",
+          "changes"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "capabilities": {
@@ -37,6 +84,20 @@
       "check": "browseNonEmpty"
     }
   },
+  "resources": [
+    {
+      "$comment": "MCP resources both servers expose. A resource is re-readable state rather than an action, which is what makes it the right home for live subscription data: an agent can refresh it without spending a tool call. Change *notifications* are deliberately not sent — see docs/architecture.md.",
+      "uri": "opcua://subscriptions",
+      "name": "opcua_subscriptions",
+      "description": "Active OPC UA data-change subscriptions and the values buffered for each. Re-read after `subscribe_opcua_node` to see what has changed.",
+      "mimeType": "application/json",
+      "body": {
+        "$comment": "The document is a JSON object with one key, whose value is an array of records of the named result shape. The parity test reads the resource from both servers and checks it against this.",
+        "recordsKey": "subscriptions",
+        "resultShape": "subscriptionRecords"
+      }
+    }
+  ],
   "tools": [
     {
       "name": "read_opcua_node",
@@ -161,6 +222,60 @@
       }
     },
     {
+      "name": "subscribe_opcua_node",
+      "resultShape": "subscriptionRecords",
+      "capability": null,
+      "description": "Subscribe to data changes on a specific OPC UA node. The OPC UA server pushes each new value into a buffer this MCP server keeps; re-read it with `list_subscriptions` or the `opcua://subscriptions` resource instead of polling `read_opcua_node`",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The OPC UA node ID to monitor, in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=3'."
+          },
+          "publishing_interval": {
+            "type": "number",
+            "description": "How often (ms) the OPC UA server publishes queued changes. Default 1000. Clamped to at least 50."
+          },
+          "sampling_interval": {
+            "type": "number",
+            "description": "How often (ms) the OPC UA server samples the node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
+          },
+          "buffer_size": {
+            "type": "integer",
+            "description": "How many of the most recent changes to retain for this subscription; older ones are discarded. Default 20, clamped to 1..1000."
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "list_subscriptions",
+      "resultShape": "subscriptionRecords",
+      "capability": null,
+      "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "unsubscribe_opcua_node",
+      "capability": null,
+      "description": "Cancel an active OPC UA data-change subscription and discard its buffered changes",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "The subscription ID returned by `subscribe_opcua_node`, as listed by `list_subscriptions`. Example: 'sub-1'."
+          }
+        },
+        "required": ["subscription_id"]
+      }
+    },
+    {
       "name": "read_history_opcua_node",
       "resultShape": "historyRecords",
       "capability": "history",
@@ -181,7 +296,7 @@
             "description": "End of the retrieval"
           },
           "num_values": {
-            "type": "number",
+            "type": "integer",
             "description": "Number of values to read (default: unlimited)"
           }
         },

@@ -51,6 +51,50 @@ well-formed.
 in each runtime, and adding a test — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 You never edit a tool list by hand.
 
+The contract covers the **resource** surface too, under `resources`: a URI, name,
+description and mimeType, plus a `body` naming the `resultShape` its document
+carries. Both servers build their `resources/list` from that entry, and the
+parity test reads the resource from each and checks it against the shape.
+
+## Subscriptions: buffered, not pushed
+
+An MCP tool call is request/response, so an OPC UA subscription cannot answer its
+caller — the notifications arrive whenever the OPC UA server publishes, long
+after `subscribe_opcua_node` returned. Each runtime therefore owns the
+subscription and *buffers* what it delivers (`src/subscriptions.ts` /
+`subscriptions.py`), and the agent reads the accumulation back through
+`list_subscriptions` or the `opcua://subscriptions` resource.
+
+The buffer is a ring of `buffer_size` records with a `change_count` beside it, so
+an agent that looks away for a minute sees how much it missed rather than
+silently losing it. One OPC UA subscription per monitored node, which is what
+lets a single `unsubscribe_opcua_node` take the whole thing down rather than
+leaving an empty subscription behind.
+
+Teardown is not optional, and it is the part that is easy to get wrong: closing
+the OPC UA session without deleting its subscriptions leaves the server
+publishing into the void until their lifetime expires. Both runtimes delete
+first, session second — Python in the lifespan's `finally`, Node on `SIGINT`,
+`SIGTERM` *and* `server.onclose`, because the usual end of an MCP session is not
+a signal at all but the client closing stdin.
+
+### Why the subscriptions resource is polled, not pushed
+
+Issue #3 asked for `notifications/resources/updated`. It is not offered, on
+either runtime, because the two SDK generations no longer agree on what that
+means: `@modelcontextprotocol/sdk` 1.x speaks the `resources/subscribe` +
+`notifications/resources/updated` pair, while the Python `mcp` 2.x SDK removed
+`resources/subscribe` as of protocol 2026-07-28 in favour of
+`subscriptions/listen` streams, which the Node SDK does not serve. Under a
+current Python client the Python server's `notify_resource_updated` is dropped on
+the floor and the client sees nothing.
+
+Shipping the notification on one runtime only would break the interchangeability
+this repo is built around, so neither does it. The re-readable resource is the
+contract, on both; it is what the parity test enforces, and it is what
+`docs/examples.md` documents. If the SDKs converge, this becomes an additive
+change on top.
+
 ## Capability gating
 
 Some tools only make sense against servers that support them. Rather than
@@ -102,15 +146,16 @@ green, so both are built and driven over MCP in `tests/smoke/`. See
 ## Layout
 
 ```
-contract/tools.json          single source of truth for the tool surface
+contract/tools.json          single source of truth for the tool + resource surface
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
-                             · capabilities · aggregates · records · version
-                             · install · cli · server
+                             · capabilities · aggregates · records · subscriptions
+                             · version · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
-                             · connection · tools · install · index · sea
+                             · subscriptions · connection · tools · install
+                             · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)

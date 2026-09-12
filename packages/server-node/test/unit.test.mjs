@@ -33,6 +33,12 @@ import {
   securityWarnings,
   userIdentity,
 } from "../build/security.js";
+import {
+  SubscriptionManager,
+  resolveOptions,
+  terminateFailedMessage,
+  unknownSubscriptionMessage,
+} from "../build/subscriptions.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -497,6 +503,159 @@ describe("security wiring", () => {
 
   test("summarises the default connection", () => {
     assert.equal(describeSecurity(parseSecurity({})), "policy=None mode=None user=anonymous");
+  });
+});
+
+// The Python server resolves the same defaults in `resolve_options`, and its
+// unit suite pins the same numbers: they are reported back to the agent in every
+// subscription record, so a difference between the runtimes is visible drift.
+describe("subscription options", () => {
+  test("defaults an omitted request the way the contract documents", () => {
+    assert.deepEqual(resolveOptions({}), {
+      publishingInterval: 1000,
+      samplingInterval: 1000,
+      bufferSize: 20,
+    });
+  });
+
+  test("sampling_interval 0 means 'sample at the publishing interval'", () => {
+    assert.equal(resolveOptions({ publishingInterval: 250 }).samplingInterval, 250);
+    assert.equal(
+      resolveOptions({ publishingInterval: 250, samplingInterval: 0 }).samplingInterval,
+      250
+    );
+  });
+
+  test("keeps a sampling interval faster than the publishing one", () => {
+    const { publishingInterval, samplingInterval } = resolveOptions({
+      publishingInterval: 1000,
+      samplingInterval: 100,
+    });
+    assert.equal(publishingInterval, 1000);
+    assert.equal(samplingInterval, 100);
+  });
+
+  test("clamps a publishing interval nobody's OPC UA server would honour", () => {
+    assert.equal(resolveOptions({ publishingInterval: 0 }).publishingInterval, 50);
+    assert.equal(resolveOptions({ publishingInterval: -100 }).publishingInterval, 50);
+  });
+
+  test("clamps the buffer so one subscription cannot grow without bound", () => {
+    assert.equal(resolveOptions({ bufferSize: 0 }).bufferSize, 1);
+    assert.equal(resolveOptions({ bufferSize: 10_000 }).bufferSize, 1000);
+    assert.equal(resolveOptions({ bufferSize: 7.9 }).bufferSize, 7);
+  });
+
+  test("falls back on a non-number, which MCP arguments can always be", () => {
+    assert.deepEqual(resolveOptions({ publishingInterval: NaN, bufferSize: undefined }), {
+      publishingInterval: 1000,
+      samplingInterval: 1000,
+      bufferSize: 20,
+    });
+  });
+});
+
+describe("SubscriptionManager teardown", () => {
+  // A stand-in for node-opcua's ClientSubscription: `terminate` is the only part
+  // of it the teardown path touches.
+  function fakeSession(terminated) {
+    return {
+      async createSubscription2() {
+        const subscription = {
+          async terminate() {
+            terminated.push(subscription);
+          },
+          async monitor() {
+            return { on() {}, statusCode: StatusCodes.Good };
+          },
+        };
+        return subscription;
+      },
+    };
+  }
+
+  test("closeAll terminates every subscription and empties the list", async () => {
+    const terminated = [];
+    const manager = new SubscriptionManager();
+    await manager.subscribe(fakeSession(terminated), "ns=2;i=3");
+    await manager.subscribe(fakeSession(terminated), "ns=2;i=4");
+    assert.deepEqual(
+      manager.list().map((r) => r.subscription_id),
+      ["sub-1", "sub-2"]
+    );
+
+    await manager.closeAll();
+
+    assert.equal(terminated.length, 2);
+    assert.deepEqual(manager.list(), []);
+  });
+
+  test("unsubscribe terminates one and leaves the rest", async () => {
+    const terminated = [];
+    const manager = new SubscriptionManager();
+    await manager.subscribe(fakeSession(terminated), "ns=2;i=3");
+    await manager.subscribe(fakeSession(terminated), "ns=2;i=4");
+
+    const record = await manager.unsubscribe("sub-1");
+
+    assert.equal(record.node_id, "ns=2;i=3");
+    assert.equal(terminated.length, 1);
+    assert.deepEqual(
+      manager.list().map((r) => r.subscription_id),
+      ["sub-2"]
+    );
+  });
+
+  // The stand-in whose terminate always fails, used by the two tests below.
+  function refusingSession() {
+    return {
+      async createSubscription2() {
+        return {
+          async terminate() {
+            throw new Error("session closed");
+          },
+          async monitor() {
+            return { on() {}, statusCode: StatusCodes.Good };
+          },
+        };
+      },
+    };
+  }
+
+  // An explicit cancel reports what shutdown is right to swallow: the caller
+  // asked for something specific, did not fully get it, and no longer holds an
+  // ID to retry with. The Python server raises the same sentence.
+  test("unsubscribe surfaces a refused terminate", async () => {
+    const manager = new SubscriptionManager();
+    await manager.subscribe(refusingSession(), "ns=2;i=3");
+
+    await assert.rejects(() => manager.unsubscribe("sub-1"), {
+      message: terminateFailedMessage("sub-1", "session closed"),
+    });
+    assert.deepEqual(manager.list(), [], "the refused terminate left the entry behind");
+    assert.equal(
+      terminateFailedMessage("sub-1", "session closed"),
+      "Cancelled sub-1 here, but the OPC UA server did not accept the delete: session closed. " +
+        "It may keep publishing until the subscription's lifetime expires."
+    );
+  });
+
+  // Shutdown runs against an OPC UA server that has often already dropped the
+  // session, so a failing terminate must not turn a tidy exit into a crash.
+  test("closeAll survives a subscription that refuses to terminate", async () => {
+    const manager = new SubscriptionManager();
+    await manager.subscribe(refusingSession(), "ns=2;i=3");
+
+    await manager.closeAll();
+    assert.deepEqual(manager.list(), []);
+  });
+
+  test("an unknown id is refused with the wording shared with the Python server", async () => {
+    const manager = new SubscriptionManager();
+    await assert.rejects(() => manager.unsubscribe("sub-9"), {
+      message: unknownSubscriptionMessage("sub-9"),
+    });
+    assert.equal(unknownSubscriptionMessage("sub-9"), "No such subscription: sub-9");
   });
 });
 

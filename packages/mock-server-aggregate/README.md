@@ -2,7 +2,8 @@
 
 A small `node-opcua` server used by the end-to-end test suite to exercise
 `read_aggregate_opcua_node` on both MCP servers. Listens on **:4841**
-(`opc.tcp://localhost:4841/UA/Aggregate`).
+(`opc.tcp://localhost:4841/UA/Aggregate`) unless `AGGREGATE_MOCK_PORT` says
+otherwise — the test fixture always sets it to a free port of its own.
 
 ## Why a second mock
 
@@ -36,5 +37,6 @@ npm install
 npm start          # or: node server.mjs
 ```
 
-Override the port with `AGGREGATE_MOCK_PORT`. The test fixture reuses an
-instance already listening on :4841 and otherwise starts one for the session.
+Override the port with `AGGREGATE_MOCK_PORT`. The test fixture starts its own
+instance per session on an ephemeral port, so it never adopts — or is disturbed
+by — a server belonging to another checkout.

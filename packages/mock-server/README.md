@@ -64,7 +64,14 @@ A comprehensive mockup OPC UA server for industrial control systems, featuring r
 uv run opcua-mock-server
 ```
 
-The server will start on `opc.tcp://0.0.0.0:4840/freeopcua/server/`
+The server will start on `opc.tcp://0.0.0.0:4840/freeopcua/server/`. Pass
+`--endpoint` to listen elsewhere:
+
+```bash
+uv run opcua-mock-server --endpoint opc.tcp://127.0.0.1:14840/freeopcua/server/
+```
+
+The e2e suite uses this to give every test session a mock on a port of its own.
 
 ### Connecting with OPC UA Clients
 

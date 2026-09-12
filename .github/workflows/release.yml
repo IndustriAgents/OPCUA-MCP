@@ -19,6 +19,14 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# A tag push can be delivered more than once — v0.3.0 queued two identical runs a
+# second apart. Without a group they race: two `gh release create` calls, two
+# concurrent uploads of the same asset. Never cancel in progress, though; a
+# half-finished release upload is worse than a duplicate.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # The same gate publish.yml applies, for the same reason and with the same
   # wording. Without it the two workflows disagree about what a tag means: a
@@ -147,12 +155,25 @@ jobs:
           done
           test "$found" -eq 2 || { echo "::error::expected 2 executables, found $found"; exit 1; }
 
+      # Collect into one directory before uploading. `upload-artifact` keeps the
+      # common ancestor of its path patterns, so listing the two `dist`
+      # directories separately produced an artifact containing
+      # `server-node/dist/<binary>` rather than the binaries themselves — and the
+      # attach step below then tried to upload a *directory* as a release asset
+      # and failed. Staging flattens it and keeps the artifact shape obvious.
+      - name: Stage the executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          cp packages/server-node/dist/opcua-mcp-server-node-* staged/
+          cp packages/server-python/dist/opcua-mcp-server-python-* staged/
+          ls -l staged
+
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.os }}
-          path: |
-            packages/server-node/dist/opcua-mcp-server-node-*
-            packages/server-python/dist/opcua-mcp-server-python-*
+          path: staged/*
           if-no-files-found: error
 
   attach:
@@ -179,4 +200,16 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" artifacts/* --clobber
+
+          # Only regular files: `gh release upload` fails outright on a directory,
+          # and one bad entry aborts the whole upload, so a stray subdirectory
+          # takes every asset down with it — which is how v0.3.0 shipped with the
+          # bundle attached and none of the six executables.
+          mapfile -t assets < <(find artifacts -type f | sort)
+          test "${#assets[@]}" -eq 7 || {
+            echo "::error::expected 7 assets (1 bundle + 6 executables), found ${#assets[@]}"
+            printf '  %s\n' "${assets[@]}"
+            exit 1
+          }
+          printf 'uploading:\n'; printf '  %s\n' "${assets[@]}"
+          gh release upload "$TAG" "${assets[@]}" --clobber

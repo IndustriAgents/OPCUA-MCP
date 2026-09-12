@@ -13,6 +13,7 @@ Run as part of the normal suite:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -25,6 +26,9 @@ CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
 # so the contract tools applicable here are those with no capability + history.
 _MOCK_CAPS = {None, "history"}
 EXPECTED = {t["name"]: t for t in CONTRACT["tools"] if t["capability"] in _MOCK_CAPS}
+
+# Resources are not capability-gated: both servers advertise all of them always.
+EXPECTED_RESOURCES = {r["uri"]: r for r in CONTRACT["resources"]}
 
 RESULT_SHAPES = CONTRACT["resultShapes"]
 
@@ -146,3 +150,89 @@ async def test_history_result_matches_the_contract_shape(impl_params):
     records = records_of(result)
     assert records, f"{impl}: no history records to check the shape against"
     assert_matches_result_shape(records, spec["resultShape"], f"{impl}/read_history_opcua_node")
+
+
+async def test_servers_advertise_the_contract_resources(impl_params):
+    """Both servers must offer the same resources, worded the same.
+
+    A resource is as much a client-visible surface as a tool: an agent told to
+    re-read `opcua://subscriptions` has to find it under that URI, with that
+    description, whichever runtime it is talking to.
+    """
+    impl, params = impl_params
+    async with connect(params) as session:
+        listed = await session.list_resources()
+    advertised = {str(r.uri): r for r in listed.resources}
+
+    assert set(advertised) == set(EXPECTED_RESOURCES), (
+        f"{impl}: advertised resources diverge from contract; "
+        f"missing={set(EXPECTED_RESOURCES) - set(advertised)} "
+        f"extra={set(advertised) - set(EXPECTED_RESOURCES)}"
+    )
+
+    for uri, spec in EXPECTED_RESOURCES.items():
+        resource = advertised[uri]
+        assert resource.name == spec["name"], f"{impl}/{uri}: name differs from contract"
+        assert resource.description == spec["description"], (
+            f"{impl}/{uri}: description differs from contract"
+        )
+        assert resource.mime_type == spec["mimeType"], (
+            f"{impl}/{uri}: mimeType differs from contract"
+        )
+
+
+async def test_subscription_resource_matches_the_contract_shape(impl_params):
+    """Reading the resource must yield the shape the contract declares for it.
+
+    Checked with a live subscription, because an empty document would satisfy the
+    shape without ever exercising a record.
+    """
+    impl, params = impl_params
+    spec = EXPECTED_RESOURCES["opcua://subscriptions"]
+    body = spec["body"]
+
+    async with connect(params) as session:
+        created = await session.call_tool(
+            "subscribe_opcua_node",
+            {"node_id": NODE["Temperature"], "publishing_interval": 200, "buffer_size": 5},
+        )
+        assert not created.is_error, text_of(created)
+        await asyncio.sleep(2)
+        result = await session.read_resource(spec["uri"])
+
+    contents = result.contents
+    assert len(contents) == 1, f"{impl}: expected one content block, got {len(contents)}"
+    assert contents[0].mime_type == spec["mimeType"], f"{impl}: resource mimeType differs"
+
+    document = json.loads(contents[0].text)
+    assert set(document) == {body["recordsKey"]}, (
+        f"{impl}: resource document keys {sorted(document)} != [{body['recordsKey']!r}]"
+    )
+    records = document[body["recordsKey"]]
+    assert records, f"{impl}: the resource reported no subscriptions"
+    assert_matches_result_shape(records, body["resultShape"], f"{impl}/{spec['uri']}")
+    # The nested changes are history records, and the contract says so.
+    for record in records:
+        assert_matches_result_shape(
+            record["changes"], "historyRecords", f"{impl}/{spec['uri']}/changes"
+        )
+
+
+async def test_subscription_tools_match_the_contract_shape(impl_params):
+    """`subscribe_opcua_node` and `list_subscriptions` share one record shape."""
+    impl, params = impl_params
+    assert EXPECTED["subscribe_opcua_node"]["resultShape"] == "subscriptionRecords"
+    assert EXPECTED["list_subscriptions"]["resultShape"] == "subscriptionRecords"
+
+    async with connect(params) as session:
+        created = await session.call_tool(
+            "subscribe_opcua_node", {"node_id": NODE["Temperature"], "publishing_interval": 200}
+        )
+        assert not created.is_error, text_of(created)
+        listed = await session.call_tool("list_subscriptions", {})
+        assert not listed.is_error, text_of(listed)
+
+    for name, result in (("subscribe_opcua_node", created), ("list_subscriptions", listed)):
+        records = records_of(result)
+        assert records, f"{impl}/{name}: no subscription records to check the shape against"
+        assert_matches_result_shape(records, "subscriptionRecords", f"{impl}/{name}")

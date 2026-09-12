@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,10 +18,11 @@ from opcua.ua import NodeClass
 from .aggregates import validate_aggregate_function
 from .capabilities import server_aggregate_functions, server_supports_history
 from .config import SERVER_URL
-from .contract import DESC
+from .contract import DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import parse_iso_datetime
 from .records import history_records
 from .security import create_client, describe_security, security_config, security_warnings
+from .subscriptions import SUBSCRIPTIONS, unknown_subscription_message
 from .version import package_version
 
 
@@ -40,8 +42,13 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         # Connect to OPC UA server synchronously, wrapped in a thread for async compatibility
         await asyncio.to_thread(client.connect)
         print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
+        SUBSCRIPTIONS.attach(client)
         yield {"opcua_client": client}
     finally:
+        # Drop the data-change subscriptions before the session that carries
+        # them. Disconnecting first would leave the OPC UA server publishing to
+        # nobody until each subscription's lifetime expired.
+        await asyncio.to_thread(SUBSCRIPTIONS.close_all)
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(client.disconnect)
         print("Disconnected from OPC UA server", file=sys.stderr)
@@ -406,6 +413,111 @@ def write_multiple_opcua_nodes(nodes_to_write: list[dict[str, Any]], ctx: Contex
 
     except Exception as e:
         return f"Error writing multiple nodes: {e!s}"
+
+
+# --- Data-change subscriptions -------------------------------------------------
+# A tool call is request/response, so a subscription cannot answer its caller:
+# the notifications arrive whenever the OPC UA server publishes. The changes are
+# buffered instead (see subscriptions.py) and read back through
+# `list_subscriptions` or the `opcua://subscriptions` resource.
+#
+# Every OPC UA call here runs in a thread: python-opcua is synchronous, and
+# creating a subscription blocks on a round trip to the server.
+
+
+# Tool: Subscribe to data changes on an OPC UA node
+@mcp.tool(description=DESC["subscribe_opcua_node"])
+async def subscribe_opcua_node(
+    node_id: str,
+    publishing_interval: float = 1000,
+    sampling_interval: float = 0,
+    buffer_size: int = 20,
+) -> list[dict]:
+    """
+    Subscribe to data changes on a specific OPC UA node.
+
+    Parameters:
+        node_id (str): The OPC UA node ID to monitor, in the format
+                       'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=3'.
+        publishing_interval (float): How often (ms) the server publishes queued changes.
+        sampling_interval (float): How often (ms) the server samples the node;
+                                   0 means sample at `publishing_interval`.
+        buffer_size (int): How many of the most recent changes to retain.
+
+    Returns:
+        list[dict]: A single record for the new subscription, shaped by
+            `contract/tools.json` -> `resultShapes.subscriptionRecords`.
+    """
+    # `ToolError`, not a bare exception: the SDK forwards a ToolError's message
+    # to the client and withholds anything else as a crash. A bad node ID is the
+    # caller's to fix, so it has to reach them — worded as the Node server words it.
+    try:
+        record = await asyncio.to_thread(
+            SUBSCRIPTIONS.subscribe,
+            node_id,
+            publishing_interval,
+            sampling_interval,
+            buffer_size,
+        )
+    except Exception as e:
+        raise ToolError(f"Failed to subscribe to node {node_id}: {e!s}") from e
+    return [record]
+
+
+# Tool: List the active data-change subscriptions
+@mcp.tool(description=DESC["list_subscriptions"])
+def list_subscriptions() -> list[dict]:
+    """
+    List the active OPC UA data-change subscriptions and their buffered changes.
+
+    Returns:
+        list[dict]: One record per active subscription, shaped by
+            `contract/tools.json` -> `resultShapes.subscriptionRecords`. An empty
+            list when nothing is subscribed.
+    """
+    # No thread hop and no OPC UA call: this reads buffers already filled by
+    # python-opcua's publishing thread, so it answers even if the server is down.
+    return SUBSCRIPTIONS.list()
+
+
+# Tool: Cancel a data-change subscription
+@mcp.tool(description=DESC["unsubscribe_opcua_node"])
+async def unsubscribe_opcua_node(subscription_id: str) -> str:
+    """
+    Cancel an active OPC UA data-change subscription.
+
+    Parameters:
+        subscription_id (str): The ID returned by `subscribe_opcua_node`.
+
+    Returns:
+        str: A confirmation naming the node and how many changes it delivered.
+    """
+    try:
+        record = await asyncio.to_thread(SUBSCRIPTIONS.unsubscribe, subscription_id)
+    except KeyError as e:
+        # Both runtimes word an unknown ID identically; see subscriptions.py.
+        raise ToolError(unknown_subscription_message(subscription_id)) from e
+    return (
+        f"Unsubscribed {record['subscription_id']} from node {record['node_id']} "
+        f"after {record['change_count']} value changes"
+    )
+
+
+# Resource: the same subscription records, re-readable without a tool call.
+#
+# No `ctx: Context` parameter — MCPServer refuses to inject one into a static
+# resource — which is why the manager is module-level state rather than
+# something held in the lifespan context.
+@mcp.resource(
+    SUBSCRIPTIONS_RESOURCE["uri"],
+    name=SUBSCRIPTIONS_RESOURCE["name"],
+    description=SUBSCRIPTIONS_RESOURCE["description"],
+    mime_type=SUBSCRIPTIONS_RESOURCE["mimeType"],
+)
+def subscriptions_resource() -> str:
+    """The active subscriptions and their buffered changes, as a JSON document."""
+    key = SUBSCRIPTIONS_RESOURCE["body"]["recordsKey"]
+    return json.dumps({key: SUBSCRIPTIONS.list()}, indent=2)
 
 
 # Tool: Get all variables information

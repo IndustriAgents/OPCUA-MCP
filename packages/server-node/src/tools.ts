@@ -15,12 +15,13 @@ import {
   AggregateFunction,
   ClientSession,
 } from "node-opcua-client";
-import { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { OpcuaConnection } from "./connection.js";
 import { CONTRACT } from "./contract.js";
 import { toDate } from "./dates.js";
 import { toHistoryRecords } from "./records.js";
+import { SubscriptionManager, SubscriptionRecord } from "./subscriptions.js";
 
 /** A history/aggregate response: one text block per canonical record.
  *
@@ -30,8 +31,17 @@ import { toHistoryRecords } from "./records.js";
  * single array — the two servers' responses are then read the same way.
  */
 function historyResult(dataValues: DataValue[] | null | undefined) {
+  return recordBlocks(toHistoryRecords(dataValues));
+}
+
+/** The same framing for the subscription family (resultShapes.subscriptionRecords). */
+function subscriptionResult(records: SubscriptionRecord[]) {
+  return recordBlocks(records);
+}
+
+function recordBlocks(records: unknown[]) {
   return {
-    content: toHistoryRecords(dataValues).map((record) => ({
+    content: records.map((record) => ({
       type: "text",
       text: JSON.stringify(record, null, 2),
     })),
@@ -40,8 +50,19 @@ function historyResult(dataValues: DataValue[] | null | undefined) {
 
 export class OpcuaTools {
   private aggregateFunctions: string[] = [];
+  private readonly subs = new SubscriptionManager();
 
   constructor(private readonly conn: OpcuaConnection) {}
+
+  /** Tear down every OPC UA subscription this server created.
+   *
+   * Called before the session is closed, on every shutdown path. Closing the
+   * session alone would leave the OPC UA server publishing to nobody until the
+   * subscription's lifetime expired.
+   */
+  shutdown(): Promise<void> {
+    return this.subs.closeAll();
+  }
 
   // Delegations that keep the tool bodies below identical to their previous
   // form as methods of the old monolithic server class.
@@ -91,6 +112,38 @@ export class OpcuaTools {
       }) satisfies Tool[];
 
     return tools;
+  }
+
+  /** The advertised resource list: taken straight from the contract. */
+  listResources(): Resource[] {
+    return CONTRACT.resources.map((r) => ({
+      uri: r.uri,
+      name: r.name,
+      description: r.description,
+      mimeType: r.mimeType,
+    }));
+  }
+
+  /** Serve a resources/read request.
+   *
+   * Deliberately does not touch the OPC UA server: this reports what the
+   * subscriptions have already delivered, so it stays readable — and honest —
+   * even while the connection is down.
+   */
+  readResource(uri: string) {
+    const resource = CONTRACT.resources.find((r) => r.uri === uri);
+    if (!resource) {
+      throw new Error(`Unknown resource: ${uri}`);
+    }
+    return {
+      contents: [
+        {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: JSON.stringify({ [resource.body.recordsKey]: this.subs.list() }, null, 2),
+        },
+      ],
+    };
   }
 
   /** Dispatch a tools/call request by name. */
@@ -145,6 +198,21 @@ export class OpcuaTools {
         case "get_all_variables":
           return await this.getAllVariables();
 
+        case "subscribe_opcua_node":
+          return subscriptionResult([
+            await this.subs.subscribe(this.requireSession(), args?.node_id as string, {
+              publishingInterval: args?.publishing_interval as number | undefined,
+              samplingInterval: args?.sampling_interval as number | undefined,
+              bufferSize: args?.buffer_size as number | undefined,
+            }),
+          ]);
+
+        case "list_subscriptions":
+          return subscriptionResult(this.subs.list());
+
+        case "unsubscribe_opcua_node":
+          return await this.unsubscribeOpcuaNode(args?.subscription_id as string);
+
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -158,6 +226,27 @@ export class OpcuaTools {
         ],
       };
     }
+  }
+
+  private requireSession(): ClientSession {
+    if (!this.session) {
+      throw new Error("No OPC UA session available");
+    }
+    return this.session;
+  }
+
+  private async unsubscribeOpcuaNode(subscriptionId: string) {
+    const record = await this.subs.unsubscribe(subscriptionId);
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Unsubscribed ${record.subscription_id} from node ${record.node_id} ` +
+            `after ${record.change_count} value changes`,
+        },
+      ],
+    };
   }
 
   private async readOpcuaNode(nodeId: string) {

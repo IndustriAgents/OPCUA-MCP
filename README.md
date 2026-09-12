@@ -97,7 +97,7 @@ All four routes, and what to do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same nine tools, defined once in
+Both servers expose the same twelve tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |
@@ -109,6 +109,9 @@ Both servers expose the same nine tools, defined once in
 | `browse_opcua_node_children` | List a node's children |
 | `call_opcua_method` | Invoke a method on an object node |
 | `get_all_variables` | Inventory every variable in the address space |
+| `subscribe_opcua_node` | Watch a node for data changes instead of polling it |
+| `list_subscriptions` | The active subscriptions, each with its buffered changes |
+| `unsubscribe_opcua_node` | Cancel one subscription |
 | `read_history_opcua_node` † | Read historical, timestamped values |
 | `read_aggregate_opcua_node` † | Server-computed aggregates (Average, Min, Max, …) |
 
@@ -116,6 +119,9 @@ Both servers expose the same nine tools, defined once in
 support — history via `AccessHistoryDataCapability`, aggregates via a non-empty
 `AggregateFunctions` folder. Against a server without them, the tools are simply
 not offered rather than failing at call time.
+
+Both servers also expose one **resource**, `opcua://subscriptions`: the same
+records `list_subscriptions` returns, re-readable without spending a tool call.
 
 Full per-tool reference with inputs, outputs and a node-ID map:
 **[docs/examples.md](docs/examples.md)**.
@@ -130,6 +136,7 @@ Once configured, you can ask in plain language:
 - *"What was the temperature over the last hour?"*
 - *"Start production on line 1 at 100 units/hour"*
 - *"Give me the hourly average temperature for today"*
+- *"Watch the tank level and tell me what it does over the next minute"*
 
 Real responses from the bundled mock plant, via the published package:
 
@@ -154,6 +161,15 @@ get_all_variables
 read_history_opcua_node  node_id="ns=2;i=3"  num_values=2
 → { "value": 24.231991377989036, "timestamp": "2026-09-10T13:15:12.214Z", "status": "Good" }
   { "value": 26.089859958260515, "timestamp": "2026-09-10T13:15:11.208Z", "status": "Good" }
+
+subscribe_opcua_node  node_id="ns=2;i=3"  publishing_interval=500
+→ { "subscription_id": "sub-1", "node_id": "ns=2;i=3", "publishing_interval": 500,
+    "sampling_interval": 500, "buffer_size": 20, "change_count": 0, "changes": [] }
+
+list_subscriptions            # a few seconds later
+→ { "subscription_id": "sub-1", …, "change_count": 4, "changes": [
+      { "value": 25.33, "timestamp": "2026-09-10T13:15:11.478Z", "status": "Good" },
+      { "value": 26.05, "timestamp": "2026-09-10T13:15:12.481Z", "status": "Good" }, … ] }
 ```
 
 Both runtimes return that same record shape — one record per historical value —

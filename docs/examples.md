@@ -199,10 +199,102 @@ record per interval:
 
 ---
 
-## Events & alarms (added for issue #4)
+## Data-change subscriptions
 
-These four are never hidden: any OPC UA server has a Server object that events
-are raised from, and a server that raises none simply has none to hand over.
+Added for issue #3. Available on both servers, against any OPC UA server —
+unlike history and aggregates, these are not capability-gated.
+
+An MCP tool call is request/response, so a subscription cannot call the agent
+back: the OPC UA notifications arrive whenever the server decides to publish,
+long after `subscribe_opcua_node` has returned. So the MCP server **buffers**
+them. You subscribe once, then read the accumulated values back whenever you
+like — from `list_subscriptions` or from the `opcua://subscriptions` resource.
+
+### `subscribe_opcua_node`
+Start watching a node.
+```json
+{ "node_id": "ns=2;i=3", "publishing_interval": 500,
+  "sampling_interval": 0, "buffer_size": 20 }
+```
+```json
+{ "subscription_id": "sub-1", "node_id": "ns=2;i=3",
+  "publishing_interval": 500, "sampling_interval": 500,
+  "buffer_size": 20, "change_count": 0, "changes": [] }
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `node_id` | — | The node to monitor. |
+| `publishing_interval` | `1000` | How often (ms) the OPC UA server publishes queued changes. Clamped to at least 50. |
+| `sampling_interval` | `0` | How often (ms) it samples the node. `0` means "sample at `publishing_interval`", and the record reports the rate actually in force. A shorter interval queues several readings per publish. |
+| `buffer_size` | `20` | How many of the most recent changes to retain. Clamped to 1..1000; older changes are discarded. |
+
+> An OPC UA server sends the node's **current value** as the first change, so
+> `change_count` reaches 1 without the value having moved.
+> Prompt: *"Watch the temperature sensor."*
+
+### `list_subscriptions`
+Every active subscription and what it has collected since.
+```json
+{}
+```
+```json
+{ "subscription_id": "sub-1", "node_id": "ns=2;i=3",
+  "publishing_interval": 500, "sampling_interval": 500,
+  "buffer_size": 20, "change_count": 4,
+  "changes": [
+    { "value": 25.33, "timestamp": "2026-09-12T08:24:11.478Z", "status": "Good" },
+    { "value": 26.05, "timestamp": "2026-09-12T08:24:12.481Z", "status": "Good" },
+    { "value": 24.23, "timestamp": "2026-09-12T08:24:13.484Z", "status": "Good" },
+    { "value": 24.75, "timestamp": "2026-09-12T08:24:14.486Z", "status": "Good" } ] }
+```
+
+One record per subscription, one content block each — the same framing as
+`read_history_opcua_node`, and each entry of `changes` is a `historyRecords`
+record. `change_count` counts every change received; `changes` holds only the
+newest `buffer_size` of them.
+
+> Prompt: *"What has the temperature done since I asked you to watch it?"*
+
+### `unsubscribe_opcua_node`
+Cancel one subscription and discard its buffer.
+```json
+{ "subscription_id": "sub-1" }
+```
+```
+Unsubscribed sub-1 from node ns=2;i=3 after 4 value changes
+```
+An ID that is not active is refused identically by both servers:
+```
+Error: No such subscription: sub-9
+```
+
+> Subscriptions do not outlive the MCP session. Both servers tear every one of
+> them down before closing the OPC UA session, so a client that reconnects
+> starts from none.
+
+### Resource: `opcua://subscriptions`
+The same records, re-readable without spending a tool call. `mimeType` is
+`application/json`, and the document has one key:
+```json
+{ "subscriptions": [
+  { "subscription_id": "sub-1", "node_id": "ns=2;i=3", "publishing_interval": 500,
+    "sampling_interval": 500, "buffer_size": 20, "change_count": 4,
+    "changes": [ { "value": 25.33, "timestamp": "2026-09-12T08:24:11.478Z", "status": "Good" } ] } ] }
+```
+
+Neither server sends `notifications/resources/updated`, and neither advertises
+`resources.subscribe` — the agent re-reads. See
+[architecture.md](architecture.md#why-the-subscriptions-resource-is-polled-not-pushed)
+for why.
+
+---
+
+## Events & alarms
+
+Added for issue #4, and not capability-gated either: any OPC UA server has a
+Server object that events are raised from, and one that raises none simply has
+none to hand over. Alarms are the same machinery with a condition attached.
 
 ### `subscribe_events`
 Start collecting events. Returns immediately — the subscription runs in the

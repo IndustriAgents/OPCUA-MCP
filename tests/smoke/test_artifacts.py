@@ -54,6 +54,13 @@ CORE_TOOLS = {
     "write_multiple_opcua_nodes",
     "call_opcua_method",
     "get_all_variables",
+    "subscribe_opcua_node",
+    "list_subscriptions",
+    "unsubscribe_opcua_node",
+    "subscribe_events",
+    "read_events",
+    "list_active_alarms",
+    "acknowledge_alarm",
 }
 
 

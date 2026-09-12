@@ -2,7 +2,12 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { realpathSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -35,25 +40,44 @@ class OPCUAMCPServer {
       {
         capabilities: {
           tools: {},
+          // Read-only: the agent re-reads `opcua://subscriptions` to see what
+          // the OPC UA subscriptions have delivered. `subscribe` is deliberately
+          // absent — see docs/architecture.md for why change notifications are
+          // not offered on either runtime.
+          resources: {},
         },
       }
     );
 
     this.setupToolHandlers();
+    this.setupResourceHandlers();
     this.setupLifecycle();
   }
 
   private setupLifecycle() {
     // Handle shutdown gracefully
     process.on("SIGINT", async () => {
-      await this.conn.disconnect();
+      await this.shutdown();
       process.exit(0);
     });
 
     process.on("SIGTERM", async () => {
-      await this.conn.disconnect();
+      await this.shutdown();
       process.exit(0);
     });
+
+    // The usual end of an MCP session is not a signal at all: the client closes
+    // stdin and the transport goes with it. Without this, every subscription
+    // would be left for the OPC UA server to expire on its own.
+    this.server.onclose = () => {
+      void this.shutdown();
+    };
+  }
+
+  /** Drop the OPC UA subscriptions, then the session. In that order. */
+  private async shutdown() {
+    await this.tools.shutdown();
+    await this.conn.disconnect();
   }
 
   private setupToolHandlers() {
@@ -63,6 +87,16 @@ class OPCUAMCPServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) =>
       this.tools.callTool(request)
+    );
+  }
+
+  private setupResourceHandlers() {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+      resources: this.tools.listResources(),
+    }));
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
+      this.tools.readResource(request.params.uri)
     );
   }
 

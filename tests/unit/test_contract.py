@@ -18,11 +18,13 @@ from opcua_mcp_server.contract import contract_candidates, load_contract
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
 TOOLS = CONTRACT["tools"]
 CAPABILITIES = CONTRACT["capabilities"]
+RESOURCES = CONTRACT["resources"]
 RESULT_SHAPES = {k: v for k, v in CONTRACT["resultShapes"].items() if not k.startswith("$")}
 EVENTS = CONTRACT["events"]
 EVENT_FIELDS = EVENTS["fields"]
 TOOL_IDS = [t["name"] for t in TOOLS]
 EVENT_TOOL_NAMES = {"subscribe_events", "read_events", "list_active_alarms", "acknowledge_alarm"}
+RESOURCE_IDS = [r["uri"] for r in RESOURCES]
 SHAPE_IDS = sorted(RESULT_SHAPES)
 
 
@@ -90,9 +92,10 @@ def test_result_shape_is_declared(tool):
 @pytest.mark.parametrize("name", SHAPE_IDS, ids=SHAPE_IDS)
 def test_result_shape_is_referenced(name):
     """An unreferenced shape binds nothing and would silently stop being checked."""
-    assert any(tool.get("resultShape") == name for tool in TOOLS), (
-        f"resultShape {name!r} is defined but no tool declares it"
+    referenced = any(tool.get("resultShape") == name for tool in TOOLS) or any(
+        resource["body"]["resultShape"] == name for resource in RESOURCES
     )
+    assert referenced, f"resultShape {name!r} is defined but nothing declares it"
 
 
 @pytest.mark.parametrize("name", SHAPE_IDS, ids=SHAPE_IDS)
@@ -183,6 +186,42 @@ def test_the_history_family_shares_one_result_shape():
         "read_history_opcua_node": "historyRecords",
         "read_aggregate_opcua_node": "historyRecords",
     }
+
+
+# --- resources -----------------------------------------------------------------
+# Resources carry the live subscription buffers. They are held to the contract
+# for the same reason the tools are: a client that has learned one runtime's
+# resource surface must find the other's identical.
+
+
+def test_resource_uris_are_unique():
+    assert len(RESOURCE_IDS) == len(set(RESOURCE_IDS)), "duplicate resource URI in the contract"
+
+
+@pytest.mark.parametrize("resource", RESOURCES, ids=RESOURCE_IDS)
+def test_resource_has_required_fields(resource):
+    for field in ("uri", "name", "description", "mimeType", "body"):
+        assert resource.get(field), f"{resource.get('uri')} is missing {field!r}"
+
+
+@pytest.mark.parametrize("resource", RESOURCES, ids=RESOURCE_IDS)
+def test_resource_body_names_a_declared_shape(resource):
+    """The parity test reads the resource and checks it against this shape."""
+    body = resource["body"]
+    assert body["recordsKey"].strip(), f"{resource['uri']} declares no recordsKey"
+    assert body["resultShape"] in RESULT_SHAPES, (
+        f"{resource['uri']} declares unknown resultShape "
+        f"{body['resultShape']!r}; known: {SHAPE_IDS}"
+    )
+
+
+def test_the_python_server_sources_the_resource_surface_from_the_contract():
+    """The Python server must not carry its own copy of a URI or description."""
+    from opcua_mcp_server import RESOURCES as PY_RESOURCES
+
+    assert set(PY_RESOURCES) == set(RESOURCE_IDS)
+    for resource in RESOURCES:
+        assert PY_RESOURCES[resource["uri"]] == resource
 
 
 # --- where the Python server looks for the contract ----------------------------

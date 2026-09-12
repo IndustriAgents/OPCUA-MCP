@@ -25,7 +25,7 @@ Thanks for your interest in contributing! This repo provides **two MCP servers**
 AI assistant / MCP client  ──stdio──►  MCP server (Python OR Node)  ──OPC UA/TCP──►  mock server :4840
 ```
 
-The two MCP servers share a single tool contract ([`contract/tools.json`](contract/tools.json)): the Node server builds its `tools/list` from it and the Python server reads descriptions and capability node IDs from it, so they cannot drift (`tests/test_contract_parity.py` enforces this).
+The two MCP servers share a single tool contract ([`contract/tools.json`](contract/tools.json)): the Node server builds its `tools/list` from it and the Python server reads descriptions and capability node IDs from it, so they cannot drift (`tests/e2e/test_contract_parity.py` enforces this). The same file defines the **resource** surface, under `resources` — both servers build their `resources/list` from it.
 
 ## Prerequisites
 
@@ -99,6 +99,14 @@ The tool surface is defined once in [`contract/tools.json`](contract/tools.json)
 3. **Python** (`packages/server-python/src/opcua_mcp_server/server.py`): add a function decorated with `@mcp.tool(description=_DESC["foo"])`, with typed args (`MCPServer` derives the input schema from them — keep it matching the contract) and `ctx: Context`. For a capability-gated tool, register it conditionally like `read_history_opcua_node`.
 4. **Test**: add an end-to-end test in `tests/e2e/test_mcp_e2e.py` (it runs against both servers). The contract-parity test will automatically check that both servers advertise the new tool with the contract's description and parameters; if the tool declares a `resultShape`, assert the returned records against it with `assert_matches_result_shape`.
 5. **Document it** in `docs/examples.md` (the central per-tool reference).
+
+Adding a **resource** follows the same path through the `resources` key: a `uri`,
+`name`, `description` and `mimeType`, plus a `body` naming the `resultShape` its
+document carries and the key it sits under. Node serves it from `listResources` /
+`readResource` in `src/tools.ts`; Python registers it with `@mcp.resource` in
+`server.py`, and note that `MCPServer` refuses to inject a `Context` into a
+*static* resource — which is why the subscription manager is module-level state
+rather than something held in the lifespan context.
 
 ## Code style
 

@@ -216,6 +216,19 @@ export class EventSubscriptions {
     }
   }
 
+  /** Tear every event subscription down — the shutdown path.
+   *
+   * Same rule as the data-change subscriptions in `subscriptions.ts`: an OPC UA
+   * server left holding a subscription this process has forgotten keeps
+   * publishing into the void until its lifetime expires, so they go before the
+   * session does.
+   */
+  async closeAll(): Promise<void> {
+    for (const nodeId of [...this.buffers.keys()]) {
+      await this.drop(nodeId);
+    }
+  }
+
   /** The buffer for `nodeId`, provided it belongs to the current session.
    *
    * A subscription lives on the session that created it. After a reconnect the

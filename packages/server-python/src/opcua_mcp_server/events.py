@@ -177,6 +177,19 @@ class EventSubscriptions:
         self.remember(records)
         return records, remaining, dropped
 
+    def close_all(self) -> None:
+        """Tear every event subscription down — the shutdown path.
+
+        Same rule as the data-change subscriptions in ``subscriptions.py``: an
+        OPC UA server left holding a subscription this process has forgotten
+        keeps publishing into the void until its lifetime expires, so they go
+        before the session does.
+        """
+        with self._lock:
+            node_ids = list(self._subscriptions)
+        for node_id in node_ids:
+            self.drop(node_id)
+
     def drop(self, node_id: str) -> None:
         """Tear down the subscription for ``node_id``, if there is one."""
         with self._lock:

@@ -20,6 +20,7 @@ being declared once is that neither runtime can drift from it.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from conftest import ALARM_TEMPERATURE_NODE_ID
@@ -164,6 +165,52 @@ async def test_reading_without_subscribing_says_so(server):
         result = await session.call_tool("read_events", {"node_id": NODE["Methods"]})
     expected = f"Not subscribed to events from node {NODE['Methods']}. Call subscribe_events first."
     assert expected in text_of(result), f"{impl}: got {text_of(result)!r}"
+
+
+async def test_an_overflowing_buffer_tells_the_caller_what_it_lost(server):
+    """A lost alarm must not read as quiet — the notice comes back to the caller.
+
+    Only stderr carried this at first, which an MCP client never shows: an agent
+    could not tell a complete event stream from one that dropped events during a
+    burst. Both runtimes now append the same sentence to the response.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        # A buffer of one, then two events: the first is dropped by the second.
+        await session.call_tool("subscribe_events", {"buffer_size": 1})
+        try:
+            await _trigger_alarm(session)
+            await _reset_plant(session)
+            result = await session.call_tool("read_events", {})
+        finally:
+            await _reset_plant(session)
+
+    assert not result.is_error, text_of(result)
+    blocks = [b.text for b in result.content]
+    assert len(blocks) == 2, f"{impl}: expected one event and one notice, got {blocks}"
+    assert json.loads(blocks[0])["severity"] is not None, "the surviving event comes first"
+    assert blocks[1] == (
+        "Note: 1 older event(s) were dropped before this read — the buffer of 1 "
+        "filled up. Raise buffer_size or read more often."
+    ), f"{impl}: got {blocks[1]!r}"
+
+
+async def test_a_refresh_that_never_finishes_is_an_error(alarm_server):
+    """A partial ConditionRefresh must not be handed over as if it were complete.
+
+    Timing out used to resolve exactly as a RefreshEnd did, so a slow server — or
+    a short `timeout_seconds` — turned "I could not finish asking" into "no
+    alarms", which is the one answer this tool must never invent. A zero timeout
+    against a server that *does* have a retained alarm pins the distinction:
+    the refresh is accepted, nothing arrives in time, and the caller is told so.
+    """
+    impl, params = alarm_server
+    async with connect(params) as session:
+        result = await session.call_tool("list_active_alarms", {"timeout_seconds": 0})
+
+    message = text_of(result)
+    assert "ConditionRefresh did not finish within 0" in message, f"{impl}: got {message!r}"
+    assert "Retry with a larger timeout_seconds" in message, f"{impl}: got {message!r}"
 
 
 async def test_a_server_without_conditions_says_so(server):

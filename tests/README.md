@@ -70,6 +70,8 @@ Every test runs against **both** server implementations.
 | `test_lists_and_acknowledges_a_real_alarm` | Against the alarms mock: list a retained, unacknowledged condition and acknowledge it by `event_id` |
 | `test_an_unknown_event_id_cannot_be_acknowledged` | An `event_id` the server never reported has no condition to act on |
 | `test_condition_events_reach_the_buffer_too` | A condition is an event: `read_events` sees it, with its condition fields filled in |
+| `test_an_overflowing_buffer_tells_the_caller_what_it_lost` | A dropped event is reported in the response, not only on stderr |
+| `test_a_refresh_that_never_finishes_is_an_error` | A ConditionRefresh that times out fails rather than returning a partial list |
 | `test_refuses_to_start_without_the_certificate_the_policy_needs` | A security policy with no certificate exits with the same `Configuration error: …` on both runtimes |
 | `test_reads_and_writes_over_a_secured_connection` | Read/write work over Basic256Sha256, in `Sign` and in `SignAndEncrypt` |
 | `test_the_password_never_reaches_the_logs` | `OPCUA_PASSWORD` appears nowhere in the server's stderr |

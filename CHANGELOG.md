@@ -95,6 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported came from. `condition_id` can still be passed for an event from
   elsewhere.
 
+  Two things it will not do quietly. A ConditionRefresh that does not finish
+  within `timeout_seconds` is an error rather than a short list — a partial
+  answer cannot be told apart from "no alarms", and inventing that one is the
+  failure this tool must not have. And when the event buffer overflows between
+  reads, `read_events` says how many it lost in the response itself rather than
+  only on stderr, which an MCP client never shows: an agent that cannot tell a
+  complete event stream from a truncated one reads a burst of alarms as quiet.
+
   The tools are **not** capability-gated, unlike history and aggregates: every
   OPC UA server has a Server object with an EventNotifier, and one that raises
   nothing simply buffers nothing. A server without A&C is told apart at call time

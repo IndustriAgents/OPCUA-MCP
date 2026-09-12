@@ -327,7 +327,9 @@ One content block per event:
   "active": null, "acked": null, "retain": null }
 ```
 Every field is present on every event; the condition fields are `null` for a
-plain event like this one. The mock raises exactly this when its alarm state
+plain event like this one. If the buffer overflowed since the last read, one
+last block — prose, not a record — says how many events were lost and what to
+raise. The mock raises exactly this when its alarm state
 changes — write `true` to `ns=2;i=25` to see it, and to `ns=2;i=26` to clear it.
 > Prompt: *"Anything happen since we last looked?"*
 
@@ -346,6 +348,9 @@ ConditionRefresh.
   "condition_id": "ns=1;i=1002", "condition_name": "HighTemperatureAlarm",
   "active": true, "acked": false, "retain": true }
 ```
+If the server does not finish within `timeout_seconds`, that is an error too,
+not a short list: a partial answer cannot be told apart from "no alarms".
+
 Against a server with no Alarms & Conditions support — the bundled mock included
 — this says so rather than returning an empty list:
 ```

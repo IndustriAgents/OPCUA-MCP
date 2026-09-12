@@ -670,7 +670,7 @@ def subscribe_events(
 def read_events(
     node_id: str = events.DEFAULT_NOTIFIER,
     limit: int = events.DEFAULTS["readLimit"],
-) -> list[dict]:
+) -> list[dict | str]:
     """
     Read and drain the events buffered by subscribe_events.
 
@@ -679,21 +679,23 @@ def read_events(
         limit (int): Maximum number of events to return.
 
     Returns:
-        list[dict]: One record per event, oldest first, shaped by the shared
-            ``resultShapes.eventRecords`` in ``contract/tools.json``.
+        list[dict | str]: One record per event, oldest first, shaped by the
+            shared ``resultShapes.eventRecords`` in ``contract/tools.json``,
+            followed by a plain-text notice when the buffer overflowed.
     """
     drained = _EVENTS.drain(node_id, limit or events.DEFAULTS["readLimit"])
     if drained is None:
         raise ToolError(
             f"Not subscribed to events from node {node_id}. Call subscribe_events first."
         )
-    records, _remaining, dropped = drained
+    records, _remaining, dropped, size = drained
     if dropped:
-        # stderr: stdout is the MCP stdio transport.
-        print(
-            f"Event buffer for {node_id} overflowed; {dropped} of the oldest events were dropped",
-            file=sys.stderr,
-        )
+        # In the response, not only on stderr: an agent that cannot tell a
+        # complete event stream from one that lost alarms reads the gap as quiet.
+        # A bare string in the returned list becomes a plain text block, which is
+        # exactly what the Node server appends — the notice reads the same on
+        # both, and neither dresses it up as a record.
+        return [*records, events.dropped_events_message(dropped, size)]
     return records
 
 

@@ -26,6 +26,7 @@ import {
   EventRecord,
   EventSubscriptions,
   acknowledgeAlarm,
+  droppedEventsMessage,
   listActiveAlarms,
 } from "./events.js";
 import { toHistoryRecords } from "./records.js";
@@ -698,12 +699,16 @@ export class OpcuaTools {
     if (drained === null) {
       throw new Error(`Not subscribed to events from node ${nodeId}. Call subscribe_events first.`);
     }
+    const result = eventResult(drained.records);
     if (drained.dropped > 0) {
-      console.error(
-        `Event buffer for ${nodeId} overflowed; ${drained.dropped} of the oldest events were dropped`
-      );
+      // In the response, not only on stderr: an agent that cannot tell a
+      // complete event stream from one that lost alarms reads the gap as quiet.
+      result.content.push({
+        type: "text",
+        text: droppedEventsMessage(drained.dropped, drained.size),
+      });
     }
-    return eventResult(drained.records);
+    return result;
   }
 
   private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {

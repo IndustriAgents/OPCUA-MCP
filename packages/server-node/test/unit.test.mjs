@@ -26,7 +26,13 @@ import {
 } from "node-opcua-client";
 
 import { toDate } from "../build/dates.js";
-import { EVENT_DEFAULTS, eventSelectClauses, toEventRecord } from "../build/events.js";
+import {
+  EVENT_DEFAULTS,
+  droppedEventsMessage,
+  eventSelectClauses,
+  refreshTimedOutMessage,
+  toEventRecord,
+} from "../build/events.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "../build/records.js";
 import {
   clientSecurityOptions,
@@ -756,6 +762,24 @@ describe("event records", () => {
     assert.equal(record.event_type, "ns=0;i=2041");
     assert.equal(record.condition_id, null);
     assert.equal(record.acked, null);
+  });
+
+  // Both sentences are asserted verbatim in tests/unit/test_events.py too, so
+  // neither runtime can drift into wording the other does not use.
+  test("an unfinished ConditionRefresh is worded the way Python words it", () => {
+    assert.equal(
+      refreshTimedOutMessage(5, 2),
+      "ConditionRefresh did not finish within 5s: the server sent 2 condition(s) " +
+        "but no RefreshEnd, so there may be more. Retry with a larger timeout_seconds."
+    );
+  });
+
+  test("a dropped-event notice is worded the way Python words it", () => {
+    assert.equal(
+      droppedEventsMessage(1, 2),
+      "Note: 1 older event(s) were dropped before this read — the buffer of 2 " +
+        "filled up. Raise buffer_size or read more often."
+    );
   });
 
   test("the defaults are the ones the contract promises", () => {

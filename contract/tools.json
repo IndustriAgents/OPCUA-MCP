@@ -72,7 +72,7 @@
       }
     },
     "eventRecords": {
-      "$comment": "Returned as one MCP text content block per event, each block the JSON object described by \"items\". No events is zero blocks. The Python server additionally returns the array as structured content. Every field is present on every record; a field the event does not carry — the condition fields of a plain BaseEventType, say — is null. The field order and the OPC UA browse paths behind it are \"events.fields\" below, which is what both servers build their EventFilter select clauses from.",
+      "$comment": "Returned as one MCP text content block per event, each block the JSON object described by \"items\". No events is zero blocks. `read_events` appends one further block, plain prose rather than a record, when its buffer overflowed since the last read — losing events silently would let an agent read a burst of alarms as quiet. The Python server additionally returns the array as structured content. Every field is present on every record; a field the event does not carry — the condition fields of a plain BaseEventType, say — is null. The field order and the OPC UA browse paths behind it are \"events.fields\" below, which is what both servers build their EventFilter select clauses from.",
       "type": "array",
       "items": {
         "type": "object",
@@ -405,7 +405,7 @@
       "name": "read_events",
       "resultShape": "eventRecords",
       "capability": null,
-      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since",
+      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, a note saying how many events were lost follows them",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -425,7 +425,7 @@
       "name": "list_active_alarms",
       "resultShape": "eventRecords",
       "capability": null,
-      "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the server's own current set and needs no prior subscription",
+      "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the server's own current set and needs no prior subscription. Fails rather than answering with a partial list if the server does not finish within timeout_seconds",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -435,7 +435,7 @@
           },
           "timeout_seconds": {
             "type": "number",
-            "description": "How long to wait for the server to finish sending its retained conditions (default 5)."
+            "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
           }
         },
         "required": []

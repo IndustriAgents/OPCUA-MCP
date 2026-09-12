@@ -19,8 +19,10 @@ from opcua_mcp_server.events import (
     DEFAULTS,
     EventSubscriptions,
     _BufferingHandler,
+    dropped_events_message,
     event_filter,
     event_record,
+    refresh_timed_out_message,
 )
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
@@ -182,6 +184,31 @@ def test_condition_refresh_markers_never_reach_the_buffer(marker):
     marker_type = ua.Variant(ua.NodeId.from_string(EVENTS[marker]), ua.VariantType.NodeId)
     handler.event_notification(alarm_event(event_type=marker_type))
     assert handler.drain(10)[0] == []
+
+
+def test_a_full_buffer_reports_its_own_size_in_the_notice():
+    """The caller is told what to raise, not just that something was lost."""
+    handler = _BufferingHandler(severity_min=0, size=2)
+    assert handler.size == 2
+    for severity in (100, 200, 300):
+        handler.event_notification(alarm_event(severity=severity))
+    _kept, _remaining, dropped = handler.drain(10)
+    assert dropped_events_message(dropped, handler.size) == (
+        "Note: 1 older event(s) were dropped before this read — the buffer of 2 "
+        "filled up. Raise buffer_size or read more often."
+    )
+
+
+# --- the wording both runtimes share ---------------------------------------------
+# Asserted here and in packages/server-node/test/unit.test.mjs against the same
+# sentence, so neither runtime can drift into wording the other does not use.
+
+
+def test_an_unfinished_refresh_is_worded_the_way_node_words_it():
+    assert refresh_timed_out_message(5, 2) == (
+        "ConditionRefresh did not finish within 5s: the server sent 2 condition(s) "
+        "but no RefreshEnd, so there may be more. Retry with a larger timeout_seconds."
+    )
 
 
 # --- the event_id -> condition memory --------------------------------------------

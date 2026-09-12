@@ -38,6 +38,35 @@ export const EVENT_DEFAULTS = EVENTS.defaults;
 /** One event as the canonical record (contract -> resultShapes.eventRecords). */
 export type EventRecord = Record<string, unknown>;
 
+/** The message both runtimes give when a ConditionRefresh does not finish.
+ *
+ * Said out loud rather than swallowed. The server answers a refresh with a
+ * RefreshEnd event, and without one there is no way to know whether the
+ * conditions collected so far are all of them — returning them as if they were
+ * would let `list_active_alarms` quietly under-report retained alarms, which in
+ * an industrial setting is the one failure this tool must not have.
+ */
+export function refreshTimedOutMessage(timeoutSeconds: number, collected: number): string {
+  return (
+    `ConditionRefresh did not finish within ${timeoutSeconds}s: the server sent ` +
+    `${collected} condition(s) but no RefreshEnd, so there may be more. ` +
+    `Retry with a larger timeout_seconds.`
+  );
+}
+
+/** The message both runtimes give when the event buffer overflowed before a read.
+ *
+ * Reported to the caller, not only to stderr: an agent that cannot tell a
+ * complete event stream from one that lost alarms during a burst will read the
+ * gap as quiet.
+ */
+export function droppedEventsMessage(dropped: number, bufferSize: number): string {
+  return (
+    `Note: ${dropped} older event(s) were dropped before this read — the buffer ` +
+    `of ${bufferSize} filled up. Raise buffer_size or read more often.`
+  );
+}
+
 /** The subscription parameters both the buffered and the ConditionRefresh paths use.
  *
  * `queueSize` is the load-bearing one. A ConditionRefresh answers with the
@@ -168,7 +197,18 @@ export class EventSubscriptions {
       dropped: 0,
     };
 
-    const monitoredItem = await monitorEvents(subscription, nodeId);
+    // Never leave the OPC UA server holding a subscription this process has
+    // forgotten about: it would keep publishing until its lifetime expires, and
+    // a handful of failed `subscribe_events` calls would eat the server's
+    // subscription quota. Same guard as `subscriptions.ts` uses.
+    let monitoredItem: ClientMonitoredItem;
+    try {
+      monitoredItem = await monitorEvents(subscription, nodeId);
+    } catch (error) {
+      await terminateQuietly(subscription);
+      throw error;
+    }
+
     monitoredItem.on("changed", (fields: Variant[]) => {
       const record = toEventRecord(fields);
       // The refresh markers are protocol bookkeeping, not plant events: a
@@ -191,7 +231,7 @@ export class EventSubscriptions {
     session: ClientSession,
     nodeId: string,
     limit: number
-  ): { records: EventRecord[]; remaining: number; dropped: number } | null {
+  ): { records: EventRecord[]; remaining: number; dropped: number; size: number } | null {
     const buffer = this.live(session, nodeId);
     if (!buffer) return null;
 
@@ -199,7 +239,7 @@ export class EventSubscriptions {
     const dropped = buffer.dropped;
     buffer.dropped = 0;
     this.remember(records);
-    return { records, remaining: buffer.records.length, dropped };
+    return { records, remaining: buffer.records.length, dropped, size: buffer.size };
   }
 
   /** Tear down the subscription for `nodeId`, if there is one. */
@@ -207,13 +247,7 @@ export class EventSubscriptions {
     const buffer = this.buffers.get(nodeId);
     if (!buffer) return;
     this.buffers.delete(nodeId);
-    try {
-      await buffer.subscription.terminate();
-    } catch (error) {
-      // A subscription whose session has already gone cannot be terminated, and
-      // does not need to be: the server drops it with the session.
-      console.error(`Could not terminate the event subscription for ${nodeId}:`, error);
-    }
+    await terminateQuietly(buffer.subscription);
   }
 
   /** Tear every event subscription down — the shutdown path.
@@ -266,6 +300,7 @@ export async function listActiveAlarms(
 
     const conditions: EventRecord[] = [];
     let started = false;
+    let ended = false;
 
     const finished = new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, Math.max(0, timeoutSeconds) * 1000);
@@ -279,6 +314,7 @@ export async function listActiveAlarms(
           return;
         }
         if (type === EVENTS.refreshEndEventTypeNodeId) {
+          ended = true;
           clearTimeout(timer);
           resolve();
           return;
@@ -298,9 +334,26 @@ export async function listActiveAlarms(
     }
 
     await finished;
+    if (!ended) {
+      throw new Error(refreshTimedOutMessage(timeoutSeconds, conditions.length));
+    }
     return conditions;
   } finally {
+    await terminateQuietly(subscription);
+  }
+}
+
+/** Terminate without letting a dead session's error escape.
+ *
+ * Every caller is a cleanup path: a subscription the OPC UA server has already
+ * dropped (with the session, usually) is the normal case there, and failing
+ * would turn a tidy teardown into a crash. `subscriptions.ts` has the same.
+ */
+async function terminateQuietly(subscription: ClientSubscription): Promise<void> {
+  try {
     await subscription.terminate();
+  } catch (error) {
+    console.error("Error terminating OPC UA event subscription:", error);
   }
 }
 

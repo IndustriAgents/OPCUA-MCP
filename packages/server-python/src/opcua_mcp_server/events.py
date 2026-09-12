@@ -55,6 +55,35 @@ _BASE_EVENT_TYPE = EVENTS["baseEventTypeNodeId"]
 _CONDITION_ID = "ConditionId"
 
 
+def refresh_timed_out_message(timeout_seconds: float, collected: int) -> str:
+    """The message both runtimes give when a ConditionRefresh does not finish.
+
+    Said out loud rather than swallowed. The server answers a refresh with a
+    RefreshEnd event, and without one there is no way to know whether the
+    conditions collected so far are all of them — returning them as if they were
+    would let ``list_active_alarms`` quietly under-report retained alarms, which
+    in an industrial setting is the one failure this tool must not have.
+    """
+    return (
+        f"ConditionRefresh did not finish within {timeout_seconds}s: the server sent "
+        f"{collected} condition(s) but no RefreshEnd, so there may be more. "
+        f"Retry with a larger timeout_seconds."
+    )
+
+
+def dropped_events_message(dropped: int, buffer_size: int) -> str:
+    """The message both runtimes give when the buffer overflowed before a read.
+
+    Reported to the caller, not only to stderr: an agent that cannot tell a
+    complete event stream from one that lost alarms during a burst will read the
+    gap as quiet.
+    """
+    return (
+        f"Note: {dropped} older event(s) were dropped before this read — the buffer "
+        f"of {buffer_size} filled up. Raise buffer_size or read more often."
+    )
+
+
 def _select_clause(path: str) -> ua.SimpleAttributeOperand:
     """One select clause for a dotted browse path from the contract."""
     operand = ua.SimpleAttributeOperand()
@@ -128,6 +157,11 @@ class _BufferingHandler:
             dropped, self.dropped = self.dropped, 0
             return taken, len(self.records), dropped
 
+    @property
+    def size(self) -> int:
+        """The buffer's capacity, as configured by ``subscribe_events``."""
+        return self.records.maxlen or 0
+
 
 class EventSubscriptions:
     """The event subscriptions this server holds, keyed by notifier node.
@@ -161,13 +195,22 @@ class EventSubscriptions:
         self.drop(node_id)
         handler = _BufferingHandler(severity_min, buffer_size)
         subscription = client.create_subscription(_PUBLISHING_INTERVAL_MS, handler)
-        subscription.subscribe_events(
-            client.get_node(node_id).nodeid, evfilter=event_filter(), queuesize=_QUEUE_SIZE
-        )
+        # Never leave the OPC UA server holding a subscription this process has
+        # forgotten about: it would keep publishing until its lifetime expires,
+        # and a handful of failed `subscribe_events` calls would eat the
+        # server's subscription quota. Same guard as `subscriptions.py` uses.
+        try:
+            subscription.subscribe_events(
+                client.get_node(node_id).nodeid, evfilter=event_filter(), queuesize=_QUEUE_SIZE
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                subscription.delete()
+            raise
         with self._lock:
             self._subscriptions[node_id] = (subscription, handler)
 
-    def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int] | None:
+    def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int, int] | None:
         """Take up to ``limit`` buffered events, or None when not subscribed."""
         with self._lock:
             entry = self._subscriptions.get(node_id)
@@ -175,7 +218,7 @@ class EventSubscriptions:
             return None
         records, remaining, dropped = entry[1].drain(limit)
         self.remember(records)
-        return records, remaining, dropped
+        return records, remaining, dropped, entry[1].size
 
     def close_all(self) -> None:
         """Tear every event subscription down — the shutdown path.
@@ -258,7 +301,8 @@ def list_active_alarms(client, node_id: str, timeout_seconds: float) -> list[dic
                 f"ConditionRefresh failed with status: {error}. "
                 "The server may not implement OPC UA Alarms & Conditions."
             ) from error
-        handler.finished.wait(timeout=max(0.0, timeout_seconds))
+        if not handler.finished.wait(timeout=max(0.0, timeout_seconds)):
+            raise ValueError(refresh_timed_out_message(timeout_seconds, len(handler.conditions)))
         return handler.conditions
     finally:
         # A subscription the server has already dropped cannot be deleted, and

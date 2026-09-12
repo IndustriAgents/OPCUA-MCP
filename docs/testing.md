@@ -187,11 +187,13 @@ show — and the closest local rehearsal for pointing a server at real equipment
 # 1. throwaway certificates (server + client), into a directory of your choice
 uv run --no-sync python tests/fixtures/pki.py /tmp/opcua-pki
 
-# 2. the secured mock: Basic256Sha256 only, username operator / hunter2
+# 2. the secured mock: Basic256Sha256 only, username operator / hunter2.
+#    --check-client-uri adds the ApplicationUri check real servers make; the
+#    e2e fixture starts it the same way.
 uv run --no-sync python tests/fixtures/secure_opcua_server.py \
   --endpoint opc.tcp://127.0.0.1:4843/mcp/secure \
   --cert /tmp/opcua-pki/server.pem --key /tmp/opcua-pki/server_key.pem \
-  --uri urn:opcua-mcp:test-server
+  --uri urn:opcua-mcp:test-server --check-client-uri
 ```
 
 Then, in another shell, point either server at it:

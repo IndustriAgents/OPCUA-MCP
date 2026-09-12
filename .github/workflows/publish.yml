@@ -9,6 +9,15 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# A tag push can be delivered more than once — v0.3.0 queued two identical runs a
+# second apart. The registry jobs are individually idempotent, but two running at
+# the same moment can both see a version as unpublished and both try to claim it,
+# leaving a red X on a release that actually succeeded. Never cancel in progress:
+# interrupting a publish mid-upload is worse than a duplicate.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Verify before publishing

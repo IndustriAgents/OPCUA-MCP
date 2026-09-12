@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resources/list` from it and `tests/e2e/test_contract_parity.py` reads the
   resource from each and checks it against that shape, exactly as it already did
   for tool output.
+- **[docs/certificates.md](docs/certificates.md): client certificates and trust
+  setup** (#5). Turning encryption on needs a certificate that OPC UA servers
+  accept — `subjectAltName` URI, all four key usages, `clientAuth`, RSA 2048 and
+  SHA-256 — and then an operator willing to move it from the server's rejected
+  list into its trusted one. Both were folklore, or were buried in a testing
+  walkthrough that uses throwaway certificates. The new page has an `openssl`
+  recipe, the naming and permission rules each runtime imposes, the trust dance
+  step by step, and a table mapping the certificate status codes back to what to
+  change.
 - **Alarms & Conditions: four new tools, on both servers** (#4). Industrial
   systems report abnormal states through the A&C model rather than as plain
   variables, and none of it was reachable before.
@@ -161,6 +170,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **The Python server now announces the client certificate's own ApplicationUri**
+  (#5). With a certificate configured but no `OPCUA_APPLICATION_URI`,
+  python-opcua announced its library default, `urn:freeopcua:client`, while
+  node-opcua reads the URI out of the certificate — so the same certificate and
+  the same variables reached a server as two different identities depending on
+  which runtime was started, and equipment that checks the ApplicationUri against
+  the `subjectAltName` (as the spec has it) refused the Python one with
+  `BadCertificateUriInvalid`. It now takes the URI from the certificate too, and
+  warns when an explicit `OPCUA_APPLICATION_URI` contradicts one. That also makes
+  a secured connection expressible from the `.mcpb` bundle, whose fields cover
+  the certificate but not the URI. The secured mock grew the check real servers
+  make (`--check-client-uri`), so the end-to-end tests can tell a derived
+  ApplicationUri from a default that happens to connect.
 - **A NodeId in namespace 0 is now spelled the same by both servers.** python-opcua
   omits a zero namespace from a NodeId's text form (`i=2253`) where node-opcua
   writes it out (`ns=0;i=2253`); the Python server passed that difference

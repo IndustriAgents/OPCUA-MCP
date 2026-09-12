@@ -218,8 +218,17 @@ factory, the capability probes and the startup check all go through, so a
 probe cannot end up on a different security footing than the session it
 precedes.
 
+Identity is derived rather than restated: with a client certificate configured,
+both runtimes announce the `subjectAltName` URI of that certificate as the
+session's ApplicationUri, which is the value servers check it against. That is
+free on the Node side (node-opcua reads the certificate itself) and explicit on
+the Python side (`certificate_application_uri`), because python-opcua would
+otherwise announce its own `urn:freeopcua:client` and be refused by equipment the
+Node runtime got into with the same files.
+
 The **default is `None`/`None`**: unauthenticated and unencrypted, appropriate
 for the bundled mock and local development and **not** appropriate for
 production industrial systems. Both servers warn on stderr when running that
 way. For what the secured path does and does not verify — notably that the
-server certificate is not pinned — see [SECURITY.md](../SECURITY.md).
+server certificate is not pinned — see [SECURITY.md](../SECURITY.md), and for
+certificate generation and trust setup [certificates.md](certificates.md).

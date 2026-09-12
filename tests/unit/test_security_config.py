@@ -1,9 +1,9 @@
 """Unit tests for the Python server's OPC UA security configuration.
 
-No OPC UA server and no MCP transport: this is the pure environment → config
-layer. It is worth testing hard because a misread here either downgrades a
-production connection to plaintext or fails at connect time with an opaque
-library error.
+No OPC UA server and no MCP transport: this is the environment (and, at the end,
+the client certificate) → config layer. It is worth testing hard because a
+misread here either downgrades a production connection to plaintext or fails at
+connect time with an opaque library error.
 
 The Node equivalent lives in packages/server-node/test/unit.test.mjs; the two
 files deliberately assert the same error wording for the checks both runtimes
@@ -13,8 +13,12 @@ share.
 from __future__ import annotations
 
 import pytest
+from fixtures.pki import write_self_signed
+from opcua import Client
+from opcua_mcp_server import security
 from opcua_mcp_server.security import (
     SecurityConfig,
+    certificate_application_uri,
     describe_security,
     parse_security_config,
     security_warnings,
@@ -259,3 +263,92 @@ def test_description_never_leaks_the_password():
 
 def test_description_of_the_default_connection():
     assert describe_security(parse({})) == "policy=None mode=None user=anonymous"
+
+
+# --- the ApplicationUri a client announces -------------------------------------
+# These read real certificate files (never a server or a socket): the URI is a
+# property of the certificate, and it is what a server checks the session's
+# ApplicationDescription against.
+
+
+def test_reads_the_application_uri_out_of_a_certificate(tmp_path):
+    cert, _ = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    assert certificate_application_uri(str(cert)) == "urn:plant:mcp-client"
+
+
+@pytest.mark.parametrize("name", ["missing.pem", "client_key.pem"])
+def test_an_unreadable_certificate_yields_no_uri(tmp_path, name):
+    """A missing file and a file that is not a certificate — python-opcua reports both."""
+    write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    assert certificate_application_uri(str(tmp_path / name)) is None
+
+
+def make_client(env: dict[str, str]) -> Client:
+    """Build a client from `env`, with the process-wide config cache reset.
+
+    ``OPCUA_SECURITY_POLICY`` stays unset on purpose: python-opcua's
+    ``set_security`` connects to the server to fetch its certificate, and there
+    is no server here. The ApplicationUri is chosen before any of that.
+    """
+    security._warned.clear()
+    security.security_config.cache_clear()
+    with pytest.MonkeyPatch.context() as patch:
+        for name, value in env.items():
+            patch.setenv(name, value)
+        try:
+            return security.create_client("opc.tcp://127.0.0.1:4840/none")
+        finally:
+            security.security_config.cache_clear()
+
+
+def test_the_application_uri_defaults_to_the_certificates_own(tmp_path):
+    """Without this, python-opcua announces `urn:freeopcua:client` and is refused.
+
+    node-opcua reads the URI out of the certificate, so the same files and the
+    same variables have to reach the server as the same identity here.
+    """
+    cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    client = make_client({"OPCUA_CLIENT_CERT": str(cert), "OPCUA_CLIENT_KEY": str(key)})
+    assert client.application_uri == "urn:plant:mcp-client"
+
+
+def test_an_explicit_application_uri_wins(tmp_path):
+    """Configuration is never silently ignored — certificates without a URI need it."""
+    cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    client = make_client(
+        {
+            "OPCUA_CLIENT_CERT": str(cert),
+            "OPCUA_CLIENT_KEY": str(key),
+            "OPCUA_APPLICATION_URI": "urn:plant:something-else",
+        }
+    )
+    assert client.application_uri == "urn:plant:something-else"
+
+
+def test_an_explicit_application_uri_that_contradicts_the_certificate_warns(tmp_path, capsys):
+    """It is announced as asked, but a server checking the two will refuse the session."""
+    cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    make_client(
+        {
+            "OPCUA_CLIENT_CERT": str(cert),
+            "OPCUA_CLIENT_KEY": str(key),
+            "OPCUA_APPLICATION_URI": "urn:plant:something-else",
+        }
+    )
+    printed = capsys.readouterr()
+    assert "BadCertificateUriInvalid" in printed.err
+    assert "urn:plant:mcp-client" in printed.err
+    # stdout is the MCP stdio transport; anything printed there corrupts it.
+    assert printed.out == ""
+
+
+def test_a_matching_application_uri_says_nothing(tmp_path, capsys):
+    cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
+    make_client(
+        {
+            "OPCUA_CLIENT_CERT": str(cert),
+            "OPCUA_CLIENT_KEY": str(key),
+            "OPCUA_APPLICATION_URI": "urn:plant:mcp-client",
+        }
+    )
+    assert capsys.readouterr().err == ""

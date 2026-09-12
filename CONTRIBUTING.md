@@ -170,4 +170,7 @@ server enforces).
 Both runtimes parse those variables in one place — `src/security.ts` and
 `src/opcua_mcp_server/security.py` — with the same defaults and the same error
 wording. A change to one belongs in the other, and the unit suites on both sides
-assert the shared messages.
+assert the shared messages. Parity extends past the parsing: the two must also
+reach a server as the same identity, which is why the Python side derives the
+session's ApplicationUri from the client certificate as node-opcua does. How
+users make that certificate is [docs/certificates.md](docs/certificates.md).

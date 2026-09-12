@@ -262,9 +262,9 @@ def alarm_opcua_server() -> str:
 def secure_pki(tmp_path_factory) -> dict[str, str]:
     """Freshly generated server and client key pairs for the secured mock.
 
-    One client certificate serves both runtimes: they announce its
-    subjectAltName URI through `OPCUA_APPLICATION_URI`, which is exactly what
-    that variable is for.
+    One client certificate serves both runtimes: each announces its
+    subjectAltName URI as the session's ApplicationUri, whether or not
+    `OPCUA_APPLICATION_URI` names it, and the secured mock checks that they do.
     """
     directory = tmp_path_factory.mktemp("pki")
     server_cert, server_key = write_self_signed(directory, "server", SECURE_SERVER_URI)
@@ -300,6 +300,11 @@ def secure_opcua_server(secure_pki) -> str:
             secure_pki["server_key"],
             "--uri",
             SECURE_SERVER_URI,
+            # As real equipment does: a session whose announced ApplicationUri is
+            # not the one in the certificate it presented is refused, so the
+            # tests can tell a correctly derived ApplicationUri from a library
+            # default that would otherwise connect just as happily.
+            "--check-client-uri",
         ],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,

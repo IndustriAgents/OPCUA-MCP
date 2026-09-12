@@ -196,6 +196,8 @@ jobs:
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
+          # One MCP bundle plus an executable per runtime per platform.
+          EXPECTED_ASSETS: "7"
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -205,11 +207,26 @@ jobs:
           # and one bad entry aborts the whole upload, so a stray subdirectory
           # takes every asset down with it — which is how v0.3.0 shipped with the
           # bundle attached and none of the six executables.
-          mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 7 || {
-            echo "::error::expected 7 assets (1 bundle + 6 executables), found ${#assets[@]}"
+          assets=()
+          while IFS= read -r file; do assets+=("$file"); done < <(find artifacts -type f | sort)
+          test "${#assets[@]}" -eq "$EXPECTED_ASSETS" || {
+            echo "::error::expected $EXPECTED_ASSETS assets (1 bundle + 6 executables), found ${#assets[@]}"
             printf '  %s\n' "${assets[@]}"
             exit 1
           }
+
+          # A tag push can be delivered twice, and the concurrency group only
+          # serialises the second run — GitHub keeps one running and one pending,
+          # then runs the pending one. So this step has to be idempotent by
+          # itself. It matters because `--clobber` *deletes* an asset before
+          # replacing it: a redundant re-upload that fails half way leaves the
+          # release worse than it found it.
+          want=$(printf '%s\n' "${assets[@]}" | xargs -n1 basename | sort | paste -sd, -)
+          have=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | sort | join(",")')
+          if [ "$want" = "$have" ]; then
+            echo "release $TAG already carries all ${#assets[@]} assets — nothing to do"
+            exit 0
+          fi
+
           printf 'uploading:\n'; printf '  %s\n' "${assets[@]}"
           gh release upload "$TAG" "${assets[@]}" --clobber

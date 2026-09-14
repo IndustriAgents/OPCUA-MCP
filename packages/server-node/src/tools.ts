@@ -267,6 +267,7 @@ export class OpcuaTools {
             text: `Error: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
+        isError: true,
       };
     }
   }

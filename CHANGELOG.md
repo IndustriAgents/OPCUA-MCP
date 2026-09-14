@@ -176,6 +176,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client package removes both reads, lets the compiler enforce that this server
   only reaches for client APIs, and takes the `.mcpb` from about 7 MB to under
   one.
+- **Node tool failures now return MCP error results** (#61). The shared
+  `callTool` error handler sets `isError: true`, so clients can reliably detect
+  failed tool calls instead of having to inspect the returned error text.
 
 ### Fixed
 - **The Python server now announces the client certificate's own ApplicationUri**

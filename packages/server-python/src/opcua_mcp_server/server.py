@@ -12,7 +12,7 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from opcua import ua
+from opcua import Node, ua
 from opcua.ua import NodeClass
 
 from . import events
@@ -218,7 +218,8 @@ def write_opcua_node(node_id: str, value: str, ctx: Context) -> str:
         value (str): The value to write to the node. Will be converted based on node type.
 
     Returns:
-        str: A message indicating success or failure of the write operation.
+        str: A message confirming the write. A failure is raised as a `ToolError`,
+             which reaches the client as an MCP error result rather than as text.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     node = client.get_node(node_id)
@@ -233,8 +234,74 @@ def write_opcua_node(node_id: str, value: str, ctx: Context) -> str:
         else:
             node.set_value(value)
         return f"Successfully wrote {value} to node {node_id}"
+    # `ToolError`, not a returned string: a returned string is a *successful* tool
+    # result, so a client had to read the prose to notice the write never landed.
+    # Worded as the Node server words it. See #63.
     except Exception as e:
-        return f"Error writing to node {node_id}: {e!s}"
+        raise ToolError(f"Failed to write to node {node_id}: {e!s}") from e
+
+
+def browse_children(node: Node) -> list[Node]:
+    """Browse a node's references, failing on a bad browse status.
+
+    python-opcua cannot do this itself: `Node.get_children()` reaches
+    `get_references()`, which reads `BrowseResult.References` and never looks at
+    the sibling `BrowseResult.StatusCode`. Browsing a node the server does not
+    have therefore yields an empty list, so `browse_opcua_node_children` reported
+    `Children of ns=2;i=999999: []` — "this node has no children", for a node
+    that does not exist. The Node server checks the status and fails
+    (`browseOpcuaNodeChildren` in `packages/server-node/src/tools.ts`), so this
+    does too, with the same sentence.
+
+    Otherwise a faithful copy of what `get_children()` asks for, which is not
+    what `get_references()` defaults to: *hierarchical* references, *forward*
+    only. Browsing `References`/`Both` instead — the `get_references()` defaults —
+    walks back up to the parent and out to the type definition, so `ns=2;i=1`
+    answers `0:Objects` and `0:FolderType` rather than its own `2:Sensors`.
+    """
+    description = ua.BrowseDescription()
+    description.NodeId = node.nodeid
+    description.BrowseDirection = ua.BrowseDirection.Forward
+    description.ReferenceTypeId = ua.NodeId(ua.ObjectIds.HierarchicalReferences)
+    description.IncludeSubtypes = True
+    description.NodeClassMask = ua.NodeClass.Unspecified
+    description.ResultMask = ua.BrowseResultMask.All
+
+    params = ua.BrowseParameters()
+    params.View.Timestamp = ua.get_win_epoch()
+    params.NodesToBrowse.append(description)
+    params.RequestedMaxReferencesPerNode = 0
+
+    # A server may cap how many references one response carries whatever we ask
+    # for, so drain the continuation point as `get_references()` does — otherwise
+    # a large node silently browses short. Every result is status-checked, the
+    # continued ones included: a server that expires or refuses a continuation
+    # point answers with a bad status and no references, which unchecked would
+    # end the loop and return a *truncated* child list as a success — the same
+    # class of silent wrong answer this function exists to stop.
+    references = []
+    results = node.server.browse(params)
+    while True:
+        result = results[0]
+        if not result.StatusCode.is_good():
+            # `.name`, not the whole StatusCode: node-opcua renders the same
+            # rejection as `BadNodeIdUnknown (0x80340000)` and python-opcua as
+            # `StatusCode(BadNodeIdUnknown)`. Neither server controls the other's
+            # spelling, but both can name the status plainly.
+            raise ValueError(f"Browse failed with status: {result.StatusCode.name}")
+
+        references.extend(result.References)
+        if not result.ContinuationPoint:
+            break
+
+        next_params = ua.BrowseNextParameters()
+        next_params.ContinuationPoints = [result.ContinuationPoint]
+        next_params.ReleaseContinuationPoints = False
+        results = node.server.browse_next(next_params)
+
+    # `get_children()` returns Nodes, not ReferenceDescriptions, and the caller
+    # reads `.nodeid` and browse names off them.
+    return [Node(node.server, reference.NodeId) for reference in references]
 
 
 # Tool: Browse the children of a specific OPC UA node
@@ -248,13 +315,13 @@ def browse_opcua_node_children(node_id: str, ctx: Context) -> str:
 
     Returns:
         str: A string representation of a list of child nodes, including their
-             NodeId and BrowseName.
-             Returns an error message on failure.
+             NodeId and BrowseName. A failure is raised as a `ToolError`, which
+             reaches the client as an MCP error result rather than as text.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         node = client.get_node(node_id)
-        children = node.get_children()
+        children = browse_children(node)
 
         children_info = []
         for child in children:
@@ -276,7 +343,7 @@ def browse_opcua_node_children(node_id: str, ctx: Context) -> str:
         return f"Children of {node_id}: {children_info!r}"
 
     except Exception as e:
-        return f"Error Browse children of node {node_id}: {e!s}"
+        raise ToolError(f"Failed to browse children of node {node_id}: {e!s}") from e
 
 
 # Tool: Call an OPC UA method
@@ -297,7 +364,8 @@ def call_opcua_method(
                                        Arguments will be converted to appropriate OPC UA variants.
 
     Returns:
-        str: The result of the method call or an error message if the call fails.
+        str: The result of the method call. A failure is raised as a `ToolError`,
+             which reaches the client as an MCP error result rather than as text.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
@@ -336,7 +404,9 @@ def call_opcua_method(
         )
 
     except Exception as e:
-        return f"Error calling method {method_node_id} on object {object_node_id}: {e!s}"
+        raise ToolError(
+            f"Failed to call method {method_node_id} on object {object_node_id}: {e!s}"
+        ) from e
 
 
 # Tool: Read multiple OPC UA nodes
@@ -383,8 +453,9 @@ def write_multiple_opcua_nodes(nodes_to_write: list[dict[str, Any]], ctx: Contex
                                                          {'node_id': 'ns=2;i=3', 'value': 'active'}]
 
     Returns:
-        str: A message indicating the success or failure of the write operation.
-             Returns status codes for each write attempt.
+        str: A status code per write attempt. A node the server rejects is one
+             `Error: …` status among them; only a failure of the whole operation
+             is raised as a `ToolError`.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
@@ -414,8 +485,11 @@ def write_multiple_opcua_nodes(nodes_to_write: list[dict[str, Any]], ctx: Contex
 
         return f"Write operation results: {results!r}"
 
+    # Only reached when the whole operation fails rather than one node in it —
+    # a per-node rejection is a `status` in the list above, on both servers, and
+    # stays a successful result. This is the Node server's outer catch.
     except Exception as e:
-        return f"Error writing multiple nodes: {e!s}"
+        raise ToolError(f"Failed to write multiple nodes: {e!s}") from e
 
 
 # --- Data-change subscriptions -------------------------------------------------

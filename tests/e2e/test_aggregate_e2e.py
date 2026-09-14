@@ -180,3 +180,4 @@ async def test_aggregate_rejects_unknown_function(agg_server):
     text = text_of(result)
     assert "Invalid aggregate function" in text, f"{impl}: unexpected error: {text}"
     assert "Average" in text, f"{impl}: supported functions not listed: {text}"
+    assert result.is_error is True, f"{impl}: expected an error result"

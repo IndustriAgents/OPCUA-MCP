@@ -536,6 +536,7 @@ async def test_unsubscribe_rejects_an_unknown_id_identically(server):
     async with connect(params) as session:
         result = await session.call_tool("unsubscribe_opcua_node", {"subscription_id": "sub-9999"})
     assert "No such subscription: sub-9999" in text_of(result), f"{impl}: got {text_of(result)!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
 
 
 async def test_subscribing_to_an_unknown_node_fails_identically(server):
@@ -553,6 +554,7 @@ async def test_subscribing_to_an_unknown_node_fails_identically(server):
 
         listed = await session.call_tool("list_subscriptions", {})
     assert records_of(listed) == [], f"{impl}: a failed subscribe left a subscription behind"
+    assert result.is_error is True, f"{impl}: expected an error result"
 
 
 async def test_the_subscriptions_resource_tracks_the_tools(server):

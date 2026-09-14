@@ -6,10 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Changed
-- **Node tool failures now return MCP error results** (#61). The shared
-  `callTool` error handler sets `isError: true`, so clients can reliably detect
-  failed tool calls instead of having to inspect the returned error text.
 
 ### Added
 - **Real-time data-change subscriptions** (#3). Three tools on both servers —
@@ -157,6 +153,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before, so a bad node ID or timestamp surfaced without the `Failed to read
     node …` prefix the Node server adds; the two now agree. (Each SDK still adds
     its own outer prefix, which neither server controls.)
+  - **Node tool failures now return MCP error results** (#61). The shared
+    `callTool` error handler sets `isError: true`, so clients can reliably detect
+    failed tool calls instead of having to inspect the returned error text.
   * **The client models are snake_case.** `result.isError` is `result.is_error`,
     `tool.inputSchema` is `tool.input_schema`, `initialize().serverInfo` is
     `.server_info`. This is a Python-attribute rename only: the wire format, and

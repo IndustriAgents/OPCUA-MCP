@@ -282,6 +282,7 @@ async def test_an_unknown_event_id_cannot_be_acknowledged(alarm_server):
             "acknowledge_alarm", {"event_id": "bm90LWFuLWV2ZW50", "comment": "…"}
         )
     assert 'Unknown event_id "bm90LWFuLWV2ZW50"' in text_of(result), f"{impl}: {text_of(result)!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
 
 
 async def test_condition_events_reach_the_buffer_too(alarm_server):

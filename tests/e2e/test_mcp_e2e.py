@@ -551,11 +551,10 @@ async def test_subscribing_to_an_unknown_node_fails_identically(server):
         text = text_of(result)
         assert "Failed to subscribe to node ns=2;i=999999" in text, f"{impl}: got {text!r}"
         assert "BadNodeIdUnknown" in text, f"{impl}: got {text!r}"
+        assert result.is_error is True, f"{impl}: expected an error result"
 
         listed = await session.call_tool("list_subscriptions", {})
     assert records_of(listed) == [], f"{impl}: a failed subscribe left a subscription behind"
-    assert result.is_error is True, f"{impl}: expected an error result"
-
 
 async def test_the_subscriptions_resource_tracks_the_tools(server):
     """The resource is the same state the tools report, re-readable for free."""

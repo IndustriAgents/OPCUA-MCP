@@ -272,25 +272,32 @@ def browse_children(node: Node) -> list[Node]:
     params.NodesToBrowse.append(description)
     params.RequestedMaxReferencesPerNode = 0
 
-    results = node.server.browse(params)
-    result = results[0]
-    if not result.StatusCode.is_good():
-        # `.name`, not the whole StatusCode: node-opcua renders the same rejection
-        # as `BadNodeIdUnknown (0x80340000)` and python-opcua as
-        # `StatusCode(BadNodeIdUnknown)`. Neither server controls the other's
-        # spelling, but both can name the status plainly.
-        raise ValueError(f"Browse failed with status: {result.StatusCode.name}")
-
     # A server may cap how many references one response carries whatever we ask
     # for, so drain the continuation point as `get_references()` does — otherwise
-    # a large node silently browses short.
-    references = result.References
-    while results[0].ContinuationPoint:
+    # a large node silently browses short. Every result is status-checked, the
+    # continued ones included: a server that expires or refuses a continuation
+    # point answers with a bad status and no references, which unchecked would
+    # end the loop and return a *truncated* child list as a success — the same
+    # class of silent wrong answer this function exists to stop.
+    references = []
+    results = node.server.browse(params)
+    while True:
+        result = results[0]
+        if not result.StatusCode.is_good():
+            # `.name`, not the whole StatusCode: node-opcua renders the same
+            # rejection as `BadNodeIdUnknown (0x80340000)` and python-opcua as
+            # `StatusCode(BadNodeIdUnknown)`. Neither server controls the other's
+            # spelling, but both can name the status plainly.
+            raise ValueError(f"Browse failed with status: {result.StatusCode.name}")
+
+        references.extend(result.References)
+        if not result.ContinuationPoint:
+            break
+
         next_params = ua.BrowseNextParameters()
-        next_params.ContinuationPoints = [results[0].ContinuationPoint]
+        next_params.ContinuationPoints = [result.ContinuationPoint]
         next_params.ReleaseContinuationPoints = False
         results = node.server.browse_next(next_params)
-        references.extend(results[0].References)
 
     # `get_children()` returns Nodes, not ReferenceDescriptions, and the caller
     # reads `.nodeid` and browse names off them.

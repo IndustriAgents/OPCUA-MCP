@@ -45,6 +45,9 @@ NODE = {
     "Methods": "ns=2;i=27",
 }
 
+# A node id the mock does not have, for the failure-path tests.
+UNKNOWN_NODE = "ns=2;i=999999"
+
 CORE_TOOLS = {
     "read_opcua_node",
     "write_opcua_node",
@@ -417,6 +420,96 @@ async def test_history_rejects_a_malformed_timestamp_identically(server):
     )
     assert expected in text_of(result), f"{impl}: got {text_of(result)!r}"
     assert result.is_error is True, f"{impl}: expected an error result"
+
+
+async def test_write_rejects_a_bad_value_identically(server):
+    """A value that will not convert must reach the caller as an MCP *error*.
+
+    Both servers used to disagree about what a failed write even is: Node raised,
+    while Python returned `Error writing to node …` as ordinary text — a
+    *successful* tool result whose prose happened to say otherwise (#63). A
+    client keying on `is_error` saw the write succeed.
+
+    Only the prefix is shared, as in the subscribe test below: python-opcua says
+    `could not convert string to float` and node-opcua `Cannot convert "…" to
+    number`. Neither server chooses the other's wording; both name the node.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "write_opcua_node", {"node_id": NODE["ValvePosition"], "value": "not-a-number"}
+        )
+    text = text_of(result)
+    assert f"Failed to write to node {NODE['ValvePosition']}" in text, f"{impl}: got {text!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
+
+
+async def test_browse_rejects_an_unknown_node_identically(server):
+    """A node the server does not have is an error, not an empty child list.
+
+    This one was worse than a missing flag. python-opcua's `get_children()` never
+    looks at `BrowseResult.StatusCode`, so the Python server answered
+    `Children of ns=2;i=999999: []` — indistinguishable from a real node that has
+    no children, and a successful result besides. `browse_children` in the Python
+    server checks the status the library drops, so both now fail with the same
+    sentence (bar the hex code node-opcua appends).
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool("browse_opcua_node_children", {"node_id": UNKNOWN_NODE})
+    text = text_of(result)
+    assert (
+        f"Failed to browse children of node {UNKNOWN_NODE}: "
+        "Browse failed with status: BadNodeIdInvalid"
+    ) in text, f"{impl}: got {text!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
+
+
+async def test_calling_a_method_on_an_unknown_node_fails_identically(server):
+    """A method call that cannot resolve its nodes fails, on both (#63).
+
+    Shared prefix only, and for the usual reason — each client library words the
+    underlying rejection its own way — but both name the status.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "call_opcua_method",
+            {
+                "object_node_id": UNKNOWN_NODE,
+                "method_node_id": UNKNOWN_NODE,
+                "arguments": [],
+            },
+        )
+    text = text_of(result)
+    assert f"Failed to call method {UNKNOWN_NODE} on object {UNKNOWN_NODE}" in text, (
+        f"{impl}: got {text!r}"
+    )
+    assert "BadNodeIdInvalid" in text, f"{impl}: got {text!r}"
+    assert result.is_error is True, f"{impl}: expected an error result"
+
+
+async def test_a_rejected_node_in_a_batch_read_stays_a_partial_result(server):
+    """One bad node in `read_multiple_opcua_nodes` is a status, not an error.
+
+    The counterpart to the three tests above, and the reason they stop where they
+    do: the batch tools report per-node status *inside* a successful result, on
+    both runtimes. Promoting a per-node rejection to an MCP error would discard
+    the values of every other node in the batch. Only a failure of the whole
+    operation is an error.
+
+    The good node is asserted too — a batch that failed wholesale would also show
+    no successful read, and this must not pass on those grounds.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "read_multiple_opcua_nodes", {"node_ids": [NODE["Temperature"], UNKNOWN_NODE]}
+        )
+    text = text_of(result)
+    assert not result.is_error, f"{impl}: a per-node rejection must not fail the call: {text!r}"
+    assert NODE["Temperature"] in text, f"{impl}: the readable node is missing: {text!r}"
+    assert UNKNOWN_NODE in text and "Error" in text, f"{impl}: no per-node error status: {text!r}"
 
 
 # --- data-change subscriptions (issue #3) --------------------------------------

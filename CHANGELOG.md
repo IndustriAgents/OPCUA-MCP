@@ -179,6 +179,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node tool failures now return MCP error results** (#61). The shared
   `callTool` error handler sets `isError: true`, so clients can reliably detect
   failed tool calls instead of having to inspect the returned error text.
+- **Python tool failures now return MCP error results** (#63). `write_opcua_node`,
+  `browse_opcua_node_children` and `call_opcua_method` caught their exception and
+  *returned* the message as ordinary text, which the SDK hands back as a
+  **successful** tool result — so a client keying on `is_error` saw a failed write
+  succeed, and had to read the prose to find out otherwise. They now raise
+  `ToolError`, worded as the Node server words it. #61 fixed the mirror image of
+  this on the Node side; the two runtimes now agree.
+
+  `browse_opcua_node_children` was the worst of the three, and not only for the
+  flag: python-opcua's `Node.get_children()` reads `BrowseResult.References` and
+  never looks at the sibling `BrowseResult.StatusCode`, so browsing a node the
+  server does not have returned an *empty child list*. `ns=2;i=999999` answered
+  `Children of ns=2;i=999999: []` — "this node has no children", for a node that
+  does not exist. The server now checks the status itself.
+
+  **Deliberately unchanged: a per-node rejection in a batch.**
+  `read_multiple_opcua_nodes` and `write_multiple_opcua_nodes` report per-node
+  status inside a successful result, and a node the server rejects is one
+  `Error: …` status among them rather than a failed call — promoting it would
+  discard the statuses of every other node in the batch. Only a failure of the
+  whole operation is an error, which is what `write_multiple_opcua_nodes` now
+  raises rather than returning as text.
 
 ### Fixed
 - **The Python server now announces the client certificate's own ApplicationUri**

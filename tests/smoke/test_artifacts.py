@@ -126,7 +126,12 @@ async def test_npm_installed_server_lists_tools(npm_install, opcua_server):
     params = StdioServerParameters(
         command=str(shim),
         args=[],
-        env={**os.environ, "OPCUA_SERVER_URL": opcua_server},
+        env={
+            **os.environ,
+            "OPCUA_SERVER_URL": opcua_server,
+            "OPCUA_PROFILE": "full",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+        },
         cwd=str(npm_install),
     )
     assert await _list_tools(params) >= CORE_TOOLS
@@ -244,7 +249,12 @@ async def test_wheel_installed_server_lists_tools(wheel_venv, opcua_server, tmp_
     params = StdioServerParameters(
         command=str(script),
         args=[],
-        env={**os.environ, "OPCUA_SERVER_URL": opcua_server},
+        env={
+            **os.environ,
+            "OPCUA_SERVER_URL": opcua_server,
+            "OPCUA_PROFILE": "full",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+        },
         cwd=str(tmp_path),
     )
     assert await _list_tools(params) >= CORE_TOOLS
@@ -346,6 +356,23 @@ def test_mcpb_exposes_every_security_setting(packed_mcpb):
     )
 
 
+def test_mcpb_exposes_the_production_policy(packed_mcpb):
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    env = manifest["server"]["mcp_config"]["env"]
+    required = {
+        "OPCUA_PROFILE",
+        "OPCUA_POLICY_FILE",
+        "OPCUA_ALLOWED_TOOLS",
+        "OPCUA_ALLOWED_WRITE_NODES",
+        "OPCUA_ALLOWED_METHODS",
+        "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
+        "OPCUA_ALLOW_INSECURE_CONTROL",
+    }
+    assert required <= set(env)
+    assert manifest["user_config"]["opcua_profile"]["default"] == "observe"
+    assert manifest["user_config"]["opcua_allow_insecure_control"]["default"] is False
+
+
 async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):
     """Unset optional fields arrive as empty strings, and must mean "not configured".
 
@@ -359,7 +386,13 @@ async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb,
     params = StdioServerParameters(
         command="node",
         args=[str(packed_mcpb / manifest["server"]["entry_point"])],
-        env={**os.environ, **blank, "OPCUA_SERVER_URL": opcua_server},
+        env={
+            **os.environ,
+            **blank,
+            "OPCUA_SERVER_URL": opcua_server,
+            "OPCUA_PROFILE": "full",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+        },
         cwd=str(packed_mcpb),
     )
     assert await _list_tools(params) >= CORE_TOOLS
@@ -376,7 +409,12 @@ async def test_mcpb_server_lists_tools(packed_mcpb, opcua_server):
     params = StdioServerParameters(
         command="node",
         args=[str(packed_mcpb / manifest["server"]["entry_point"])],
-        env={**os.environ, "OPCUA_SERVER_URL": opcua_server},
+        env={
+            **os.environ,
+            "OPCUA_SERVER_URL": opcua_server,
+            "OPCUA_PROFILE": "full",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+        },
         cwd=str(packed_mcpb),
     )
     assert await _list_tools(params) >= CORE_TOOLS

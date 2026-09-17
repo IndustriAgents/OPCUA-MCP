@@ -227,6 +227,38 @@ Both runtimes read the same environment variables:
 | `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
 | `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
 | `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
+| `OPCUA_PROFILE` | `observe` | `observe`, `operator`, or `full` tool profile (`read-only` is an alias for `observe`) |
+| `OPCUA_POLICY_FILE` | — | Optional version-1 JSON policy file; environment variables override it |
+| `OPCUA_ALLOWED_TOOLS` | — | Comma-separated allowlist that can only narrow the selected profile |
+| `OPCUA_ALLOWED_WRITE_NODES` | — | Exact comma-separated node IDs writable by the `operator` profile |
+| `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id|method_node_id` pairs callable by `operator` |
+| `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
+| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
+
+The default `observe` profile advertises only read, browse, history and monitoring
+tools. `operator` exposes only explicitly allowlisted write targets and methods;
+an entire batch write is rejected before touching OPC UA if any target is outside
+the allowlist. `full` exposes all tools. Both `operator` and `full` still require
+a secured OPC UA channel unless `OPCUA_ALLOW_INSECURE_CONTROL=true` is set
+explicitly. Policy is enforced again on every call, not only when tools are
+listed, and configuration changes take effect after restarting the MCP process.
+
+Example production policy (`OPCUA_POLICY_FILE=/etc/opcua-mcp-policy.json`):
+
+```json
+{
+  "version": 1,
+  "profile": "operator",
+  "allowed_tools": ["read_opcua_node", "write_opcua_node", "call_opcua_method"],
+  "control": {
+    "writable_nodes": ["ns=2;s=Line1.SpeedSetpoint"],
+    "callable_methods": [
+      { "object_id": "ns=2;s=Line1", "method_id": "ns=2;s=Line1.Reset" }
+    ],
+    "acknowledge_alarms": false
+  }
+}
+```
 
 Encrypted, authenticated connection to a real server:
 
@@ -242,7 +274,9 @@ Encrypted, authenticated connection to a real server:
         "OPCUA_CLIENT_CERT": "/etc/opcua/client.pem",
         "OPCUA_CLIENT_KEY": "/etc/opcua/client_key.pem",
         "OPCUA_USERNAME": "mcp-operator",
-        "OPCUA_PASSWORD": "…"
+        "OPCUA_PASSWORD": "…",
+        "OPCUA_PROFILE": "operator",
+        "OPCUA_POLICY_FILE": "/etc/opcua-mcp-policy.json"
       }
     }
   }
@@ -345,21 +379,21 @@ Full guide, including the MCP Inspector and AI-agent walkthroughs:
 ## Security
 
 > [!WARNING]
-> Both runtimes **default** to `SecurityPolicy.None` and
-> `MessageSecurityMode.None` — **unauthenticated and unencrypted**. That default
-> is fine for the bundled mock and local development. **Do not point it at
-> production industrial equipment as-is** — set `OPCUA_SECURITY_POLICY` and
-> credentials as shown under [Configuration](#configuration). Both servers print
-> a warning to stderr while running without security.
+> Both runtimes default to an **observe-only** tool profile, but the OPC UA
+> connection itself still defaults to `SecurityPolicy.None` and
+> `MessageSecurityMode.None` — unauthenticated and unencrypted. That combination
+> is for the bundled mock and local development. For production, configure both
+> channel security and an `operator` allowlist as shown above. Control tools are
+> blocked on an insecure channel unless the explicit lab override is set.
 
 See [SECURITY.md](SECURITY.md) for the security posture, what the servers do and
 do not verify, and how to report a vulnerability;
 [docs/certificates.md](docs/certificates.md) for client certificates and trust
 setup.
 
-Note also that this server can **write** to nodes and **call methods** on real
-equipment. Scope the OPC UA user account you connect with to exactly what you
-intend the assistant to be able to do.
+The MCP policy is defense in depth, not a replacement for OPC UA authorization.
+Scope the OPC UA account to the same nodes and methods; use a separate read-only
+account for `observe` deployments.
 
 ## Contributing
 

@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "url";
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
 import { parseArgs, runCli } from "./install.js";
+import { describePolicy, toolPolicy } from "./policy.js";
 import { securityConfig } from "./security.js";
 import { OpcuaTools } from "./tools.js";
 
@@ -153,6 +154,7 @@ export function runMain(opts: { scriptPath: string | null }): void {
     // the first place.
     try {
       securityConfig();
+      console.error(`Tool policy: ${describePolicy(toolPolicy())}`);
     } catch (error) {
       console.error(`Configuration error: ${(error as Error).message}`);
       process.exit(1);

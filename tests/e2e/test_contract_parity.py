@@ -169,6 +169,14 @@ async def test_servers_match_contract(impl_params):
                 f"which does not cover the contract's {sorted(wanted)}"
             )
 
+        if shape_name := spec.get("resultShape"):
+            assert tool.output_schema == {
+                "type": "object",
+                "properties": {"result": RESULT_SHAPES[shape_name]},
+                "required": ["result"],
+                "additionalProperties": False,
+            }, f"{impl}/{name}: outputSchema differs from the shared result shape"
+
 
 async def test_history_result_matches_the_contract_shape(impl_params):
     """Both servers' history output must match the contract's declared shape.
@@ -189,6 +197,9 @@ async def test_history_result_matches_the_contract_shape(impl_params):
 
     assert not result.is_error, text_of(result)
     records = records_of(result)
+    assert result.structured_content == {"result": records}, (
+        f"{impl}: structured history result differs from compatibility content"
+    )
     assert records, f"{impl}: no history records to check the shape against"
     assert_matches_result_shape(records, spec["resultShape"], f"{impl}/read_history_opcua_node")
 

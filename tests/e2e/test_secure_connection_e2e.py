@@ -51,7 +51,12 @@ CORE_TOOLS = {
 
 
 def _server_params(impl: str, url: str, env: dict[str, str]) -> StdioServerParameters:
-    full_env = {**os.environ, "OPCUA_SERVER_URL": url, **env}
+    full_env = {
+        **os.environ,
+        "OPCUA_SERVER_URL": url,
+        "OPCUA_PROFILE": "full",
+        **env,
+    }
     if impl == "python":
         return StdioServerParameters(
             command="uv",

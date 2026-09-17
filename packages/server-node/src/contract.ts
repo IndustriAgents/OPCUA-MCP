@@ -6,7 +6,24 @@ import { dirname, join } from "path";
 
 export const BUILD_DIR = dirname(fileURLToPath(import.meta.url));
 
+export type AccessClass = "read" | "monitor" | "alarm-action" | "control";
+
+export interface ToolSpec {
+  name: string;
+  accessClass: AccessClass;
+  capability: string | null;
+  description: string;
+  inputSchema: any;
+  resultShape?: string;
+  annotations: {
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+  };
+}
+
 export const CONTRACT: {
+  resultShapes: Record<string, any>;
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
   events: {
     defaultNotifierNodeId: string;
@@ -31,7 +48,7 @@ export const CONTRACT: {
     mimeType: string;
     body: { recordsKey: string; resultShape: string };
   }>;
-  tools: Array<{ name: string; capability: string | null; description: string; inputSchema: any }>;
+  tools: ToolSpec[];
 } = JSON.parse(readFileSync(join(BUILD_DIR, "contract.json"), "utf8"));
 
 // Version is single-sourced from package.json and staged into build/version.json

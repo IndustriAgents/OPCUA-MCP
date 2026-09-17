@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Production tool policy and typed control boundary.** Both runtimes now
+  default to an observe-only profile, share tool risk/annotation metadata, and
+  enforce profile, tool and exact node/method allowlists on every invocation.
+  Control tools require OPC UA channel security unless a lab-only override is
+  explicit. A versioned JSON policy, environment overrides, Claude Desktop
+  bundle fields, structured audit decisions and cross-runtime E2E tests are
+  included.
+- **Bounded address-space discovery and typed writes.** `get_all_variables` now
+  has root, depth and inspected-node budgets plus cycle detection and a clear
+  truncation notice. Writes convert through the target node's OPC UA Variant
+  metadata with strict booleans, integer range checks, lossless 64-bit values,
+  base64 ByteStrings, ISO DateTimes and arrays. Python batch reads and writes
+  now use one OPC UA service call instead of one round trip per node.
+- Tools with a declared result shape now advertise MCP `outputSchema` and return
+  canonical `structuredContent` from both runtimes while retaining text blocks
+  for older clients. The Node connection manager also coalesces concurrent
+  connection attempts and cleans up partial sessions deterministically.
 - **Real-time data-change subscriptions** (#3). Three tools on both servers —
   `subscribe_opcua_node`, `list_subscriptions`, `unsubscribe_opcua_node` — plus a
   resource, `opcua://subscriptions`. Until now the only way to follow a node was

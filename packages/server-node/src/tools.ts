@@ -31,6 +31,8 @@ import {
 } from "./events.js";
 import { toHistoryRecords } from "./records.js";
 import { SubscriptionManager, SubscriptionRecord } from "./subscriptions.js";
+import { ToolPolicy, toolPolicy } from "./policy.js";
+import { convertForVariant } from "./variant-codec.js";
 
 /** A history/aggregate response: one text block per canonical record.
  *
@@ -59,7 +61,57 @@ function recordBlocks(records: unknown[]) {
       type: "text",
       text: JSON.stringify(record, null, 2),
     })),
+    structuredContent: { result: records },
   };
+}
+
+function outputSchema(resultShape: string | undefined): Tool["outputSchema"] {
+  if (!resultShape) return undefined;
+  return {
+    type: "object",
+    properties: { result: CONTRACT.resultShapes[resultShape] },
+    required: ["result"],
+    additionalProperties: false,
+  } as Tool["outputSchema"];
+}
+
+function auditTargets(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name === "write_opcua_node") return { node_ids: [args.node_id] };
+  if (name === "write_multiple_opcua_nodes") {
+    const items = Array.isArray(args.nodes_to_write) ? args.nodes_to_write : [];
+    return {
+      node_ids: items.map((item) => (item as Record<string, unknown>).node_id),
+    };
+  }
+  if (name === "call_opcua_method") {
+    return { object_node_id: args.object_node_id, method_node_id: args.method_node_id };
+  }
+  if (name === "acknowledge_alarm") {
+    return { condition_id: args.condition_id, event_id: args.event_id };
+  }
+  return {};
+}
+
+function auditDecision(
+  policy: ToolPolicy,
+  name: string,
+  args: Record<string, unknown>,
+  decision: "allowed" | "denied",
+  reason?: string
+): void {
+  const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
+  if (!tool || !["control", "alarm-action"].includes(tool.accessClass)) return;
+  console.error(
+    JSON.stringify({
+      event: "opcua_mcp_policy",
+      timestamp: new Date().toISOString(),
+      profile: policy.config.profile,
+      tool: name,
+      decision,
+      ...auditTargets(name, args),
+      ...(reason ? { reason } : {}),
+    })
+  );
 }
 
 export class OpcuaTools {
@@ -67,7 +119,10 @@ export class OpcuaTools {
   private readonly subs = new SubscriptionManager();
   private readonly events = new EventSubscriptions();
 
-  constructor(private readonly conn: OpcuaConnection) {}
+  constructor(
+    private readonly conn: OpcuaConnection,
+    private readonly policy: ToolPolicy = toolPolicy()
+  ) {}
 
   /** Tear down every OPC UA subscription this server created.
    *
@@ -107,7 +162,8 @@ export class OpcuaTools {
     this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions();
     const aggregateOk = this.aggregateFunctions.length > 0;
 
-    const tools = CONTRACT.tools
+    const tools = this.policy
+      .visibleTools(CONTRACT.tools)
       .filter(
         (t) =>
           t.capability === null ||
@@ -123,9 +179,21 @@ export class OpcuaTools {
             t.inputSchema.properties.aggregate_function.description +
             ", one of: " +
             [...this.aggregateFunctions].join(", ");
-          return { name: t.name, description: t.description, inputSchema };
+          return {
+            name: t.name,
+            description: t.description,
+            inputSchema,
+            annotations: t.annotations,
+            outputSchema: outputSchema(t.resultShape),
+          };
         }
-        return { name: t.name, description: t.description, inputSchema: t.inputSchema };
+        return {
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          annotations: t.annotations,
+          outputSchema: outputSchema(t.resultShape),
+        };
       }) satisfies Tool[];
 
     return tools;
@@ -168,6 +236,22 @@ export class OpcuaTools {
     const { name, arguments: args } = request.params;
 
     try {
+      // This is the security boundary. Filtering tools/list improves the model's
+      // choices, but clients cache catalogs and may call a previously visible
+      // tool directly, so authorize again before touching the OPC UA network.
+      try {
+        this.policy.authorize(name, args ?? {});
+        auditDecision(this.policy, name, args ?? {}, "allowed");
+      } catch (error) {
+        auditDecision(
+          this.policy,
+          name,
+          args ?? {},
+          "denied",
+          error instanceof Error ? error.message : String(error)
+        );
+        throw error;
+      }
       await this.ensureConnection();
 
       switch (name) {
@@ -192,7 +276,7 @@ export class OpcuaTools {
           );
 
         case "write_opcua_node":
-          return await this.writeOpcuaNode(args?.node_id as string, args?.value as string);
+          return await this.writeOpcuaNode(args?.node_id as string, args?.value);
 
         case "browse_opcua_node_children":
           return await this.browseOpcuaNodeChildren(args?.node_id as string);
@@ -202,7 +286,7 @@ export class OpcuaTools {
 
         case "write_multiple_opcua_nodes":
           return await this.writeMultipleOpcuaNodes(
-            args?.nodes_to_write as Array<{ node_id: string; value: string }>
+            args?.nodes_to_write as Array<{ node_id: string; value: unknown }>
           );
 
         case "call_opcua_method":
@@ -213,7 +297,12 @@ export class OpcuaTools {
           );
 
         case "get_all_variables":
-          return await this.getAllVariables();
+          return await this.getAllVariables(
+            (args?.root_node_id as string | undefined) ?? "ns=0;i=85",
+            (args?.max_depth as number | undefined) ?? 8,
+            (args?.max_nodes as number | undefined) ?? 500,
+            (args?.include_values as boolean | undefined) ?? true
+          );
 
         case "subscribe_opcua_node":
           return subscriptionResult([
@@ -405,7 +494,7 @@ export class OpcuaTools {
     }
   }
 
-  private async writeOpcuaNode(nodeId: string, value: string) {
+  private async writeOpcuaNode(nodeId: string, value: unknown) {
     if (!this.session) {
       throw new Error("No OPC UA session available");
     }
@@ -414,29 +503,20 @@ export class OpcuaTools {
       // First read the current value to determine the data type
       const currentDataValue = await this.session.readVariableValue(nodeId);
 
-      let convertedValue: any;
-      const currentValue = currentDataValue.value?.value;
-      // Coerce to string first: a client may send a non-string (e.g. boolean/number) value.
-      const valueStr = String(value);
-
-      // Convert value based on the current type
-      if (typeof currentValue === "number") {
-        convertedValue = parseFloat(valueStr);
-        if (isNaN(convertedValue)) {
-          throw new Error(`Cannot convert "${valueStr}" to number`);
-        }
-      } else if (typeof currentValue === "boolean") {
-        convertedValue = valueStr.toLowerCase() === "true" || valueStr === "1";
-      } else {
-        convertedValue = valueStr; // Keep as string
+      if (currentDataValue.statusCode !== StatusCodes.Good || !currentDataValue.value) {
+        throw new Error(`Cannot read target data type: ${currentDataValue.statusCode.toString()}`);
       }
+      const target = currentDataValue.value;
+      const convertedValue = convertForVariant(value, target.dataType, target.arrayType);
 
       const nodeToWrite = {
         nodeId: nodeId,
         attributeId: AttributeIds.Value,
         value: new DataValue({
           value: new Variant({
-            dataType: currentDataValue.value?.dataType || DataType.String,
+            dataType: target.dataType,
+            arrayType: target.arrayType,
+            dimensions: target.dimensions,
             value: convertedValue,
           }),
         }),
@@ -535,7 +615,7 @@ export class OpcuaTools {
     }
   }
 
-  private async writeMultipleOpcuaNodes(nodesToWrite: Array<{ node_id: string; value: string }>) {
+  private async writeMultipleOpcuaNodes(nodesToWrite: Array<{ node_id: string; value: unknown }>) {
     if (!this.session) {
       throw new Error("No OPC UA session available");
     }
@@ -550,44 +630,59 @@ export class OpcuaTools {
 
       const currentDataValues = await this.session.read(nodesToRead);
 
-      const writeNodes = nodesToWrite.map((item, index) => {
+      const results: Array<{ node_id: string; status: string } | undefined> = new Array(
+        nodesToWrite.length
+      );
+      const writeNodes: Array<{
+        nodeId: string;
+        attributeId: AttributeIds;
+        value: DataValue;
+      }> = [];
+      const writeIndices: number[] = [];
+
+      nodesToWrite.forEach((item, index) => {
         const currentDataValue = currentDataValues[index];
-        const currentValue = currentDataValue.value?.value;
-
-        let convertedValue: any;
-        // Coerce to string first: a client may send a non-string (e.g. boolean/number) value.
-        const valueStr = String(item.value);
-
-        // Convert value based on the current type
-        if (typeof currentValue === "number") {
-          convertedValue = parseFloat(valueStr);
-          if (isNaN(convertedValue)) {
-            throw new Error(`Cannot convert "${valueStr}" to number for node ${item.node_id}`);
-          }
-        } else if (typeof currentValue === "boolean") {
-          convertedValue = valueStr.toLowerCase() === "true" || valueStr === "1";
-        } else {
-          convertedValue = valueStr; // Keep as string
+        if (currentDataValue.statusCode !== StatusCodes.Good || !currentDataValue.value) {
+          results[index] = {
+            node_id: item.node_id,
+            status: `Error: ${currentDataValue.statusCode.toString()}`,
+          };
+          return;
         }
-
-        return {
-          nodeId: item.node_id,
-          attributeId: AttributeIds.Value,
-          value: new DataValue({
-            value: new Variant({
-              dataType: currentDataValue.value?.dataType || DataType.String,
-              value: convertedValue,
+        const target = currentDataValue.value;
+        try {
+          const convertedValue = convertForVariant(item.value, target.dataType, target.arrayType);
+          writeNodes.push({
+            nodeId: item.node_id,
+            attributeId: AttributeIds.Value,
+            value: new DataValue({
+              value: new Variant({
+                dataType: target.dataType,
+                arrayType: target.arrayType,
+                dimensions: target.dimensions,
+                value: convertedValue,
+              }),
             }),
-          }),
-        };
+          });
+          writeIndices.push(index);
+        } catch (error) {
+          results[index] = {
+            node_id: item.node_id,
+            status: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
       });
 
-      const statusCodes = await this.session.write(writeNodes);
-
-      const results = statusCodes.map((statusCode, index) => ({
-        node_id: nodesToWrite[index].node_id,
-        status: statusCode === StatusCodes.Good ? "Success" : `Error: ${statusCode.toString()}`,
-      }));
+      if (writeNodes.length > 0) {
+        const statusCodes = await this.session.write(writeNodes);
+        statusCodes.forEach((statusCode, resultIndex) => {
+          const inputIndex = writeIndices[resultIndex];
+          results[inputIndex] = {
+            node_id: nodesToWrite[inputIndex].node_id,
+            status: statusCode === StatusCodes.Good ? "Success" : `Error: ${statusCode.toString()}`,
+          };
+        });
+      }
 
       return {
         content: [
@@ -757,7 +852,12 @@ export class OpcuaTools {
     };
   }
 
-  private async getAllVariables() {
+  private async getAllVariables(
+    rootNodeId = "ns=0;i=85",
+    requestedMaxDepth = 8,
+    requestedMaxNodes = 500,
+    includeValues = true
+  ) {
     if (!this.session) {
       throw new Error("No OPC UA session available");
     }
@@ -772,20 +872,37 @@ export class OpcuaTools {
         description: string;
       }> = [];
 
-      // Start browsing from the Objects folder (ns=0;i=85)
-      const objectsNodeId = "ns=0;i=85";
+      const maxDepth = Math.max(0, Math.min(Math.trunc(requestedMaxDepth), 64));
+      const maxNodes = Math.max(1, Math.min(Math.trunc(requestedMaxNodes), 5000));
+      const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: rootNodeId, depth: 0 }];
+      const visited = new Set<string>([rootNodeId]);
+      let inspected = 0;
+      let truncated = false;
 
-      const searchVariables = async (nodeId: string): Promise<void> => {
+      while (queue.length > 0 && !truncated) {
+        const { nodeId, depth } = queue.shift()!;
         try {
           const browseResult = await this.session!.browse(nodeId);
 
           if (browseResult.statusCode !== StatusCodes.Good || !browseResult.references) {
-            return;
+            if (nodeId === rootNodeId) {
+              throw new Error(`Browse failed with status: ${browseResult.statusCode.toString()}`);
+            }
+            continue;
           }
 
           for (const ref of browseResult.references) {
             try {
               const childNodeId = ref.nodeId.toString();
+              if (visited.has(childNodeId)) {
+                continue;
+              }
+              visited.add(childNodeId);
+              if (inspected >= maxNodes) {
+                truncated = true;
+                break;
+              }
+              inspected += 1;
               const browseName = ref.browseName.name;
 
               // Skip the entire "Server" subtree
@@ -807,12 +924,16 @@ export class OpcuaTools {
                 let value: any;
                 let dataType = "";
                 let description = "";
-                let objectId = nodeId;
+                const objectId = nodeId;
 
-                try {
-                  const valueResult = await this.session!.readVariableValue(childNodeId);
-                  value = valueResult.value?.value;
-                } catch {
+                if (includeValues) {
+                  try {
+                    const valueResult = await this.session!.readVariableValue(childNodeId);
+                    value = valueResult.value?.value;
+                  } catch {
+                    value = null;
+                  }
+                } else {
                   value = null;
                 }
 
@@ -844,10 +965,9 @@ export class OpcuaTools {
                   data_type: dataType,
                   description: description,
                 });
-              } else if (nodeClass === 1) {
+              } else if (nodeClass === 1 && depth < maxDepth) {
                 // NodeClass.Object = 1
-                // This is an object node, recursively search its children
-                await searchVariables(childNodeId);
+                queue.push({ nodeId: childNodeId, depth: depth + 1 });
               }
             } catch (error) {
               // Continue with next reference if this one fails
@@ -855,15 +975,18 @@ export class OpcuaTools {
             }
           }
         } catch (error) {
+          if (nodeId === rootNodeId) throw error;
           // Continue if browse fails for this node
           console.error(`Error browsing node ${nodeId}: ${error}`);
         }
-      };
-
-      await searchVariables(objectsNodeId);
+      }
 
       if (variablesInfo.length > 0) {
-        let result = `Found ${variablesInfo.length} variables:\n`;
+        let result = `Found ${variablesInfo.length} variables after inspecting ${inspected} nodes`;
+        if (truncated) {
+          result += ` (truncated at max_nodes=${maxNodes})`;
+        }
+        result += ":\n";
         for (const variable of variablesInfo) {
           result += `\n- Name: ${variable.name}\n`;
           result += `  NodeID: ${variable.nodeid}\n`;
@@ -882,18 +1005,22 @@ export class OpcuaTools {
           ],
         };
       } else {
+        let result = `No variables found after inspecting ${inspected} nodes`;
+        if (truncated) {
+          result += ` (truncated at max_nodes=${maxNodes})`;
+        }
         return {
           content: [
             {
               type: "text",
-              text: "No variables found in the OPC UA server.",
+              text: `${result}.`,
             },
           ],
         };
       }
     } catch (error) {
       throw new Error(
-        `Failed to get all variables: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to discover variables below ${rootNodeId}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

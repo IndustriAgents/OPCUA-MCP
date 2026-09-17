@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -12,19 +13,59 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from opcua import Node, ua
 from opcua.ua import NodeClass
 
 from . import events
 from .aggregates import validate_aggregate_function
-from .capabilities import server_aggregate_functions, server_supports_history
+from .capabilities import client_aggregate_functions, client_supports_history
 from .config import SERVER_URL
-from .contract import DESC, SUBSCRIPTIONS_RESOURCE
+from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import parse_iso_datetime
+from .policy import describe_policy, tool_policy
 from .records import history_records
 from .security import create_client, describe_security, security_config, security_warnings
 from .subscriptions import SUBSCRIPTIONS, unknown_subscription_message
+from .variant_codec import convert_for_variant
 from .version import package_version
+
+_CAPABILITIES: dict[str, Any] = {"history": False, "aggregate_functions": {}}
+
+
+def _audit_targets(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name == "write_opcua_node":
+        return {"node_ids": [arguments.get("node_id")]}
+    if name == "write_multiple_opcua_nodes":
+        return {"node_ids": [item.get("node_id") for item in arguments.get("nodes_to_write", [])]}
+    if name == "call_opcua_method":
+        return {
+            "object_node_id": arguments.get("object_node_id"),
+            "method_node_id": arguments.get("method_node_id"),
+        }
+    if name == "acknowledge_alarm":
+        return {
+            "condition_id": arguments.get("condition_id"),
+            "event_id": arguments.get("event_id"),
+        }
+    return {}
+
+
+def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason: str = "") -> None:
+    spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
+    if spec is None or spec["accessClass"] not in {"control", "alarm-action"}:
+        return
+    record = {
+        "event": "opcua_mcp_policy",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "profile": tool_policy().config.profile,
+        "tool": name,
+        "decision": decision,
+        **_audit_targets(name, arguments),
+    }
+    if reason:
+        record["reason"] = reason
+    print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
 
 
 # Manage the lifecycle of the OPC UA client connection
@@ -43,6 +84,10 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         # Connect to OPC UA server synchronously, wrapped in a thread for async compatibility
         await asyncio.to_thread(client.connect)
         print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
+        _CAPABILITIES["history"] = await asyncio.to_thread(client_supports_history, client)
+        _CAPABILITIES["aggregate_functions"] = await asyncio.to_thread(
+            client_aggregate_functions, client
+        )
         SUBSCRIPTIONS.attach(client)
         yield {"opcua_client": client}
     finally:
@@ -54,13 +99,65 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         await asyncio.to_thread(_EVENTS.close_all)
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(client.disconnect)
+        _CAPABILITIES["history"] = False
+        _CAPABILITIES["aggregate_functions"] = {}
         print("Disconnected from OPC UA server", file=sys.stderr)
+
+
+class PolicyMCPServer(MCPServer):
+    """MCPServer whose advertised and callable tools obey deployment policy."""
+
+    async def list_tools(self):
+        policy = tool_policy()
+        specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
+        listed = await super().list_tools()
+        visible = []
+        for tool in listed:
+            spec = specs[tool.name]
+            if not policy.is_visible(spec):
+                continue
+            capability = spec.get("capability")
+            if capability == "history" and not _CAPABILITIES["history"]:
+                continue
+            if capability == "aggregate" and not _CAPABILITIES["aggregate_functions"]:
+                continue
+            annotations = ToolAnnotations(**spec["annotations"])
+            output_schema = None
+            if shape_name := spec.get("resultShape"):
+                output_schema = {
+                    "type": "object",
+                    "properties": {"result": CONTRACT["resultShapes"][shape_name]},
+                    "required": ["result"],
+                    "additionalProperties": False,
+                }
+            visible.append(
+                tool.model_copy(update={"annotations": annotations, "output_schema": output_schema})
+            )
+        return visible
+
+    async def call_tool(self, name, arguments, context=None):
+        arguments = arguments or {}
+        try:
+            # Catalog filtering is not authorization: clients may retain an old
+            # tools/list result, so enforce the current policy again on every call.
+            tool_policy().authorize(name, arguments)
+            _audit_decision(name, arguments, "allowed")
+            spec = next(tool for tool in CONTRACT["tools"] if tool["name"] == name)
+            capability = spec.get("capability")
+            if capability == "history" and not _CAPABILITIES["history"]:
+                raise ToolError("OPC UA server does not advertise history support")
+            if capability == "aggregate" and not _CAPABILITIES["aggregate_functions"]:
+                raise ToolError("OPC UA server does not advertise aggregate support")
+        except (PermissionError, ValueError) as exc:
+            _audit_decision(name, arguments, "denied", str(exc))
+            raise ToolError(str(exc)) from exc
+        return await super().call_tool(name, arguments, context)
 
 
 # Create an MCP server instance. The server identity must match the Node server's
 # so both runtimes present themselves as the same product to MCP clients, and the
 # version must be a real one rather than the null the Node server never reports.
-mcp = MCPServer("opcua-mcp-server", version=package_version(), lifespan=opcua_lifespan)
+mcp = PolicyMCPServer("opcua-mcp-server", version=package_version(), lifespan=opcua_lifespan)
 
 
 # Tool: Read the value of an OPC UA node
@@ -127,19 +224,17 @@ def read_history_opcua_node(
     return history_records(values)
 
 
-# Conditionally register the history tool based on server capability.
-if server_supports_history(SERVER_URL):
-    read_history_opcua_node = mcp.tool(description=DESC["read_history_opcua_node"])(
-        read_history_opcua_node
-    )
+# Register optional tools once; tools/list gates them using the capabilities read
+# from the lifecycle's active session. This avoids network I/O during import and
+# prevents startup from opening throwaway OPC UA sessions.
+read_history_opcua_node = mcp.tool(description=DESC["read_history_opcua_node"])(
+    read_history_opcua_node
+)
 
 
 # Tool: Read server-computed aggregates over a node's history.
 # Registered only when the server advertises aggregate functions, mirroring the
 # Node server's capability gating.
-_AGGREGATE_FUNCTIONS = server_aggregate_functions(SERVER_URL)
-
-
 def read_aggregate_opcua_node(
     node_id: str,
     ctx: Context,
@@ -168,10 +263,7 @@ def read_aggregate_opcua_node(
             interval the server holds no data for has a null `value` and a
             non-Good `status`.
     """
-    # Re-probe rather than trusting the import-time snapshot: a server may gain or
-    # lose aggregate support while this process is running, and answering from a
-    # stale cache would report the wrong supported set.
-    aggregate_functions = server_aggregate_functions(SERVER_URL)
+    aggregate_functions = _CAPABILITIES["aggregate_functions"]
     # Both runtimes reject an unsupported function with the same sentence, so the
     # message is part of the contract and must reach the client rather than be
     # masked as a crash — hence ToolError. See `validate_aggregate_function`.
@@ -200,15 +292,14 @@ def read_aggregate_opcua_node(
         raise ToolError(f"Failed to read node {node_id}: {e!s}") from e
 
 
-if _AGGREGATE_FUNCTIONS:
-    read_aggregate_opcua_node = mcp.tool(description=DESC["read_aggregate_opcua_node"])(
-        read_aggregate_opcua_node
-    )
+read_aggregate_opcua_node = mcp.tool(description=DESC["read_aggregate_opcua_node"])(
+    read_aggregate_opcua_node
+)
 
 
 # Tool: Write a value to an OPC UA node
 @mcp.tool(description=DESC["write_opcua_node"])
-def write_opcua_node(node_id: str, value: str, ctx: Context) -> str:
+def write_opcua_node(node_id: str, value: Any, ctx: Context) -> str:
     """
     Write a value to a specific OPC UA node.
 
@@ -224,15 +315,9 @@ def write_opcua_node(node_id: str, value: str, ctx: Context) -> str:
     client = ctx.request_context.lifespan_context["opcua_client"]
     node = client.get_node(node_id)
     try:
-        # Convert value based on the node's current type.
-        # Note: check bool before (int, float) because bool is a subclass of int.
-        current_value = node.get_value()
-        if isinstance(current_value, bool):
-            node.set_value(str(value).lower() in ["true", "1", "yes", "on"])
-        elif isinstance(current_value, (int, float)):
-            node.set_value(float(value))
-        else:
-            node.set_value(value)
+        target = node.get_data_value().Value
+        converted = convert_for_variant(value, target.VariantType, target.is_array)
+        node.set_value(ua.Variant(converted, target.VariantType))
         return f"Successfully wrote {value} to node {node_id}"
     # `ToolError`, not a returned string: a returned string is a *successful* tool
     # result, so a client had to read the prose to notice the write never landed.
@@ -424,16 +509,18 @@ def read_multiple_opcua_nodes(node_ids: list[str], ctx: Context) -> str:
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
+        nodes = [client.get_node(node_id) for node_id in node_ids]
+        values = client.uaclient.get_attributes(
+            [node.nodeid for node in nodes], ua.AttributeIds.Value
+        )
         results = {}
-        for node_id in node_ids:
-            try:
-                node = client.get_node(node_id)
-                value = node.get_value()
-                results[node_id] = value
-            except Exception as e:
-                results[node_id] = f"Error: {e!s}"
+        for node_id, data_value in zip(node_ids, values, strict=True):
+            if data_value.StatusCode.is_good():
+                results[node_id] = data_value.Value.Value
+            else:
+                results[node_id] = f"Error: {data_value.StatusCode}"
 
-        return f"Multiple node read results: {results!r}"
+        return json.dumps(results, indent=2, default=str)
 
     except Exception as e:
         return f"Error reading multiple nodes: {e!s}"
@@ -459,31 +546,44 @@ def write_multiple_opcua_nodes(nodes_to_write: list[dict[str, Any]], ctx: Contex
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
-        results = []
-        for item in nodes_to_write:
-            node_id = item["node_id"]
-            value = item["value"]
+        nodes = [client.get_node(item["node_id"]) for item in nodes_to_write]
+        current = client.uaclient.get_attributes(
+            [node.nodeid for node in nodes], ua.AttributeIds.Value
+        )
+        results = [None] * len(nodes_to_write)
+        writable_nodes = []
+        writable_values = []
+        writable_indices = []
 
+        for index, (item, node, data_value) in enumerate(
+            zip(nodes_to_write, nodes, current, strict=True)
+        ):
+            if not data_value.StatusCode.is_good():
+                results[index] = {
+                    "node_id": item["node_id"],
+                    "status": f"Error: {data_value.StatusCode}",
+                }
+                continue
             try:
-                node = client.get_node(node_id)
-
-                # Convert value based on the node's current type.
-                # Note: check bool before (int, float) because bool is a subclass of int.
-                current_value = node.get_value()
-                if isinstance(current_value, bool):
-                    converted_value = str(value).lower() in ["true", "1", "yes", "on"]
-                elif isinstance(current_value, (int, float)):
-                    converted_value = float(value)
-                else:
-                    converted_value = str(value)
-
-                node.set_value(converted_value)
-                results.append({"node_id": node_id, "status": "Success"})
-
+                target = data_value.Value
+                converted = convert_for_variant(item["value"], target.VariantType, target.is_array)
+                writable_nodes.append(node.nodeid)
+                writable_values.append(ua.DataValue(ua.Variant(converted, target.VariantType)))
+                writable_indices.append(index)
             except Exception as e:
-                results.append({"node_id": node_id, "status": f"Error: {e!s}"})
+                results[index] = {"node_id": item["node_id"], "status": f"Error: {e!s}"}
 
-        return f"Write operation results: {results!r}"
+        if writable_nodes:
+            statuses = client.uaclient.set_attributes(
+                writable_nodes, writable_values, ua.AttributeIds.Value
+            )
+            for index, status in zip(writable_indices, statuses, strict=True):
+                results[index] = {
+                    "node_id": nodes_to_write[index]["node_id"],
+                    "status": "Success" if status.is_good() else f"Error: {status}",
+                }
+
+        return f"Write operation results:\n{json.dumps(results, indent=2)}"
 
     # Only reached when the whole operation fails rather than one node in it —
     # a per-node rejection is a `status` in the list above, on both servers, and
@@ -603,28 +703,50 @@ def subscriptions_resource() -> str:
 
 # Tool: Get all variables information
 @mcp.tool(description=DESC["get_all_variables"])
-def get_all_variables(ctx: Context) -> str:
+def get_all_variables(
+    ctx: Context,
+    root_node_id: str = "ns=0;i=85",
+    max_depth: int = 8,
+    max_nodes: int = 500,
+    include_values: bool = True,
+) -> str:
     """
-    Get all available variables from the OPC UA server, excluding those under
-    the built-in 'Server' object.
+    Discover variables below a root node within a bounded traversal budget.
 
     Returns:
-        str: A string representation of all variables with their name, nodeid, object_id, value,
-             data_type, and description.
+        str: Discovered variables plus whether the traversal was truncated.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     variables_info = []
+    max_depth = max(0, min(max_depth, 64))
+    max_nodes = max(1, min(max_nodes, 5000))
 
     try:
-        objects_node = client.get_objects_node()
+        root = client.get_node(root_node_id)
+        queue = deque([(root, 0)])
+        visited = {root.nodeid.to_string()}
+        inspected = 0
+        truncated = False
 
-        def search_variables(node):
+        while queue:
+            node, depth = queue.popleft()
             try:
-                children = node.get_children()
+                children = browse_children(node)
             except Exception:
-                return
+                if node.nodeid.to_string() == root_node_id:
+                    raise
+                continue
 
             for child in children:
+                child_id = child.nodeid.to_string()
+                if child_id in visited:
+                    continue
+                visited.add(child_id)
+                if inspected >= max_nodes:
+                    truncated = True
+                    break
+                inspected += 1
+
                 try:
                     node_class = child.get_node_class()
                 except Exception:
@@ -640,18 +762,13 @@ def get_all_variables(ctx: Context) -> str:
 
                 if node_class == NodeClass.Variable:
                     browse_name = child_browse_name
-                    node_id = child.nodeid.to_string()
 
-                    try:
-                        parent_node = child.get_parent()
-                        object_id = parent_node.nodeid.to_string() if parent_node else "N/A"
-                    except Exception:
-                        object_id = "N/A"
-
-                    try:
-                        value = child.get_value()
-                    except Exception:
-                        value = None
+                    value = None
+                    if include_values:
+                        try:
+                            value = child.get_value()
+                        except Exception:
+                            value = None
 
                     try:
                         data_type = child.get_data_type().to_string()
@@ -666,22 +783,24 @@ def get_all_variables(ctx: Context) -> str:
                     variables_info.append(
                         {
                             "name": browse_name,
-                            "nodeid": node_id,
-                            "object_id": object_id,
+                            "nodeid": child_id,
+                            "object_id": node.nodeid.to_string(),
                             "value": value,
                             "data_type": data_type,
                             "description": desc,
                         }
                     )
-                elif node_class == NodeClass.Object:
-                    # Recursively search children of this object,
-                    # unless it is the "Server" object
-                    search_variables(child)
+                elif node_class == NodeClass.Object and depth < max_depth:
+                    queue.append((child, depth + 1))
 
-        search_variables(objects_node)
+            if truncated:
+                break
 
         if variables_info:
-            result = f"Found {len(variables_info)} variables:\n"
+            suffix = f" after inspecting {inspected} nodes"
+            if truncated:
+                suffix += f" (truncated at max_nodes={max_nodes})"
+            result = f"Found {len(variables_info)} variables{suffix}:\n"
             for var in variables_info:
                 result += f"\n- Name: {var['name']}\n"
                 result += f"  NodeID: {var['nodeid']}\n"
@@ -691,10 +810,13 @@ def get_all_variables(ctx: Context) -> str:
                 result += f"  Description: {var['description']}\n"
             return result
         else:
-            return "No variables found in the OPC UA server."
+            suffix = f" after inspecting {inspected} nodes"
+            if truncated:
+                suffix += f" (truncated at max_nodes={max_nodes})"
+            return f"No variables found{suffix}."
 
     except Exception as e:
-        return f"Error while finding variables: {e!s}"
+        raise ToolError(f"Failed to discover variables below {root_node_id}: {e!s}") from e
 
 
 # --- events and Alarms & Conditions --------------------------------------------
@@ -744,7 +866,7 @@ def subscribe_events(
 def read_events(
     node_id: str = events.DEFAULT_NOTIFIER,
     limit: int = events.DEFAULTS["readLimit"],
-) -> list[dict | str]:
+) -> CallToolResult:
     """
     Read and drain the events buffered by subscribe_events.
 
@@ -753,9 +875,8 @@ def read_events(
         limit (int): Maximum number of events to return.
 
     Returns:
-        list[dict | str]: One record per event, oldest first, shaped by the
-            shared ``resultShapes.eventRecords`` in ``contract/tools.json``,
-            followed by a plain-text notice when the buffer overflowed.
+        CallToolResult: Event records in text and structured form, plus a
+            plain-text compatibility notice when the buffer overflowed.
     """
     drained = _EVENTS.drain(node_id, limit or events.DEFAULTS["readLimit"])
     if drained is None:
@@ -763,14 +884,12 @@ def read_events(
             f"Not subscribed to events from node {node_id}. Call subscribe_events first."
         )
     records, _remaining, dropped, size = drained
+    content = [TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
     if dropped:
-        # In the response, not only on stderr: an agent that cannot tell a
-        # complete event stream from one that lost alarms reads the gap as quiet.
-        # A bare string in the returned list becomes a plain text block, which is
-        # exactly what the Node server appends — the notice reads the same on
-        # both, and neither dresses it up as a record.
-        return [*records, events.dropped_events_message(dropped, size)]
-    return records
+        # The notice remains visible to models in compatibility content, but is
+        # not an event record and therefore stays outside structuredContent.
+        content.append(TextContent(type="text", text=events.dropped_events_message(dropped, size)))
+    return CallToolResult(content=content, structured_content={"result": records})
 
 
 @mcp.tool(description=DESC["list_active_alarms"])
@@ -848,8 +967,11 @@ def main() -> None:
     # capability probe (which swallows it) would leave nothing to go on.
     try:
         security_config()
+        policy = tool_policy()
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
+
+    print(f"Tool policy: {describe_policy(policy)}", file=sys.stderr)
 
     mcp.run(transport="stdio")

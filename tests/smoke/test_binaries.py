@@ -168,7 +168,12 @@ async def test_binary_lists_tools(binary, opcua_server, tmp_path):
     params = StdioServerParameters(
         command=str(binary),
         args=[],
-        env={**os.environ, "OPCUA_SERVER_URL": opcua_server},
+        env={
+            **os.environ,
+            "OPCUA_SERVER_URL": opcua_server,
+            "OPCUA_PROFILE": "full",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+        },
         cwd=str(tmp_path),
     )
     assert await _list_tools(params) >= CORE_TOOLS

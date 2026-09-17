@@ -34,20 +34,28 @@ setDefaultAutoSelectFamily(true);
 
 export class OpcuaConnection {
   private opcuaClient: OPCUAClient | null = null;
+  private connectPromise: Promise<void> | null = null;
   session: ClientSession | null = null;
 
   async connect(): Promise<void> {
-    try {
-      if (this.opcuaClient && this.session) {
-        return; // Already connected
-      }
+    if (this.opcuaClient && this.session) return;
+    if (!this.connectPromise) {
+      this.connectPromise = this.open().finally(() => {
+        this.connectPromise = null;
+      });
+    }
+    return this.connectPromise;
+  }
 
+  private async open(): Promise<void> {
+    let client: OPCUAClient | null = null;
+    try {
       const security = securityConfig();
       for (const warning of securityWarnings(security)) {
         console.error(`WARNING: ${warning}`);
       }
 
-      this.opcuaClient = OPCUAClient.create({
+      client = OPCUAClient.create({
         applicationName: "OPC UA MCP Client",
         connectionStrategy: {
           initialDelay: 1000,
@@ -57,32 +65,58 @@ export class OpcuaConnection {
         endpoint_must_exist: false,
       });
 
-      await this.opcuaClient.connect(SERVER_URL);
+      await client.connect(SERVER_URL);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
-      this.session = await this.opcuaClient.createSession(userIdentity(security));
+      const session = await client.createSession(userIdentity(security));
+      this.opcuaClient = client;
+      this.session = session;
       console.error("OPC UA session created");
     } catch (error) {
+      if (client) {
+        try {
+          await client.disconnect();
+        } catch {
+          // Preserve the original connection error.
+        }
+      }
+      this.opcuaClient = null;
+      this.session = null;
       console.error("Failed to connect to OPC UA server:", error);
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
-    try {
-      if (this.session) {
-        await this.session.close();
-        this.session = null;
-        console.error("OPC UA session closed");
+    if (this.connectPromise) {
+      try {
+        await this.connectPromise;
+      } catch {
+        // A failed open already cleaned up its partial client.
       }
+    }
 
-      if (this.opcuaClient) {
-        await this.opcuaClient.disconnect();
-        this.opcuaClient = null;
-        console.error("Disconnected from OPC UA server");
+    const session = this.session;
+    const client = this.opcuaClient;
+    this.session = null;
+    this.opcuaClient = null;
+
+    if (session) {
+      try {
+        await session.close();
+        console.error("OPC UA session closed");
+      } catch (error) {
+        console.error("Error closing OPC UA session:", error);
       }
-    } catch (error) {
-      console.error("Error during disconnect:", error);
+    }
+
+    if (client) {
+      try {
+        await client.disconnect();
+        console.error("Disconnected from OPC UA server");
+      } catch (error) {
+        console.error("Error disconnecting OPC UA client:", error);
+      }
     }
   }
 

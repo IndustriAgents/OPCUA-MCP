@@ -56,6 +56,9 @@ CORE_TOOLS = {
     "write_multiple_opcua_nodes",
     "call_opcua_method",
     "get_all_variables",
+    # Health/diagnostics: never capability-gated, because ServerStatus is
+    # mandatory in OPC UA — every server has one.
+    "get_server_status",
     "subscribe_opcua_node",
     "list_subscriptions",
     "unsubscribe_opcua_node",

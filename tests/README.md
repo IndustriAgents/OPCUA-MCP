@@ -46,7 +46,7 @@ Every test runs against **both** server implementations.
 
 | Test | What it verifies |
 |------|------------------|
-| `test_lists_core_tools` | All 11 always-on tools are advertised |
+| `test_lists_core_tools` | All 12 always-on tools are advertised |
 | `test_history_tool_exposed_when_supported` | History tool appears because the mock enables history |
 | `test_aggregate_tool_hidden_when_unsupported` | Aggregate tool is **hidden** (mock advertises no aggregate functions) — capability gating |
 | `test_aggregate_tool_exposed_when_supported` | Aggregate tool **appears** against the aggregate-capable mock |
@@ -79,14 +79,26 @@ Every test runs against **both** server implementations.
 | `test_the_application_uri_comes_from_the_certificate` | With no `OPCUA_APPLICATION_URI`, both runtimes announce the certificate's own `subjectAltName` URI |
 | `test_a_wrong_password_is_rejected` | Bad credentials yield `BadUserAccessDenied`, never a working session |
 | `test_an_unsecured_client_cannot_use_the_secured_server` | With no security configured there is no endpoint to fall back to, and the server warns |
+| `test_reports_a_live_connection` | `get_server_status` reports the endpoint and security actually in force |
+| `test_reports_the_servers_own_status` | State, clock and start time come from the OPC UA server — `current_time` falls inside the call window |
+| `test_reports_the_servers_build_info` | The mock identifies itself (`FreeOpcUa`), so the read is a real one |
+| `test_reports_the_namespace_array` | Namespace index → URI, indexes 0..n, the OPC UA namespace first |
+| `test_both_servers_report_the_same_thing` | One report, two runtimes: everything but the moving timestamps is identical |
+| `test_answers_when_the_server_is_unreachable` | Pointed at a dead port, the status tool reports `connected: false` and why, rather than failing |
+| `test_other_tools_say_what_to_call_when_disconnected` | Both runtimes point at `get_server_status`, in the same words |
+| `test_reads_recover_after_the_server_restarts` | The OPC UA server is stopped and restarted on the same endpoint; reads work again with no MCP restart |
+| `test_writes_recover_after_the_server_restarts` | The write path re-establishes a dead session too, and the value lands |
+| `test_status_reports_the_reconnection` | The server's *start time* has moved afterwards — proof of a new session, not a believed-in old one |
+| `test_subscriptions_are_re_established_after_a_restart` | A subscription ID survives the outage and delivers again; its buffered changes survive with it |
+| `test_a_bad_retry_setting_is_rejected_at_startup` | An unparseable `OPCUA_RECONNECT_*` value stops both runtimes rather than silently defaulting |
 
 Both servers expose the history tool under the same name, `read_history_opcua_node`,
 and only when the server advertises `AccessHistoryDataCapability`.
 
 ## Mock servers
 
-Four are used, on purpose. Each is started by its fixture on a **fresh
-ephemeral port** per session, so two checkouts can run the suite at once without
+Five are used, on purpose. Each is started by its fixture on a **fresh
+ephemeral port**, so two checkouts can run the suite at once without
 colliding (#46):
 
 | Mock | Role |
@@ -94,6 +106,7 @@ colliding (#46):
 | `packages/mock-server` (python-opcua) | Industrial address space, history, methods. Advertises **no** aggregate functions — this is what makes the capability-gating assertions meaningful. |
 | `packages/mock-server-aggregate` (node-opcua) | Advertises aggregate functions and genuinely implements `ReadProcessedDetails`. Ramps `Temperature` (`ns=1;i=1001`) by +1.0/second so aggregates are verifiable arithmetically. |
 | `packages/mock-server-alarms` (node-opcua) | Has a real `ExclusiveLimitAlarm` on a writable `Temperature` (`ns=1;i=1001`), so ConditionRefresh and Acknowledge are exercised against a genuine condition instance. Starts with the alarm active, and a test re-arms it by writing below then above the limit. |
+| `restartable_opcua_server` (fixture, python-opcua) | A fifth instance of the main mock, function-scoped and unshared, that a test may stop and start again on the same endpoint. The resilience tests need to take a server away; doing that to the session-wide mock would break every other test using it. |
 | `tests/fixtures/secure_opcua_server.py` (python-opcua) | Offers **only** Basic256Sha256 endpoints and requires a username — the unsecured mocks cannot tell a working security config from an ignored one. Certificates are generated per session into a temp dir (`secure_pki`), never committed. `--check-client-uri` adds the ApplicationUri-against-certificate check that real servers make and python-opcua's does not. |
 
 The main mock cannot serve aggregates even in principle: python-opcua answers

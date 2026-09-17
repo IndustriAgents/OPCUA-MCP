@@ -38,7 +38,11 @@
         "OPCUA_ALLOWED_WRITE_NODES": "${user_config.opcua_allowed_write_nodes}",
         "OPCUA_ALLOWED_METHODS": "${user_config.opcua_allowed_methods}",
         "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS": "${user_config.opcua_allow_acknowledge_alarms}",
-        "OPCUA_ALLOW_INSECURE_CONTROL": "${user_config.opcua_allow_insecure_control}"
+        "OPCUA_ALLOW_INSECURE_CONTROL": "${user_config.opcua_allow_insecure_control}",
+        "OPCUA_RECONNECT_MAX_RETRY": "${user_config.opcua_reconnect_max_retry}",
+        "OPCUA_RECONNECT_INITIAL_DELAY_MS": "${user_config.opcua_reconnect_initial_delay_ms}",
+        "OPCUA_RECONNECT_MAX_DELAY_MS": "${user_config.opcua_reconnect_max_delay_ms}",
+        "OPCUA_SESSION_TIMEOUT_MS": "${user_config.opcua_session_timeout_ms}"
       }
     }
   },
@@ -130,6 +134,30 @@
       "title": "Allow insecure control (lab only)",
       "description": "Permit control tools without OPC UA channel security. Never enable against production equipment.",
       "default": false,
+      "required": false
+    },
+    "opcua_reconnect_max_retry": {
+      "type": "string",
+      "title": "Reconnection attempts",
+      "description": "How many times to retry a dropped or refused connection before a tool call gives up. 0 never retries, -1 retries forever. Leave blank for 3.",
+      "required": false
+    },
+    "opcua_reconnect_initial_delay_ms": {
+      "type": "string",
+      "title": "First retry delay (ms)",
+      "description": "Wait before the first reconnection attempt; it doubles each time. Leave blank for 1000.",
+      "required": false
+    },
+    "opcua_reconnect_max_delay_ms": {
+      "type": "string",
+      "title": "Longest retry delay (ms)",
+      "description": "Ceiling for that doubling. Leave blank for 8000.",
+      "required": false
+    },
+    "opcua_session_timeout_ms": {
+      "type": "string",
+      "title": "Session timeout (ms)",
+      "description": "Session lifetime asked of the OPC UA server; it also sets how often a keep-alive is sent, so it decides how quickly an idle connection notices the server has gone. Leave blank for 60000.",
       "required": false
     }
   },

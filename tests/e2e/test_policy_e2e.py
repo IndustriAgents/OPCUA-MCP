@@ -23,6 +23,10 @@ REQUIRED_OBSERVE_TOOLS = {
     "browse_opcua_node_children",
     "read_multiple_opcua_nodes",
     "get_all_variables",
+    # Diagnostics belong in the most restricted profile there is: an
+    # observe-only deployment is exactly where "is this thing even connected?"
+    # has to be answerable.
+    "get_server_status",
     "subscribe_opcua_node",
     "list_subscriptions",
     "unsubscribe_opcua_node",

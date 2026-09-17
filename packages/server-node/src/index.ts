@@ -11,6 +11,7 @@ import {
 import { realpathSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 
+import { describeReconnect, reconnectConfig } from "./config.js";
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
 import { parseArgs, runCli } from "./install.js";
@@ -155,6 +156,7 @@ export function runMain(opts: { scriptPath: string | null }): void {
     try {
       securityConfig();
       console.error(`Tool policy: ${describePolicy(toolPolicy())}`);
+      console.error(`Connection resilience: ${describeReconnect(reconnectConfig())}`);
     } catch (error) {
       console.error(`Configuration error: ${(error as Error).message}`);
       process.exit(1);

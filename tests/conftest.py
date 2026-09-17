@@ -258,6 +258,70 @@ def alarm_opcua_server() -> str:
         _terminate(proc)
 
 
+class RestartableServer:
+    """A mock OPC UA server a test can take away and give back.
+
+    Its port is fixed for its lifetime, which is the point: the MCP servers under
+    test are pointed at one endpoint and must find the server there again after it
+    has been restarted, exactly as they would in a plant where a controller is
+    power-cycled and comes back on the same address.
+    """
+
+    def __init__(self, url: str, port: int, argv: list[str], cwd: Path) -> None:
+        self.url = url
+        self._port = port
+        self._argv = argv
+        self._cwd = cwd
+        self._proc: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        assert self._proc is None, "server is already running"
+        self._proc = subprocess.Popen(
+            self._argv,
+            cwd=self._cwd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _await_listening(self._proc, self._port, "restartable mock OPC UA server")
+
+    def stop(self) -> None:
+        if self._proc is None:
+            return
+        _terminate(self._proc)
+        self._proc = None
+        # Wait for the port to actually close, so a test that restarts
+        # immediately cannot connect to the server it has just killed.
+        deadline = time.time() + 30
+        while time.time() < deadline and _port_open(HOST, self._port):
+            time.sleep(0.2)
+
+    def restart(self) -> None:
+        self.stop()
+        self.start()
+
+
+@pytest.fixture
+def restartable_opcua_server() -> RestartableServer:
+    """A mock OPC UA server on a port of its own that a test may restart.
+
+    Function-scoped and unshared: stopping the session-wide `opcua_server` would
+    break every other test that is using it.
+    """
+    port = _free_port()
+    url = f"opc.tcp://{HOST}:{port}{SERVER_PATH}"
+    server = RestartableServer(
+        url,
+        port,
+        ["uv", "run", "--no-sync", "opcua-mock-server", "--endpoint", url],
+        ROOT,
+    )
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
 @pytest.fixture(scope="session")
 def secure_pki(tmp_path_factory) -> dict[str, str]:
     """Freshly generated server and client key pairs for the secured mock.

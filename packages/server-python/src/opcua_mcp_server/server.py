@@ -20,12 +20,19 @@ from opcua.ua import NodeClass
 from . import events
 from .aggregates import validate_aggregate_function
 from .capabilities import client_aggregate_functions, client_supports_history
-from .config import SERVER_URL
+from .config import SERVER_URL, describe_reconnect, reconnect_config
+from .connection import (
+    OpcuaConnection,
+    describe_error,
+    is_connection_error,
+    not_connected_message,
+)
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import parse_iso_datetime
+from .diagnostics import disconnected_status, read_server_status
 from .policy import describe_policy, tool_policy
 from .records import history_records
-from .security import create_client, describe_security, security_config, security_warnings
+from .security import describe_security, security_config
 from .subscriptions import SUBSCRIPTIONS, unknown_subscription_message
 from .variant_codec import convert_for_variant
 from .version import package_version
@@ -68,28 +75,88 @@ def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason:
     print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
 
 
+#: The one connection the tools, the lifespan and tools/list share. Module-level
+#: for the same reason `SUBSCRIPTIONS` is: `list_tools` is handed no `Context`,
+#: so it cannot reach the lifespan state to refresh its capability probes.
+_CONNECTION: OpcuaConnection | None = None
+
+
+def _bind(state: dict, client) -> None:
+    """Point everything that holds a client at the one just established.
+
+    Called by the connection whenever it produces a client — at startup and
+    again after each reconnect. The lifespan state is *mutated* rather than
+    replaced because the MCP server hands the same dict to every tool call, so
+    this is what makes a tool that reads `lifespan_context["opcua_client"]` see
+    the new session rather than the dead one.
+    """
+    state["opcua_client"] = client
+    SUBSCRIPTIONS.reattach(client)
+
+
+def _refresh_capabilities(connection: OpcuaConnection) -> None:
+    """Re-probe the optional capabilities, best-effort.
+
+    On every tools/list rather than once at startup, as the Node server does: a
+    server that was unreachable when this process began must not have its history
+    and aggregate tools hidden for the lifetime of the session.
+
+    One connection attempt for both probes, not one each: against a server that
+    is down, each would otherwise sit through the whole configured backoff on its
+    own and double what a tools/list costs. The attempt itself is why this is
+    also what the lifespan calls to open the first connection.
+    """
+    _CAPABILITIES["history"] = False
+    _CAPABILITIES["aggregate_functions"] = {}
+    try:
+        client = connection.ensure_connected()
+    except Exception:
+        # `connect` has already said why on stderr; an optional capability must
+        # never break tools/list, so a server that is down simply advertises the
+        # core tools until it comes back.
+        return
+    _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
+    _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
+
+
+def _probe(read, client, fallback):
+    """Run one capability probe, yielding ``fallback`` on any failure."""
+    try:
+        return read(client)
+    except Exception as error:
+        print(f"OPC UA capability probe failed: {describe_error(error)}", file=sys.stderr)
+        return fallback
+
+
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
 async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
-    config = security_config()
-    # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
-    for warning in security_warnings(config):
-        print(f"WARNING: {warning}", file=sys.stderr)
+    global _CONNECTION
+    connection = OpcuaConnection(SERVER_URL)
+    _CONNECTION = connection
+    state: dict = {"opcua_client": None, "opcua_connection": connection}
+    connection.on_client_replaced = lambda client: _bind(state, client)
 
-    # Both calls run in a thread: building a secured client fetches the server's
-    # certificate from its endpoint list, so it blocks on the network too.
-    client = await asyncio.to_thread(create_client, SERVER_URL)
-    try:
-        # Connect to OPC UA server synchronously, wrapped in a thread for async compatibility
-        await asyncio.to_thread(client.connect)
-        print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
-        _CAPABILITIES["history"] = await asyncio.to_thread(client_supports_history, client)
-        _CAPABILITIES["aggregate_functions"] = await asyncio.to_thread(
-            client_aggregate_functions, client
+    # In a thread: python-opcua is synchronous, and for a secured connection even
+    # building the client fetches the server's certificate from its endpoint
+    # list, so this blocks on the network too. Connecting and probing are one
+    # call so a server that is down costs one round of backoff, not two.
+    await asyncio.to_thread(_refresh_capabilities, connection)
+    if not connection.connected:
+        # Deliberately not fatal. An MCP client starts this server when *it*
+        # starts, which may be long before the plant network is reachable; dying
+        # here would mean a restart of the MCP client for every OPC UA outage.
+        # Every tool call retries the connection, and `get_server_status` reports
+        # what is wrong in the meantime.
+        print(
+            f"Starting without an OPC UA connection: {connection.last_error}. "
+            f"Tools will retry on each call.",
+            file=sys.stderr,
         )
-        SUBSCRIPTIONS.attach(client)
-        yield {"opcua_client": client}
+
+    try:
+        yield state
     finally:
         # Drop the subscriptions before the session that carries them —
         # the event ones as much as the data-change ones. Disconnecting first
@@ -98,16 +165,22 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         await asyncio.to_thread(SUBSCRIPTIONS.close_all)
         await asyncio.to_thread(_EVENTS.close_all)
         # Disconnect from OPC UA server on shutdown
-        await asyncio.to_thread(client.disconnect)
+        await asyncio.to_thread(connection.disconnect)
         _CAPABILITIES["history"] = False
         _CAPABILITIES["aggregate_functions"] = {}
-        print("Disconnected from OPC UA server", file=sys.stderr)
+        _CONNECTION = None
 
 
 class PolicyMCPServer(MCPServer):
     """MCPServer whose advertised and callable tools obey deployment policy."""
 
     async def list_tools(self):
+        # Re-probe before answering: what the OPC UA server supports is only
+        # knowable while connected, and a catalogue frozen at startup would hide
+        # the history tool for good after one unlucky moment. Best-effort, so a
+        # server that is still down simply lists the core tools.
+        if _CONNECTION is not None:
+            await asyncio.to_thread(_refresh_capabilities, _CONNECTION)
         policy = tool_policy()
         specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
         listed = await super().list_tools()
@@ -151,7 +224,39 @@ class PolicyMCPServer(MCPServer):
         except (PermissionError, ValueError) as exc:
             _audit_decision(name, arguments, "denied", str(exc))
             raise ToolError(str(exc)) from exc
-        return await super().call_tool(name, arguments, context)
+
+        # The one tool that must answer while the connection is down: it exists
+        # to say so, and reaches for the connection itself.
+        if name == "get_server_status" or _CONNECTION is None:
+            return await super().call_tool(name, arguments, context)
+
+        connection = _CONNECTION
+        try:
+            await asyncio.to_thread(connection.ensure_connected)
+        except Exception as error:
+            raise ToolError(not_connected_message(connection.url, describe_error(error))) from error
+
+        try:
+            return await super().call_tool(name, arguments, context)
+        except Exception as error:
+            if not is_connection_error(error):
+                raise
+            # A connection can die between the check above and the call: being
+            # connected a moment ago is all anything can ever know. Whether
+            # running it again is *safe* is settled by the contract's own
+            # `idempotentHint` — a dead session almost certainly means the
+            # request never reached the server, but "almost certainly" is not a
+            # licence to fire `call_opcua_method` twice at a machine.
+            may_repeat = bool(spec["annotations"]["idempotentHint"])
+            suffix = " and retrying once" if may_repeat else ""
+            print(
+                f"OPC UA call failed on a dead session; reconnecting{suffix}",
+                file=sys.stderr,
+            )
+            await asyncio.to_thread(connection.reconnect)
+            if not may_repeat:
+                raise
+            return await super().call_tool(name, arguments, context)
 
 
 # Create an MCP server instance. The server identity must match the Node server's
@@ -177,6 +282,41 @@ def read_opcua_node(node_id: str, ctx: Context) -> str:
     node = client.get_node(node_id)
     value = node.get_value()  # Synchronous call to get node value
     return f"Node {node_id} value: {value}"
+
+
+# Tool: Report the connection and what the OPC UA server says about itself.
+@mcp.tool(description=DESC["get_server_status"])
+def get_server_status(ctx: Context) -> CallToolResult:
+    """
+    Report connection state, server status and the namespace array.
+
+    Connecting is attempted rather than assumed, so asking for the status is also
+    the cheapest way to bring a dropped connection back. A failure to connect is
+    the answer, not an error — "not connected, and here is why" is exactly what
+    the caller asked for, which is why this is the one tool that never raises a
+    `ToolError` for a down server.
+
+    Returns:
+        CallToolResult: One record of the shared ``resultShapes.serverStatus``
+            shape from ``contract/tools.json``, in text and structured form.
+    """
+    connection = ctx.request_context.lifespan_context["opcua_connection"]
+    security = describe_security(security_config())
+    try:
+        # Through the same retry as every other read, so that asking for the
+        # status also re-establishes a session that has silently died — which is
+        # exactly the moment someone asks. python-opcua has no way to tell a
+        # live socket from a dead one short of using it, so this read *is* the
+        # liveness check.
+        status = connection.run(
+            lambda: read_server_status(connection.client, connection.url, security)
+        )
+    except Exception as error:
+        status = disconnected_status(connection.url, security, describe_error(error))
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(status, indent=2))],
+        structured_content={"result": status},
+    )
 
 
 # Tool: Read historical values of an OPC UA node.
@@ -968,10 +1108,12 @@ def main() -> None:
     try:
         security_config()
         policy = tool_policy()
+        reconnect = reconnect_config()
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
 
     print(f"Tool policy: {describe_policy(policy)}", file=sys.stderr)
+    print(f"Connection resilience: {describe_reconnect(reconnect)}", file=sys.stderr)
 
     mcp.run(transport="stdio")

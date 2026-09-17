@@ -100,6 +100,20 @@ OPCUA_USERNAME=mcp-operator OPCUA_PASSWORD=… \
   npx opcua-mcp-server
 ```
 
+### Staying connected
+
+The connection is re-established by itself: a dropped or refused session is
+retried with exponential backoff, and the read and write paths rebuild a dead
+session rather than failing until the process is restarted. Tune it with
+`OPCUA_RECONNECT_INITIAL_DELAY_MS` (default `1000`), `OPCUA_RECONNECT_MAX_DELAY_MS`
+(`8000`), `OPCUA_RECONNECT_MAX_RETRY` (`3`; `-1` retries forever) and
+`OPCUA_SESSION_TIMEOUT_MS` (`60000`, which also sets the keep-alive period).
+
+`get_server_status` reports whether the connection is up and what the OPC UA
+server says about itself; it is the one tool that answers while the connection is
+down, and calling it is also what brings a dropped one back. See
+[Staying connected](https://github.com/midhunxavier/OPCUA-MCP#staying-connected).
+
 ## Tools
 
 This server exposes the shared OPC UA MCP tool set. See the full per-tool reference (inputs, outputs, node-ID map) in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)**. The tool surface is defined once in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**, which this server builds its `tools/list` from.

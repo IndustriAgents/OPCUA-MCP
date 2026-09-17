@@ -62,8 +62,13 @@ def assert_matches_result_shape(records: list[dict], shape_name: str, context: s
     This is what makes the shape enforceable rather than merely documented: the
     contract file is the assertion, so changing either server's output without
     changing the contract fails here.
+
+    A shape that describes a single object rather than an array of them
+    (``serverStatus``) is its own record schema; pass that one record in a
+    one-element list.
     """
-    record_schema = RESULT_SHAPES[shape_name]["items"]
+    shape = RESULT_SHAPES[shape_name]
+    record_schema = shape["items"] if shape["type"] == "array" else shape
     properties = record_schema["properties"]
     required = set(record_schema["required"])
 

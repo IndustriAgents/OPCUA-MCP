@@ -220,6 +220,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises rather than returning as text.
 
 ### Fixed
+- **The mock OPC UA server now answers a write to a node it does not have**
+  (#64). python-opcua bit-tests the AccessLevel of every node a non-admin
+  session writes to — every client here, the endpoints being anonymous — and
+  reads it off the `DataValue` returned for the node id. For an id the address
+  space does not have, that is an empty `DataValue` with a null Variant, so the
+  check raised `TypeError` out of the request handler: the mock answered the
+  `WriteRequest` not at all and dropped the connection. A batched write then cost
+  the client its whole batch after a 15s transaction timeout, including the nodes
+  the mock had already written — with no way to tell whether they had moved. The
+  mock now screens unknown node ids out of a `WriteRequest` and answers them
+  `BadNodeIdUnknown` beside the `Good` of the nodes it wrote, as a conformant
+  server does. Test fixture only — no change to either shipped server, which both
+  read a node's type before writing it and so never sent the offending request;
+  that is also why it takes a bare OPC UA client, in the new
+  `tests/e2e/test_mock_server_e2e.py`, to hold the mock to it.
 - **The Python server now announces the client certificate's own ApplicationUri**
   (#5). With a certificate configured but no `OPCUA_APPLICATION_URI`,
   python-opcua announced its library default, `urn:freeopcua:client`, while

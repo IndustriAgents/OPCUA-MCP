@@ -186,6 +186,21 @@ The server supports multiple security policies:
 - `examples/mock_server_client_demo.py` (repo root) - Example OPC UA client
 - `pyproject.toml` - Project configuration and dependencies
 
+### Patched library behaviour
+
+The server keeps one monkey-patch over python-opcua,
+`answer_writes_to_unknown_nodes()`, applied in `main()`. Writing to a node id the
+address space does not have made the library raise out of its request handler, so
+the mock answered the `WriteRequest` not at all and closed the connection: the
+client waited out its own transaction timeout (15s in node-opcua) and lost every
+other node in the same batch, including ones the mock had already written (#64).
+The patch screens unknown ids out and answers them `BadNodeIdUnknown` alongside
+the `Good` of the rest, which is what a conformant server does. python-opcua is
+archived upstream in favour of asyncua, so this is fixed here rather than waited
+out. `tests/e2e/test_mock_server_e2e.py` pins it — with a bare OPC UA client,
+because both MCP servers read a node before writing it and so never send the
+request that trips it.
+
 ### Extending the System
 To add new sensors or actuators:
 

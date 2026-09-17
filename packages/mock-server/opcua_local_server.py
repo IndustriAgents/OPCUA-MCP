@@ -1,4 +1,5 @@
 import argparse
+import copy
 import logging
 import random
 import time
@@ -6,6 +7,47 @@ from datetime import timedelta
 
 from opcua import Server, ua
 from opcua.common.node import Node
+from opcua.server.address_space import AttributeService
+
+
+def answer_writes_to_unknown_nodes():
+    """Make a write to a node the server does not have an answer, not a hang-up.
+
+    python-opcua checks the AccessLevel bits of every node a non-admin session
+    writes to — which is every client here, since the endpoints are anonymous —
+    and reads them straight off what ``get_attribute_value`` returns. For a node
+    id the address space does not have, that is an empty ``DataValue`` carrying
+    BadNodeIdUnknown and a null Variant, so the bit test raises ``TypeError:
+    unsupported operand type(s) for &: 'NoneType' and 'int'`` out of the request
+    handler. The server then never answers the WriteRequest and drops the
+    connection; the client waits out its own transaction timeout (15s in
+    node-opcua) and every other node in the same batch is lost with it (#64).
+
+    A conformant server answers per item: BadNodeIdUnknown for the node it does
+    not have, Good for the ones it wrote. So screen the unknown ids out here and
+    let the library write the rest. python-opcua is archived upstream in favour
+    of asyncua, so this is patched at the mock rather than waiting for a release.
+    """
+    original_write = AttributeService.write
+
+    def write(self, params, *args, **kwargs):
+        known = [item for item in params.NodesToWrite if item.NodeId in self._aspace]
+        if len(known) == len(params.NodesToWrite):
+            return original_write(self, params, *args, **kwargs)
+
+        statuses = iter(())
+        if known:
+            screened = copy.copy(params)
+            screened.NodesToWrite = known
+            statuses = iter(original_write(self, screened, *args, **kwargs))
+        return [
+            next(statuses)
+            if item.NodeId in self._aspace
+            else ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown)
+            for item in params.NodesToWrite
+        ]
+
+    AttributeService.write = write
 
 
 class IndustrialControlSystem:
@@ -564,6 +606,8 @@ def main():
 
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    answer_writes_to_unknown_nodes()
 
     # Create and configure the server
     server = Server()

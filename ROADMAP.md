@@ -18,12 +18,10 @@ is historical context; the [changelog](CHANGELOG.md) records shipped changes.
 
 | Priority | Deliverable | Completion evidence |
 |---|---|---|
-| 1 | A reproducible first-use demo | A real recording of the mock setup, a sensor read, and subscription results; a short GIF extracted from it |
-| 2 | Official MCP Registry listing | A newly published package carrying matching registry verification metadata, and a discoverable registry entry |
-| 3 | External compatibility reports | Versioned results from at least two third-party OPC UA servers, including account permissions and unsupported operations |
-| 4 | Clear onboarding | A new user completes the mock guide without maintainer assistance |
+| 1 | Official MCP Registry listing | A newly published package carrying matching registry verification metadata, and a discoverable registry entry |
+| 2 | External compatibility reports | Versioned results from at least two third-party OPC UA servers, including account permissions and unsupported operations |
+| 3 | Clear onboarding | A new user completes the mock guide without maintainer assistance |
 
-The [demo production kit](docs/marketing/demo.md) provides the recording script.
 The [registry guide](docs/mcp-registry.md) describes the prepared metadata and the
 remaining publication steps. The [compatibility matrix](docs/compatibility.md)
 distinguishes existing test coverage from unverified integrations.

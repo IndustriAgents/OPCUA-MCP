@@ -71,6 +71,60 @@
         "additionalProperties": false
       }
     },
+    "serverStatus": {
+      "$comment": "A single object rather than a list of records: `get_server_status` returns one text content block carrying it as JSON, and {\"result\": {...}} as structured content. Every field is always present. A field this server could not read — because the connection is down, or the OPC UA server does not expose it — is null, and `namespaces` is then empty; `connected` and `error` say which of those happened.",
+      "type": "object",
+      "properties": {
+        "connected": {
+          "type": "boolean",
+          "description": "True when this MCP server currently holds a live OPC UA session. False means the fields below are whatever could still be reported (endpoint and security come from configuration, not from the server) and `error` says why."
+        },
+        "endpoint_url": {
+          "type": "string",
+          "description": "The OPC UA endpoint this MCP server is configured to talk to, from OPCUA_SERVER_URL. Example: 'opc.tcp://192.168.0.10:4840'."
+        },
+        "security": {
+          "type": "string",
+          "description": "The connection security in force, as 'policy=<SecurityPolicy> mode=<MessageSecurityMode> user=<username|anonymous>'. Example: 'policy=Basic256Sha256 mode=SignAndEncrypt user=\"operator\"'."
+        },
+        "server_state": {
+          "type": ["string", "null"],
+          "description": "The OPC UA server's own ServerStatus.State, named as OPC UA names it: 'Running', 'Failed', 'NoConfiguration', 'Suspended', 'Shutdown', 'Test', 'CommunicationFault' or 'Unknown'. A reachable server that is not 'Running' is the answer to 'is it healthy?'."
+        },
+        "current_time": {
+          "type": ["string", "null"],
+          "description": "The server's own clock at the moment of the read, ISO-8601 UTC with a trailing 'Z'. Compare it with yours to spot a clock skew that would make every history query look empty."
+        },
+        "start_time": {
+          "type": ["string", "null"],
+          "description": "When the OPC UA server last started, ISO-8601 UTC with a trailing 'Z'. A start time in the last few seconds explains a connection that has just been re-established."
+        },
+        "build_info": {
+          "type": ["object", "null"],
+          "description": "What the server says it is: { product_name, product_uri, manufacturer_name, software_version, build_number, build_date }, each a string the server supplied (build_date is ISO-8601 UTC). Any of them may be an empty string; the whole object is null when ServerStatus could not be read."
+        },
+        "namespaces": {
+          "type": "array",
+          "description": "The server's NamespaceArray as [{ index, uri }, ...], index ascending from 0. This is what turns an 'ns=<n>;...' node ID into something stable: the same URI can sit at a different index after a server restart, so resolve a namespace URI here rather than hard-coding its index. Empty when the array could not be read."
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Why this server is not connected, or could not read the status, in the words of the underlying client library. Null when everything was read."
+        }
+      },
+      "required": [
+        "connected",
+        "endpoint_url",
+        "security",
+        "server_state",
+        "current_time",
+        "start_time",
+        "build_info",
+        "namespaces",
+        "error"
+      ],
+      "additionalProperties": false
+    },
     "eventRecords": {
       "$comment": "Returned as one MCP text content block per event for compatibility and as {\"result\": [records...]} structured content. No events is zero blocks. `read_events` appends one further prose block when its buffer overflowed; the structured result contains records only. Every field is present on every record; a field the event does not carry is null. The field order and OPC UA browse paths are \"events.fields\" below.",
       "type": "array",
@@ -174,6 +228,11 @@
       { "key": "acked", "path": "AckedState.Id" },
       { "key": "retain", "path": "Retain" }
     ]
+  },
+  "diagnostics": {
+    "$comment": "The standard nodes `get_server_status` reads. Both are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. Kept here rather than in either server so the two ask the same questions.",
+    "serverStatusNodeId": "ns=0;i=2256",
+    "namespaceArrayNodeId": "ns=0;i=2255"
   },
   "capabilities": {
     "history": {
@@ -357,6 +416,19 @@
             "description": "Read each variable's current value. Defaults to true; set false for a cheaper address-space inventory."
           }
         },
+        "required": []
+      }
+    },
+    {
+      "name": "get_server_status",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "resultShape": "serverStatus",
+      "capability": null,
+      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its namespace array (namespace index -> URI). Answers 'are we connected, to what, and is it healthy?' in one call, and is the first thing to try when another tool fails. Never fails for being disconnected: it reports that instead, with the reason",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "required": []
       }
     },

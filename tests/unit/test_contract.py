@@ -118,12 +118,24 @@ def test_result_shape_is_referenced(name):
     assert referenced, f"resultShape {name!r} is defined but nothing declares it"
 
 
+def record_schema(shape: dict) -> dict:
+    """The schema of one record, whether the shape is a list of them or just one.
+
+    Most result shapes are arrays — a tool returns a text block per record. A
+    shape that describes a *single* object (`serverStatus`) is the record itself,
+    and is held to exactly the same rules below.
+    """
+    return shape["items"] if shape["type"] == "array" else shape
+
+
 @pytest.mark.parametrize("name", SHAPE_IDS, ids=SHAPE_IDS)
 def test_result_shape_records_are_coherent(name):
     """The record schema must be strict enough for the parity test to enforce it."""
     shape = RESULT_SHAPES[name]
-    assert shape["type"] == "array", f"{name} must describe an array of records"
-    record = shape["items"]
+    assert shape["type"] in {"array", "object"}, (
+        f"{name} must describe a record or an array of them"
+    )
+    record = record_schema(shape)
     assert record["type"] == "object"
     properties = record["properties"]
     assert set(record["required"]) == set(properties), (
@@ -168,7 +180,7 @@ def test_event_fields_are_the_event_record_shape():
     If they could differ, a field could be selected and never reported, or
     reported and never selected — and the servers would disagree about which.
     """
-    record = RESULT_SHAPES["eventRecords"]["items"]
+    record = record_schema(RESULT_SHAPES["eventRecords"])
     assert [field["key"] for field in EVENT_FIELDS] == list(record["properties"]), (
         "contract events.fields and resultShapes.eventRecords must list the same "
         "fields, in the same order"
@@ -206,6 +218,23 @@ def test_the_history_family_shares_one_result_shape():
         "read_history_opcua_node": "historyRecords",
         "read_aggregate_opcua_node": "historyRecords",
     }
+
+
+# --- diagnostics ---------------------------------------------------------------
+# `get_server_status` reads two standard nodes. Both servers take the IDs from
+# here, so a mistake is a mistake in both at once.
+
+
+@pytest.mark.parametrize("name", ["serverStatusNodeId", "namespaceArrayNodeId"])
+def test_diagnostics_node_ids_are_written_the_way_both_servers_read_them(name):
+    assert CONTRACT["diagnostics"][name].startswith("ns=0;i="), CONTRACT["diagnostics"][name]
+
+
+def test_the_diagnostics_tool_names_the_server_status_shape():
+    tool = next(t for t in TOOLS if t["name"] == "get_server_status")
+    assert tool["resultShape"] == "serverStatus"
+    assert tool["accessClass"] == "read", "a status report must survive an observe-only profile"
+    assert tool["capability"] is None, "every OPC UA server has ServerStatus"
 
 
 # --- resources -----------------------------------------------------------------

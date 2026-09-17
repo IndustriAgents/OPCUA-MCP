@@ -25,6 +25,7 @@ export interface ToolSpec {
 export const CONTRACT: {
   resultShapes: Record<string, any>;
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
+  diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
   events: {
     defaultNotifierNodeId: string;
     baseEventTypeNodeId: string;

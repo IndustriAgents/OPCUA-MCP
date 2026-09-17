@@ -11,6 +11,8 @@ This MCP server acts as a bridge between AI assistants and OPC UA servers, allow
 - Calling OPC UA methods for system operations
 - Batch operations for multiple nodes
 - Subscribing to data changes, so a node can be watched rather than polled
+- Reporting connection and server health, and reconnecting by itself when the
+  OPC UA server is restarted
 
 ## Tools
 
@@ -134,6 +136,23 @@ export OPCUA_CLIENT_KEY="/etc/opcua/client_key.pem"
 export OPCUA_USERNAME="mcp-operator"
 export OPCUA_PASSWORD="…"
 ```
+
+### Staying connected
+
+The connection is re-established by itself: a dropped or refused session is
+retried with exponential backoff, and the read and write paths rebuild a dead
+session rather than failing until the process is restarted. `python-opcua` has no
+reconnection of its own, so this server owns the whole of it — including building
+a fresh client per attempt, because a restarted server may present a new
+certificate. Tune it with `OPCUA_RECONNECT_INITIAL_DELAY_MS` (default `1000`),
+`OPCUA_RECONNECT_MAX_DELAY_MS` (`8000`), `OPCUA_RECONNECT_MAX_RETRY` (`3`; `-1`
+retries forever) and `OPCUA_SESSION_TIMEOUT_MS` (`60000`, which also sets the
+keep-alive period).
+
+`get_server_status` reports whether the connection is up and what the OPC UA
+server says about itself; it is the one tool that answers while the connection is
+down, and calling it is also what brings a dropped one back. See
+[Staying connected](https://github.com/midhunxavier/OPCUA-MCP#staying-connected).
 
 ## Usage
 

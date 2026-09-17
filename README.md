@@ -98,7 +98,7 @@ All four routes, and what to do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same sixteen tools, defined once in
+Both servers expose the same seventeen tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |
@@ -110,6 +110,7 @@ Both servers expose the same sixteen tools, defined once in
 | `browse_opcua_node_children` | List a node's children |
 | `call_opcua_method` | Invoke a method on an object node |
 | `get_all_variables` | Inventory every variable in the address space |
+| `get_server_status` | Connection state, server health and the namespace array |
 | `subscribe_opcua_node` | Watch a node for data changes instead of polling it |
 | `list_subscriptions` | The active subscriptions, each with its buffered changes |
 | `unsubscribe_opcua_node` | Cancel one subscription |
@@ -234,6 +235,29 @@ Both runtimes read the same environment variables:
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id|method_node_id` pairs callable by `operator` |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
+| `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
+| `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
+| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
+| `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
+
+### Staying connected
+
+Neither server needs restarting when the OPC UA server does. A dropped
+connection is retried with exponential backoff on the four
+`OPCUA_RECONNECT_*` / `OPCUA_SESSION_TIMEOUT_MS` settings above, the read and
+write paths transparently re-establish a dead session, and the data-change
+subscriptions an agent is holding are re-created on the new session — the IDs
+keep working and the values already buffered are still there to be read.
+
+Reconnection is driven by tool calls rather than by a timer: if the endpoint is
+unreachable when the MCP client starts, the server still starts, and the first
+call that needs a session connects. `get_server_status` is the one tool that
+answers either way — it reports `connected: false` and the reason instead of
+failing, and every other tool's error points at it.
+
+The defaults (three retries, 1–8s apart) keep a single tool call from hanging for
+long. Raise `OPCUA_RECONNECT_MAX_RETRY` for a site where outages are measured in
+minutes; the last waiting a call will do is the sum of the delays.
 
 The default `observe` profile advertises only read, browse, history and monitoring
 tools. `operator` exposes only explicitly allowlisted write targets and methods;

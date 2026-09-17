@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Connection resilience: auto-reconnect, keep-alive and backoff** (#18). Neither
+  server needs restarting when the OPC UA server does. A dropped or refused
+  connection is retried with exponential backoff, configurable through four
+  variables that mean the same thing on both runtimes —
+  `OPCUA_RECONNECT_INITIAL_DELAY_MS`, `OPCUA_RECONNECT_MAX_DELAY_MS`,
+  `OPCUA_RECONNECT_MAX_RETRY` (`-1` for unlimited) and `OPCUA_SESSION_TIMEOUT_MS`,
+  which also sets the keep-alive period. The waits they produce are pinned
+  against each other in `tests/unit/test_reconnect.py`, and both servers print
+  what is in force on startup.
+
+  The two runtimes get there from opposite directions: node-opcua repairs its own
+  channel and re-activates the same session, so the Node side follows its
+  `connection_lost` / `connection_reestablished` / `close` events and knows when
+  the library has given up; python-opcua has no reconnection at all, so the
+  Python side owns the whole backoff loop and builds a fresh client per attempt
+  — a restarted server may be presenting a new certificate.
+
+  Read and write paths transparently re-establish a dead session and retry once,
+  but only for tools the contract declares idempotent: `call_opcua_method` and
+  `acknowledge_alarm` get the reconnection and the error, never a second attempt
+  at the machine. One shared list of OPC UA status codes and socket errors
+  decides what counts as a dead session at all, so a `BadNodeIdUnknown` is still
+  reported rather than retried into the same answer.
+
+  Data-change subscriptions are re-created on the new session, so the IDs an
+  agent holds keep working and the changes already buffered survive the outage.
+  Neither server now dies at startup when the endpoint is unreachable: it starts,
+  says so, and connects on the first tool call that needs a session. The Python
+  server also re-probes the optional capabilities on every `tools/list`, as the
+  Node server already did, so a server that was down at startup no longer has its
+  history and aggregate tools hidden for the rest of the session.
+- **Health and diagnostics tool** (#13). `get_server_status` reports, in one
+  call, whether the MCP server is connected, to which endpoint and under what
+  security, the OPC UA server's own `ServerStatus` (state, current time, start
+  time, build info) and its NamespaceArray as `index -> uri`. Both runtimes read
+  the standard nodes named in the shared contract (`ns=0;i=2256`, `ns=0;i=2255`)
+  and return one record of the new `serverStatus` result shape, so the two
+  answers are identical field for field.
+
+  It is the one tool that never fails for being disconnected — it reports
+  `connected: false` and the reason instead, which is exactly what makes it
+  useful when something else has just failed. Every other tool's "not connected"
+  error names it. Calling it also re-establishes a dropped connection, so it
+  doubles as "try again now".
 - **Production tool policy and typed control boundary.** Both runtimes now
   default to an observe-only profile, share tool risk/annotation metadata, and
   enforce profile, tool and exact node/method allowlists on every invocation.

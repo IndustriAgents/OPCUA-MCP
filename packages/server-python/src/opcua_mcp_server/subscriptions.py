@@ -155,7 +155,11 @@ class SubscriptionManager:
         self._client: Any = None
 
     def attach(self, client: Any) -> None:
-        """Bind the manager to the connected OPC UA client, at lifespan start."""
+        """Bind the manager to the connected OPC UA client.
+
+        Called whenever the connection produces a client — at startup and again
+        after every reconnect, since a reconnect replaces the object.
+        """
         self._client = client
 
     def subscribe(
@@ -172,7 +176,6 @@ class SubscriptionManager:
         publishing, sampling, size = resolve_options(
             publishing_interval, sampling_interval, buffer_size
         )
-        node = self._client.get_node(node_id)
 
         with self._lock:
             self._counter += 1
@@ -186,13 +189,65 @@ class SubscriptionManager:
             buffer_size=size,
             changes=deque(maxlen=size),
         )
+        self._attach(self._client, entry)
+
+        with self._lock:
+            self._entries[entry_id] = entry
+        return entry.as_record()
+
+    def reattach(self, client: Any) -> None:
+        """Re-create every subscription on ``client``, after the old one died.
+
+        What makes an OPC UA MCP server survivable across a plant restart: the
+        subscription IDs the agent is holding keep working, and the changes
+        already buffered are still there to be read — only the gap while the
+        server was away is missing, which no amount of client-side effort could
+        have filled.
+
+        Best-effort per subscription. One the server will not take back (its node
+        is gone from the new address space, say) is dropped rather than left in
+        the list as a handle that will never deliver again: ``list_subscriptions``
+        has to keep telling the truth.
+        """
+        self.attach(client)
+        with self._lock:
+            entries = list(self._entries.values())
+        for entry in entries:
+            try:
+                self._attach(client, entry)
+                print(
+                    f"Re-established subscription {entry.id} on node {entry.node_id}",
+                    file=sys.stderr,
+                )
+            except Exception as error:
+                with self._lock:
+                    self._entries.pop(entry.id, None)
+                print(
+                    f"Could not re-establish subscription {entry.id} on node "
+                    f"{entry.node_id}: {error}",
+                    file=sys.stderr,
+                )
+
+    def _attach(self, client: Any, entry: _Entry) -> None:
+        """Create the OPC UA subscription and monitored item behind one entry.
+
+        Shared by the first subscribe and by every re-establishment after a
+        reconnect, so the two cannot drift into asking the server for different
+        things — the record the agent reads back names intervals that would
+        otherwise silently stop being the ones in force.
+        """
+        node = client.get_node(entry.node_id)
+        publishing, sampling, size = (
+            entry.publishing_interval,
+            entry.sampling_interval,
+            entry.buffer_size,
+        )
         # The handler is built before the subscription so it can be passed in
         # rather than patched on afterwards, and the subscription before the
         # monitored item: the OPC UA server sends the node's current value the
         # moment the item exists, and that first notification is a change the
         # agent should see.
-        subscription = self._client.create_subscription(publishing, _DataChangeHandler(entry))
-        entry.subscription = subscription
+        subscription = client.create_subscription(publishing, _DataChangeHandler(entry))
 
         try:
             handle = subscription.subscribe_data_change(node, queuesize=size)
@@ -207,10 +262,7 @@ class SubscriptionManager:
             # expired.
             _delete_quietly(subscription)
             raise
-
-        with self._lock:
-            self._entries[entry_id] = entry
-        return entry.as_record()
+        entry.subscription = subscription
 
     def list(self) -> list[dict]:
         """Every active subscription, in the order it was created."""
@@ -231,6 +283,8 @@ class SubscriptionManager:
         if entry is None:
             raise KeyError(subscription_id)
         record = entry.as_record()
+        if entry.subscription is None:
+            return record
         try:
             entry.subscription.delete()
         except Exception as error:
@@ -246,7 +300,8 @@ class SubscriptionManager:
             entries = list(self._entries.values())
             self._entries.clear()
         for entry in entries:
-            _delete_quietly(entry.subscription)
+            if entry.subscription is not None:
+                _delete_quietly(entry.subscription)
 
 
 def _delete_quietly(subscription: Any) -> None:

@@ -131,6 +131,39 @@ $BIN --method tools/call --tool-name call_opcua_method \
 For the Python server, swap the command for
 `uv --directory packages/server-python run opcua-mcp-server`.
 
+### Checking the connection, and surviving an outage
+
+`get_server_status` answers "are we connected, to what, and is it healthy?" — and
+is the first thing to reach for when another tool fails:
+
+```bash
+$BIN --method tools/call --tool-name get_server_status
+```
+
+It is also how to watch a reconnection by hand. In one terminal, leave the MCP
+Inspector open against the mock; in another, stop the mock (`Ctrl-C`) and start
+it again on the same endpoint. Neither MCP server needs restarting:
+
+| Step | `get_server_status` says |
+|------|--------------------------|
+| While the mock is down | `connected: false`, with the refused connection under `error` |
+| Once it is back | `connected: true`, and a `start_time` a few seconds old — a new session, not the old one |
+
+Other tools report `Not connected to the OPC UA server at …: … Call
+get_server_status for details.` while it is down, and start working again by
+themselves. A `subscribe_opcua_node` made before the outage keeps its ID and
+resumes delivering. Tune how hard and how long the retrying goes with
+`OPCUA_RECONNECT_MAX_RETRY`, `OPCUA_RECONNECT_INITIAL_DELAY_MS`,
+`OPCUA_RECONNECT_MAX_DELAY_MS` and `OPCUA_SESSION_TIMEOUT_MS`; the servers print
+what is in force on startup:
+
+```
+Connection resilience: retries=3 backoff=1000..8000ms session-timeout=60000ms
+```
+
+The automated version of this is `tests/e2e/test_resilience_e2e.py`, which takes
+a mock of its own away and gives it back.
+
 ### Alarms & Conditions, against the alarms mock
 
 The bundled mock raises events but has no condition model, so

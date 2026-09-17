@@ -171,6 +171,58 @@ servers remember which condition each event they reported came from. The
 condition can still be passed explicitly for an event that came from somewhere
 else.
 
+## Staying connected
+
+The connection is expected to break — a plant network drops, a controller is
+power-cycled, a switch reboots — so neither server treats a live session as a
+precondition it was handed once at startup. Both start whether or not the
+endpoint answers, and both rebuild a dead session on the next tool call.
+
+The two runtimes reach that from opposite directions, which is the interesting
+part:
+
+- **Node.** `node-opcua` repairs its own channel: on `connection_lost` it retries
+  per `connectionStrategy`, re-activates the *same* `ClientSession` and
+  re-creates its subscriptions, and nothing above `connection.ts` notices. That
+  module's job is to follow along (`connection_lost` → `connection_reestablished`
+  → `close`) and to know when the library has given up, because a client that has
+  emitted `close` stays dead forever.
+- **Python.** `python-opcua` has no reconnection at all; a `Client` whose socket
+  has gone raises on every subsequent call. So `connection.py` owns the whole of
+  it — the backoff loop, and a *fresh* `Client` per attempt, because a restarted
+  server may be presenting a new certificate and building a secured client is
+  what fetches it.
+
+What they share is the decision-making, and it is shared deliberately:
+`OPCUA_RECONNECT_*` and `OPCUA_SESSION_TIMEOUT_MS` mean the same thing on both
+and produce the same waits (`reconnectBudgetMs` / `reconnect_budget_ms` are
+pinned against each other in `tests/unit/test_reconnect.py`), and one list of
+status codes and socket errors — `DEAD_SESSION_MARKERS`, kept in step on both
+sides — decides what is worth reconnecting for. That list is the whole
+distinction between a failure of the *connection* and a failure of the
+*request*: a `BadNodeIdUnknown` would fail identically on a fresh session, so
+retrying it would only hide the real answer.
+
+Whether a failed call may be *repeated* is not the connection layer's to decide.
+It reads the contract's own `idempotentHint`, so the question is settled where
+the tool is declared and matches what `tools/list` tells the model. Every read
+and write may be repeated on a new session; `call_opcua_method` and
+`acknowledge_alarm` may not — the connection is still rebuilt, but the failure is
+reported rather than the request re-sent.
+
+A rebuilt session is a *different* session, and an OPC UA subscription belongs to
+the session that created it. So both subscription managers can re-create what
+they were monitoring on a new one (`reattach`), keeping the IDs the agent holds
+and the changes already buffered; only the gap during the outage is missing, and
+nothing client-side could have filled it. A subscription the server will not take
+back is dropped rather than left in `list_subscriptions` as a handle that will
+never deliver again.
+
+`get_server_status` is the one tool exempt from all of this, because it is the
+one tool whose output *is* the report: it never fails for being disconnected, it
+says `connected: false` and why, and every other tool's "not connected" error
+points at it by name.
+
 ## The three invariants
 
 **1. `stdout` belongs to the transport.** MCP speaks JSON-RPC over stdio; a stray
@@ -205,13 +257,13 @@ contract/tools.json          single source of truth for the tool + resource surf
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records
-                             · subscriptions · events · version · install
-                             · cli · server
+                             · subscriptions · events · connection
+                             · diagnostics · version · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
-                             · subscriptions · events · connection · tools
-                             · install · index · sea
+                             · subscriptions · events · connection
+                             · diagnostics · tools · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
@@ -237,7 +289,9 @@ Write conversion uses the target node's server-reported `Variant` metadata, not
 the host language type of its current value. The shared codec performs strict
 boolean parsing, integer range checks, lossless Int64/UInt64 conversion,
 base64 ByteString decoding, ISO DateTime parsing and element-wise array
-conversion. Mutating operations are never retried automatically.
+conversion. A mutating operation is repeated only when the contract declares it
+idempotent *and* the failure was the session dying — never on an error the OPC
+UA server itself returned; see [Staying connected](#staying-connected).
 
 Address-space discovery is breadth-first and bounded by both depth and inspected
 node count, with a visited set for cyclic reference graphs. Its response says

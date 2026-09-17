@@ -17,8 +17,9 @@ import {
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { OpcuaConnection } from "./connection.js";
+import { OpcuaConnection, notConnectedMessage } from "./connection.js";
 import { CONTRACT } from "./contract.js";
+import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
 import { toDate } from "./dates.js";
 import {
   DEFAULT_NOTIFIER,
@@ -30,6 +31,7 @@ import {
   listActiveAlarms,
 } from "./events.js";
 import { toHistoryRecords } from "./records.js";
+import { describeSecurity, securityConfig } from "./security.js";
 import { SubscriptionManager, SubscriptionRecord } from "./subscriptions.js";
 import { ToolPolicy, toolPolicy } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
@@ -55,6 +57,18 @@ function eventResult(records: EventRecord[]) {
   return recordBlocks(records);
 }
 
+/** The diagnostics report (resultShapes.serverStatus).
+ *
+ * One object rather than a list, so one text block and a `result` that is the
+ * object itself — the Python server's `get_server_status` frames it identically.
+ */
+function statusResult(status: ServerStatusRecord) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+    structuredContent: { result: status },
+  };
+}
+
 function recordBlocks(records: unknown[]) {
   return {
     content: records.map((record) => ({
@@ -73,6 +87,20 @@ function outputSchema(resultShape: string | undefined): Tool["outputSchema"] {
     required: ["result"],
     additionalProperties: false,
   } as Tool["outputSchema"];
+}
+
+/** Whether a tool may be run a second time when the first attempt found a dead session.
+ *
+ * Keyed on the contract's own `idempotentHint`, so the question is answered once,
+ * where the tool is declared, rather than in a list here that could disagree with
+ * what tools/list tells the model. A dead session almost certainly means the
+ * request never reached the server — but "almost certainly" is not a licence to
+ * fire `call_opcua_method` twice at a machine, so the non-idempotent tools report
+ * the failure and leave the retry to a human.
+ */
+function retryIsSafe(name: string): boolean {
+  const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
+  return tool?.annotations.idempotentHint === true;
 }
 
 function auditTargets(name: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -122,7 +150,12 @@ export class OpcuaTools {
   constructor(
     private readonly conn: OpcuaConnection,
     private readonly policy: ToolPolicy = toolPolicy()
-  ) {}
+  ) {
+    // A rebuilt connection is a new session, and an OPC UA subscription belongs
+    // to the session that created it. Without this, a server restart would leave
+    // every `subscribe_opcua_node` handle the agent holds silently dead.
+    this.conn.onSessionReplaced = (session) => this.subs.reattach(session);
+  }
 
   /** Tear down every OPC UA subscription this server created.
    *
@@ -158,8 +191,16 @@ export class OpcuaTools {
   async listTools(): Promise<Tool[]> {
     // Build the advertised tools from the shared contract, gated by the
     // server's runtime capabilities (history / aggregate).
-    const historyOk = await this.accessHistoryDataCapability();
-    this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions();
+    //
+    // One connection attempt for both probes, not one each: against a server
+    // that is down, each probe would otherwise sit through the whole configured
+    // backoff on its own and double what a tools/list costs. A failure here is
+    // not fatal — the core tools are advertised regardless, and the optional
+    // ones reappear on the next tools/list once the server is back.
+    await this.conn.ensureConnection().catch(() => undefined);
+    const probeable = this.conn.connected;
+    const historyOk = probeable && (await this.accessHistoryDataCapability());
+    this.aggregateFunctions = probeable ? await this.serverCapabilitiesAggregateFunctions() : [];
     const aggregateOk = this.aggregateFunctions.length > 0;
 
     const tools = this.policy
@@ -231,7 +272,7 @@ export class OpcuaTools {
     };
   }
 
-  /** Dispatch a tools/call request by name. */
+  /** Serve a tools/call request: authorize it, then run it on a live session. */
   async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
     const { name, arguments: args } = request.params;
 
@@ -252,102 +293,27 @@ export class OpcuaTools {
         );
         throw error;
       }
-      await this.ensureConnection();
-
-      switch (name) {
-        case "read_opcua_node":
-          return await this.readOpcuaNode(args?.node_id as string);
-
-        case "read_history_opcua_node":
-          return await this.readHistoryOpcuaNode(
-            args?.node_id as string,
-            args?.start_time as string | undefined,
-            args?.end_time as string | undefined,
-            (args?.num_values as number) || 0
-          );
-
-        case "read_aggregate_opcua_node":
-          return await this.readAggregateOpcuaNode(
-            args?.node_id as string,
-            args?.start_time as string,
-            args?.end_time as string | undefined,
-            args?.aggregate_function as string,
-            (args?.processing_interval as number) || 0
-          );
-
-        case "write_opcua_node":
-          return await this.writeOpcuaNode(args?.node_id as string, args?.value);
-
-        case "browse_opcua_node_children":
-          return await this.browseOpcuaNodeChildren(args?.node_id as string);
-
-        case "read_multiple_opcua_nodes":
-          return await this.readMultipleOpcuaNodes(args?.node_ids as string[]);
-
-        case "write_multiple_opcua_nodes":
-          return await this.writeMultipleOpcuaNodes(
-            args?.nodes_to_write as Array<{ node_id: string; value: unknown }>
-          );
-
-        case "call_opcua_method":
-          return await this.callOpcuaMethod(
-            args?.object_node_id as string,
-            args?.method_node_id as string,
-            args?.arguments as string[]
-          );
-
-        case "get_all_variables":
-          return await this.getAllVariables(
-            (args?.root_node_id as string | undefined) ?? "ns=0;i=85",
-            (args?.max_depth as number | undefined) ?? 8,
-            (args?.max_nodes as number | undefined) ?? 500,
-            (args?.include_values as boolean | undefined) ?? true
-          );
-
-        case "subscribe_opcua_node":
-          return subscriptionResult([
-            await this.subs.subscribe(this.requireSession(), args?.node_id as string, {
-              publishingInterval: args?.publishing_interval as number | undefined,
-              samplingInterval: args?.sampling_interval as number | undefined,
-              bufferSize: args?.buffer_size as number | undefined,
-            }),
-          ]);
-
-        case "list_subscriptions":
-          return subscriptionResult(this.subs.list());
-
-        case "unsubscribe_opcua_node":
-          return await this.unsubscribeOpcuaNode(args?.subscription_id as string);
-
-        case "subscribe_events":
-          return await this.subscribeEvents(
-            (args?.node_id as string) || DEFAULT_NOTIFIER,
-            (args?.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
-            (args?.buffer_size as number) || EVENT_DEFAULTS.bufferSize
-          );
-
-        case "read_events":
-          return this.readEvents(
-            (args?.node_id as string) || DEFAULT_NOTIFIER,
-            (args?.limit as number) || EVENT_DEFAULTS.readLimit
-          );
-
-        case "list_active_alarms":
-          return await this.listActiveAlarms(
-            (args?.node_id as string) || DEFAULT_NOTIFIER,
-            (args?.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
-          );
-
-        case "acknowledge_alarm":
-          return await this.acknowledgeAlarm(
-            args?.event_id as string,
-            (args?.comment as string) ?? "",
-            args?.condition_id as string | undefined
-          );
-
-        default:
-          throw new Error(`Unknown tool: ${name}`);
+      // The one tool that must answer while the connection is down: it exists to
+      // say so. Everything below needs a session first.
+      if (name === "get_server_status") {
+        return statusResult(await this.getServerStatus());
       }
+
+      // Connecting is attempted before dispatching, so that a server that is
+      // simply not there is reported as that rather than as a puzzling failure
+      // from whichever tool happened to be called first.
+      try {
+        await this.ensureConnection();
+      } catch (error) {
+        throw new Error(
+          notConnectedMessage(
+            this.conn.endpointUrl,
+            error instanceof Error ? error.message : String(error)
+          )
+        );
+      }
+
+      return await this.conn.withRetry(() => this.dispatch(name, args ?? {}), retryIsSafe(name));
     } catch (error) {
       return {
         content: [
@@ -358,6 +324,130 @@ export class OpcuaTools {
         ],
         isError: true,
       };
+    }
+  }
+
+  /** Run one tool. The caller has already authorized it and ensured a session. */
+  private async dispatch(name: string, args: Record<string, unknown>) {
+    switch (name) {
+      case "read_opcua_node":
+        return await this.readOpcuaNode(args?.node_id as string);
+
+      case "read_history_opcua_node":
+        return await this.readHistoryOpcuaNode(
+          args?.node_id as string,
+          args?.start_time as string | undefined,
+          args?.end_time as string | undefined,
+          (args?.num_values as number) || 0
+        );
+
+      case "read_aggregate_opcua_node":
+        return await this.readAggregateOpcuaNode(
+          args?.node_id as string,
+          args?.start_time as string,
+          args?.end_time as string | undefined,
+          args?.aggregate_function as string,
+          (args?.processing_interval as number) || 0
+        );
+
+      case "write_opcua_node":
+        return await this.writeOpcuaNode(args?.node_id as string, args?.value);
+
+      case "browse_opcua_node_children":
+        return await this.browseOpcuaNodeChildren(args?.node_id as string);
+
+      case "read_multiple_opcua_nodes":
+        return await this.readMultipleOpcuaNodes(args?.node_ids as string[]);
+
+      case "write_multiple_opcua_nodes":
+        return await this.writeMultipleOpcuaNodes(
+          args?.nodes_to_write as Array<{ node_id: string; value: unknown }>
+        );
+
+      case "call_opcua_method":
+        return await this.callOpcuaMethod(
+          args?.object_node_id as string,
+          args?.method_node_id as string,
+          args?.arguments as string[]
+        );
+
+      case "get_all_variables":
+        return await this.getAllVariables(
+          (args?.root_node_id as string | undefined) ?? "ns=0;i=85",
+          (args?.max_depth as number | undefined) ?? 8,
+          (args?.max_nodes as number | undefined) ?? 500,
+          (args?.include_values as boolean | undefined) ?? true
+        );
+
+      case "subscribe_opcua_node":
+        return subscriptionResult([
+          await this.subs.subscribe(this.requireSession(), args?.node_id as string, {
+            publishingInterval: args?.publishing_interval as number | undefined,
+            samplingInterval: args?.sampling_interval as number | undefined,
+            bufferSize: args?.buffer_size as number | undefined,
+          }),
+        ]);
+
+      case "list_subscriptions":
+        return subscriptionResult(this.subs.list());
+
+      case "unsubscribe_opcua_node":
+        return await this.unsubscribeOpcuaNode(args?.subscription_id as string);
+
+      case "subscribe_events":
+        return await this.subscribeEvents(
+          (args?.node_id as string) || DEFAULT_NOTIFIER,
+          (args?.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
+          (args?.buffer_size as number) || EVENT_DEFAULTS.bufferSize
+        );
+
+      case "read_events":
+        return this.readEvents(
+          (args?.node_id as string) || DEFAULT_NOTIFIER,
+          (args?.limit as number) || EVENT_DEFAULTS.readLimit
+        );
+
+      case "list_active_alarms":
+        return await this.listActiveAlarms(
+          (args?.node_id as string) || DEFAULT_NOTIFIER,
+          (args?.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
+        );
+
+      case "acknowledge_alarm":
+        return await this.acknowledgeAlarm(
+          args?.event_id as string,
+          (args?.comment as string) ?? "",
+          args?.condition_id as string | undefined
+        );
+
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  }
+
+  /** The `get_server_status` report: connection state, then what the server says.
+   *
+   * Connecting is attempted rather than assumed, so asking for the status is
+   * also the cheapest way to bring a dropped connection back. A failure to
+   * connect is the answer, not an error — "not connected, and here is why" is
+   * exactly what the caller asked for.
+   */
+  private async getServerStatus(): Promise<ServerStatusRecord> {
+    const endpoint = this.conn.endpointUrl;
+    const security = describeSecurity(securityConfig());
+    try {
+      // Through the same retry as every other read, so that asking for the
+      // status also re-establishes a session that has silently died — which is
+      // exactly the moment someone asks.
+      return await this.conn.withRetry(() =>
+        readServerStatus(this.requireSession(), endpoint, security)
+      );
+    } catch (error) {
+      return disconnectedStatus(
+        endpoint,
+        security,
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
 

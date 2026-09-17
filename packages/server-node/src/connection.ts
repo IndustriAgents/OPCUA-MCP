@@ -1,5 +1,21 @@
 // Owns the OPC UA client/session lifecycle and the runtime capability probes.
 //
+// The connection is expected to break. A plant network drops, an OPC UA server
+// is restarted for maintenance, a switch reboots — and an MCP server that needed
+// restarting after any of those would be useless to leave running. So there are
+// two layers of recovery here, and they do different jobs:
+//
+//   1. node-opcua repairs a broken channel itself, re-activating the *same*
+//      session and re-creating its subscriptions. `connectionStrategy` (from
+//      `config.ts`) decides how hard it tries. This is the cheap path: nothing
+//      above this module notices.
+//   2. When that gives up, the client is dead and stays dead. The next call to
+//      `ensureConnection` therefore throws the old client away and builds a new
+//      one — which is what lets a server that has been down for an hour be
+//      picked up on the next tool call. A fresh session is a *different* session,
+//      so `onSessionReplaced` lets the subscription manager re-establish what it
+//      was monitoring.
+//
 // Capability probes are best-effort by design: an optional capability must
 // never break tools/list, so a transient outage still leaves the core tools
 // advertised.
@@ -14,7 +30,7 @@ import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node
 
 import { setDefaultAutoSelectFamily } from "net";
 
-import { SERVER_URL } from "./config.js";
+import { SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
 import { CONTRACT } from "./contract.js";
 import {
   clientSecurityOptions,
@@ -32,13 +48,102 @@ import {
 // server listening on IPv4 rather than falling back to 127.0.0.1.
 setDefaultAutoSelectFamily(true);
 
+/** Where the connection is, as this module sees it.
+ *
+ * `reconnecting` is node-opcua's own repair in progress: the client object is
+ * still usable and the session will come back on the same object, so the right
+ * thing for a tool call to do is wait rather than build a second client.
+ */
+export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
+
+/** How often `awaitReconnection` looks to see whether the repair has finished. */
+const RECONNECT_POLL_MS = 100;
+
+/** OPC UA status codes and socket errors that mean "the session is gone".
+ *
+ * Matched in the *message*, because by the time an error reaches a tool it has
+ * usually been rewrapped as prose ("Failed to read node ns=2;i=3: ..."). Every
+ * entry names a failure of the connection rather than of the request, which is
+ * what makes retrying on a fresh session meaningful: a `BadNodeIdUnknown` would
+ * fail exactly the same way the second time.
+ */
+const DEAD_SESSION_MARKERS = [
+  "BadSessionIdInvalid",
+  "BadSessionClosed",
+  "BadSessionNotActivated",
+  "BadSecureChannelClosed",
+  "BadSecureChannelIdInvalid",
+  "BadServerNotConnected",
+  "BadNotConnected",
+  "BadConnectionClosed",
+  "BadConnectionRejected",
+  "BadDisconnect",
+  "BadNoCommunication",
+  "BadCommunicationError",
+  "BadServerHalted",
+  "BadTcpInternalError",
+  "No OPC UA session available",
+  "socket has been disconnected",
+  "The connection has been rejected",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+];
+
+/** True when `error` says the connection died rather than the request being wrong.
+ *
+ * The Python server's `is_connection_error` answers the same question about the
+ * same failures, so a retry that happens on one runtime happens on the other.
+ */
+export function isConnectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return DEAD_SESSION_MARKERS.some((marker) => message.includes(marker));
+}
+
+/** The message both runtimes give when a tool cannot be served at all.
+ *
+ * It names the endpoint, because the commonest cause is pointing at the wrong
+ * one, and it names `get_server_status`, because that is the one tool that still
+ * answers while the connection is down.
+ */
+export function notConnectedMessage(url: string, reason: string): string {
+  return `Not connected to the OPC UA server at ${url}: ${reason}. Call get_server_status for details.`;
+}
+
 export class OpcuaConnection {
   private opcuaClient: OPCUAClient | null = null;
   private connectPromise: Promise<void> | null = null;
+  private state: ConnectionState = "disconnected";
+  private lastError: string | null = null;
   session: ClientSession | null = null;
 
+  /** Called with a *new* session after a dead one was replaced.
+   *
+   * Only on the rebuild path: node-opcua's own repair keeps the same session
+   * object, so anything holding one stays valid and this is not called.
+   */
+  onSessionReplaced: ((session: ClientSession) => Promise<void>) | null = null;
+
+  /** True while this server holds a session it believes is live. */
+  get connected(): boolean {
+    return this.state === "connected" && this.session !== null;
+  }
+
+  /** Why the connection is not up, in the client library's words. */
+  get lastErrorMessage(): string | null {
+    return this.lastError;
+  }
+
+  /** The endpoint this server is configured to talk to. */
+  get endpointUrl(): string {
+    return SERVER_URL;
+  }
+
   async connect(): Promise<void> {
-    if (this.opcuaClient && this.session) return;
+    if (this.opcuaClient && this.session && this.state === "connected") return;
     if (!this.connectPromise) {
       this.connectPromise = this.open().finally(() => {
         this.connectPromise = null;
@@ -49,21 +154,31 @@ export class OpcuaConnection {
 
   private async open(): Promise<void> {
     let client: OPCUAClient | null = null;
+    this.state = "connecting";
     try {
       const security = securityConfig();
       for (const warning of securityWarnings(security)) {
         console.error(`WARNING: ${warning}`);
       }
 
+      const reconnect = reconnectConfig();
       client = OPCUAClient.create({
         applicationName: "OPC UA MCP Client",
         connectionStrategy: {
-          initialDelay: 1000,
-          maxRetry: 1,
+          initialDelay: reconnect.initialDelay,
+          maxDelay: reconnect.maxDelay,
+          maxRetry: reconnect.maxRetry,
         },
+        // Let node-opcua repair a broken channel and re-activate the session
+        // rather than leaving a dropped connection for us to notice. Both are
+        // its defaults; stating them keeps the behaviour this module's recovery
+        // is built on from moving under us in a future release.
+        keepSessionAlive: true,
+        requestedSessionTimeout: reconnect.sessionTimeout,
         ...clientSecurityOptions(security),
         endpoint_must_exist: false,
       });
+      this.watch(client);
 
       await client.connect(SERVER_URL);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
@@ -71,6 +186,8 @@ export class OpcuaConnection {
       const session = await client.createSession(userIdentity(security));
       this.opcuaClient = client;
       this.session = session;
+      this.state = "connected";
+      this.lastError = null;
       console.error("OPC UA session created");
     } catch (error) {
       if (client) {
@@ -82,12 +199,57 @@ export class OpcuaConnection {
       }
       this.opcuaClient = null;
       this.session = null;
+      this.state = "disconnected";
+      this.lastError = error instanceof Error ? error.message : String(error);
       console.error("Failed to connect to OPC UA server:", error);
       throw error;
     }
   }
 
+  /** Follow node-opcua's own view of the connection.
+   *
+   * Every handler checks that the event came from the *current* client: a
+   * rebuild leaves the old one to finish emitting its `close`, and letting that
+   * mark the new connection dead would undo the very repair that replaced it.
+   */
+  private watch(client: OPCUAClient): void {
+    const isCurrent = () => this.opcuaClient === client;
+
+    client.on("connection_lost", () => {
+      if (!isCurrent()) return;
+      this.state = "reconnecting";
+      this.lastError = "connection lost";
+      console.error("OPC UA connection lost — node-opcua is trying to repair it");
+    });
+
+    client.on("backoff", (retry: number, delay: number) => {
+      if (!isCurrent()) return;
+      console.error(`OPC UA reconnect: attempt ${retry + 1} failed, next try in ${delay}ms`);
+    });
+
+    client.on("connection_reestablished", () => {
+      if (!isCurrent()) return;
+      this.state = "connected";
+      this.lastError = null;
+      console.error("OPC UA connection re-established");
+    });
+
+    // A close we asked for never reaches here: `teardown` clears `opcuaClient`
+    // before disconnecting, so `isCurrent()` is already false by then.
+    client.on("close", (error?: Error | null) => {
+      if (!isCurrent()) return;
+      this.state = "disconnected";
+      this.lastError = error ? error.message : "connection closed by the OPC UA server";
+      console.error(`OPC UA connection closed${error ? `: ${error.message}` : ""}`);
+    });
+  }
+
   async disconnect(): Promise<void> {
+    await this.teardown();
+  }
+
+  /** Drop the session and client, quietly. Shared by shutdown and rebuild. */
+  private async teardown(): Promise<void> {
     if (this.connectPromise) {
       try {
         await this.connectPromise;
@@ -100,6 +262,7 @@ export class OpcuaConnection {
     const client = this.opcuaClient;
     this.session = null;
     this.opcuaClient = null;
+    this.state = "disconnected";
 
     if (session) {
       try {
@@ -120,9 +283,78 @@ export class OpcuaConnection {
     }
   }
 
+  /** A live session, re-establishing one if the connection has gone. */
   async ensureConnection(): Promise<void> {
-    if (!this.opcuaClient || !this.session) {
-      await this.connect();
+    if (this.connectPromise) {
+      await this.connectPromise;
+      return;
+    }
+    if (this.connected) return;
+    if (this.state === "reconnecting" && (await this.awaitReconnection())) return;
+    await this.reconnect();
+  }
+
+  /** Throw the client away and build a new one, whatever state it was in.
+   *
+   * The session that comes back is a new one, so anything holding the old one —
+   * the subscriptions, above all — is told through `onSessionReplaced`.
+   */
+  async reconnect(): Promise<void> {
+    await this.teardown();
+    await this.connect();
+    const session = this.session;
+    if (session && this.onSessionReplaced) {
+      try {
+        await this.onSessionReplaced(session);
+      } catch (error) {
+        // Re-establishing what was being monitored is best-effort: failing here
+        // would turn a recovered connection back into a failed tool call.
+        console.error("Error re-establishing state on the new OPC UA session:", error);
+      }
+    }
+  }
+
+  /** Wait out node-opcua's own repair, for as long as the operator configured.
+   *
+   * Returns true if it finished in time. Returning false is not a failure — it
+   * means the caller should stop waiting and rebuild, which is strictly more
+   * likely to work than waiting longer on a client that may already have given
+   * up.
+   */
+  private async awaitReconnection(): Promise<boolean> {
+    const deadline = Date.now() + reconnectBudgetMs(reconnectConfig());
+    while (Date.now() < deadline) {
+      if (this.connected) return true;
+      if (this.state !== "reconnecting") return false;
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
+    }
+    return this.connected;
+  }
+
+  /** Run `operation` against a live session, once more on a fresh one if it dies.
+   *
+   * The retry exists because a connection can die between the check and the
+   * call: `ensureConnection` can only report what was true a moment ago. Whether
+   * running the operation again is *safe* is not this module's to judge — the
+   * caller says so with `mayRepeat`, and a caller that says no still gets the
+   * connection rebuilt, so the next call finds a live session.
+   *
+   * Errors are passed through as they came. `get_server_status` reports the
+   * reason a connection failed as its own output and must not have it dressed
+   * up; the tool dispatcher wraps it with `notConnectedMessage` instead.
+   */
+  async withRetry<T>(operation: () => Promise<T>, mayRepeat = true): Promise<T> {
+    await this.ensureConnection();
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isConnectionError(error)) throw error;
+      console.error(
+        `OPC UA call failed on a dead session; reconnecting${mayRepeat ? " and retrying once" : ""}`
+      );
+      await this.reconnect();
+      if (!mayRepeat) throw error;
+      return await operation();
     }
   }
 

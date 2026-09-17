@@ -141,6 +141,61 @@ Found 22 variables:
 ```
 > Prompt: *"Give me a complete inventory of everything on this server."*
 
+### `get_server_status`
+Connection state, server health, and the namespace array — the first thing to try
+when another tool fails.
+```json
+{}
+```
+```json
+{
+  "connected": true,
+  "endpoint_url": "opc.tcp://localhost:4840/freeopcua/server/",
+  "security": "policy=None mode=None user=anonymous",
+  "server_state": "Running",
+  "current_time": "2026-09-17T13:06:37.580Z",
+  "start_time": "2026-09-17T13:06:10.558Z",
+  "build_info": {
+    "product_name": "FreeOpcUa Python Server",
+    "product_uri": "urn:freeopcua.github.io:python:server",
+    "manufacturer_name": "FreeOpcUa",
+    "software_version": "1.0pre",
+    "build_number": "0",
+    "build_date": "2026-09-17T13:06:10.558Z"
+  },
+  "namespaces": [
+    { "index": 0, "uri": "http://opcfoundation.org/UA/" },
+    { "index": 1, "uri": "urn:freeopcua:python:server" },
+    { "index": 2, "uri": "http://examples.freeopcua.github.io" }
+  ],
+  "error": null
+}
+```
+> Prompt: *"Are we actually connected, and is the PLC healthy?"*
+
+Use `namespaces` rather than hard-coding a namespace index: the same URI can sit
+at a different index after a server restart, so an `ns=2;i=3` that worked
+yesterday may address something else today.
+
+This is the one tool that never fails for being disconnected — it reports it:
+
+```json
+{
+  "connected": false,
+  "endpoint_url": "opc.tcp://localhost:4840",
+  "security": "policy=None mode=None user=anonymous",
+  "server_state": null,
+  "current_time": null,
+  "start_time": null,
+  "build_info": null,
+  "namespaces": [],
+  "error": "connect ECONNREFUSED 127.0.0.1:4840"
+}
+```
+
+Calling it is also what re-establishes a dropped connection, so it doubles as
+"try again now". See [Staying connected](../README.md#staying-connected).
+
 ---
 
 ## History & aggregate tools (added in PR #1)

@@ -54,7 +54,7 @@ interface Entry {
   bufferSize: number;
   changeCount: number;
   changes: HistoryRecord[];
-  subscription: ClientSubscription;
+  subscription: ClientSubscription | null;
   monitoredItem: ClientMonitoredItem | null;
 }
 
@@ -131,6 +131,61 @@ export class SubscriptionManager {
     // number differently.
     const id = `sub-${++this.counter}`;
 
+    const entry: Entry = {
+      id,
+      nodeId,
+      publishingInterval,
+      samplingInterval,
+      bufferSize,
+      changeCount: 0,
+      changes: [],
+      subscription: null,
+      monitoredItem: null,
+    };
+
+    await this.attach(session, entry);
+    this.entries.set(entry.id, entry);
+    return toRecord(entry);
+  }
+
+  /** Re-create every subscription on `session`, after the old one died.
+   *
+   * What makes an OPC UA MCP server survivable across a plant restart: the
+   * subscription IDs the agent is holding keep working, and the changes already
+   * buffered are still there to be read — only the gap while the server was away
+   * is missing, which no amount of client-side effort could have filled.
+   *
+   * Best-effort per subscription. One the server will not take back (its node is
+   * gone from the new address space, say) is dropped rather than left in the list
+   * as a handle that will never deliver again: `list_subscriptions` has to keep
+   * telling the truth.
+   */
+  async reattach(session: ClientSession): Promise<void> {
+    for (const entry of [...this.entries.values()]) {
+      try {
+        await this.attach(session, entry);
+        console.error(`Re-established subscription ${entry.id} on node ${entry.nodeId}`);
+      } catch (error) {
+        this.entries.delete(entry.id);
+        console.error(
+          `Could not re-establish subscription ${entry.id} on node ${entry.nodeId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+  }
+
+  /** Create the OPC UA subscription and monitored item behind one entry.
+   *
+   * Shared by the first subscribe and by every re-establishment after a
+   * reconnect, so the two cannot drift into asking the server for different
+   * things — the record the agent reads back names intervals that would
+   * otherwise silently stop being the ones in force.
+   */
+  private async attach(session: ClientSession, entry: Entry): Promise<void> {
+    const { nodeId, publishingInterval, samplingInterval, bufferSize } = entry;
+
     const subscription = await session.createSubscription2({
       requestedPublishingInterval: publishingInterval,
       // Keep-alives and lifetime are expressed in publishing intervals, so
@@ -142,18 +197,6 @@ export class SubscriptionManager {
       publishingEnabled: true,
       priority: 10,
     });
-
-    const entry: Entry = {
-      id,
-      nodeId,
-      publishingInterval,
-      samplingInterval,
-      bufferSize,
-      changeCount: 0,
-      changes: [],
-      subscription,
-      monitoredItem: null,
-    };
 
     try {
       const monitoredItem = await subscription.monitor(
@@ -168,6 +211,7 @@ export class SubscriptionManager {
         throw new Error(`Monitoring rejected with status: ${monitoredItem.statusCode.toString()}`);
       }
       monitoredItem.on("changed", (dataValue: DataValue) => this.record(entry, dataValue));
+      entry.subscription = subscription;
       entry.monitoredItem = monitoredItem;
     } catch (error) {
       // Never leave the OPC UA server holding a subscription this process has
@@ -179,9 +223,6 @@ export class SubscriptionManager {
         }`
       );
     }
-
-    this.entries.set(entry.id, entry);
-    return toRecord(entry);
   }
 
   /** Every active subscription, in the order it was created. */
@@ -199,6 +240,7 @@ export class SubscriptionManager {
     // be told a subscription is still active when nothing is listening to it.
     this.entries.delete(id);
     const record = toRecord(entry);
+    if (!entry.subscription) return record;
     try {
       await entry.subscription.terminate();
     } catch (error) {
@@ -217,7 +259,7 @@ export class SubscriptionManager {
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      await terminateQuietly(entry.subscription);
+      if (entry.subscription) await terminateQuietly(entry.subscription);
     }
   }
 

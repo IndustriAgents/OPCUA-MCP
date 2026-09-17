@@ -62,6 +62,11 @@ DESC = {t["name"]: t["description"] for t in CONTRACT["tools"]}
 HISTORY_NODE_ID = CONTRACT["capabilities"]["history"]["nodeId"]
 AGGREGATE_NODE_ID = CONTRACT["capabilities"]["aggregate"]["nodeId"]
 
+#: The standard nodes `get_server_status` reads, from the contract for the same
+#: reason the capability node IDs are: both servers must ask the same questions.
+SERVER_STATUS_NODE_ID = CONTRACT["diagnostics"]["serverStatusNodeId"]
+NAMESPACE_ARRAY_NODE_ID = CONTRACT["diagnostics"]["namespaceArrayNodeId"]
+
 #: Alarms & Conditions wiring: the well-known node IDs, the event field list both
 #: servers select on, and the defaults their tool descriptions promise.
 EVENTS = CONTRACT["events"]

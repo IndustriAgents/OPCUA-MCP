@@ -12,7 +12,7 @@ no result is recorded here.
 |---|---|---|---|---|---|---|
 | [Main industrial mock](../packages/mock-server/README.md) | Covered | Covered | Not provided | Covered | Covered | Not provided |
 | [Aggregate mock](../packages/mock-server-aggregate/README.md) | Not established as a group | Not established | Covered | Not established | Not established | Not established |
-| [Alarms mock](../packages/mock-server-alarms/README.md) | Temperature reads/writes used by alarm tests | Not provided | Not established | Not established | Not established | Covered |
+| [Alarms mock](../packages/mock-server-alarms/README.md) | Temperature writes used by alarm tests | Not provided | Not established | Not established | Not established | Covered |
 | Prosys OPC UA Simulation Server | Unverified | Unverified | Unverified | Unverified | Unverified | Unverified |
 | Ignition | Unverified | Unverified | Unverified | Unverified | Unverified | Unverified |
 | Kepware | Unverified | Unverified | Unverified | Unverified | Unverified | Unverified |

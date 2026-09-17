@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.midhunxavier/opcua",
+  "title": "OPC UA MCP Server",
+  "description": "Connect MCP clients to OPC UA sensors, history, subscriptions, events and alarms.",
+  "repository": {
+    "url": "https://github.com/midhunxavier/OPCUA-MCP",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "opcua-mcp-server",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "format": "string",
+          "name": "OPCUA_SERVER_URL",
+          "description": "OPC UA endpoint, including its path. For the local plant mock: opc.tcp://localhost:4840/freeopcua/server/.",
+          "isRequired": true
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_SECURITY_POLICY",
+          "description": "None for local mocks only. Set a supported policy and client certificate/key for encrypted connections."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_SECURITY_MODE",
+          "description": "Sign or SignAndEncrypt with a security policy; defaults to SignAndEncrypt when a policy is set."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_CLIENT_CERT",
+          "description": "Local path to the client certificate required by the configured security policy."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_CLIENT_KEY",
+          "description": "Local path to the matching private key; do not paste key material into this field."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_APPLICATION_URI",
+          "description": "Optional application URI override; otherwise derived from the client certificate."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_USERNAME",
+          "description": "Optional OPC UA username. Omit for an anonymous session."
+        },
+        {
+          "format": "string",
+          "name": "OPCUA_PASSWORD",
+          "description": "Password for OPCUA_USERNAME. Configure a security policy to protect credentials in transit.",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

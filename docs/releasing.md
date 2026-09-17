@@ -97,3 +97,11 @@ Everything else in CI runs from the source tree and from `uv.lock`, so it cannot
 see packaging faults, a dependency range that resolves to a breaking major, or a
 bundling change that only breaks once `node_modules` is no longer on disk. The
 first two have already shipped broken releases here.
+
+## MCP Registry metadata
+
+When changing package versions, also update the root [server.json](../server.json)
+top-level version and npm package version. The first release carrying
+`mcpName` must use a new npm version: editing the repository cannot change an
+already-published artifact. See [the registry preparation guide](mcp-registry.md)
+for verification and the separate registry publication step.

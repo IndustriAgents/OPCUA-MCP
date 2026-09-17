@@ -1,7 +1,7 @@
 {
   "name": "opcua-mcp-server",
   "version": "0.3.0",
-  "description": "MCP server for OPC UA control - Model Context Protocol server for OPC UA operations",
+  "description": "Connect MCP clients to OPC UA sensors, history, subscriptions, events and alarms.",
   "main": "build/index.js",
   "type": "module",
   "bin": {
@@ -28,7 +28,12 @@
     "opc-ua",
     "industrial",
     "automation",
-    "scada"
+    "scada",
+    "industrial-automation",
+    "iiot",
+    "plc",
+    "claude",
+    "cursor"
   ],
   "author": "Midhun Xavier",
   "license": "MIT",
@@ -59,5 +64,6 @@
   "files": [
     "build/**/*",
     "README.md"
-  ]
+  ],
+  "mcpName": "io.github.midhunxavier/opcua"
 }

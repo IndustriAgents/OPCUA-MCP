@@ -2,7 +2,10 @@
 
 # 🏭 OPC UA MCP Server
 
-**Read industrial sensors and control equipment on any OPC UA server — through natural language with Claude and any MCP client.**
+**Ask Claude, Cursor, and other MCP clients about your OPC UA data.**
+
+Explore sensor readings, history, events, and alarms through natural language.
+Start with the included simulated plant — no PLC required.
 
 [![npm version](https://img.shields.io/npm/v/opcua-mcp-server)](https://www.npmjs.com/package/opcua-mcp-server)
 [![PyPI version](https://img.shields.io/pypi/v/opcua-mcp-server)](https://pypi.org/project/opcua-mcp-server/)
@@ -12,28 +15,52 @@
 [![GitHub stars](https://img.shields.io/github/stars/midhunxavier/OPCUA-MCP?style=social)](https://github.com/midhunxavier/OPCUA-MCP)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
-[![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org)
+[![Node.js 22.13+](https://img.shields.io/badge/node-22.13+-green.svg)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Quick Start](#quick-start) · [Install](docs/install.md) · [Tools](#tools) · [Examples](docs/examples.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Contributing](CONTRIBUTING.md)
+
+[Try the mock](#try-it-against-the-mock) · [Quick Start](#quick-start) · [Compatibility](docs/compatibility.md) · [Roadmap](ROADMAP.md) · [Examples](docs/examples.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
-![OPC UA MCP Server Screenshot](docs/assets/screenshot.png)
+![OPC UA MCP Server conversation screenshot](docs/assets/screenshot.png)
+
+- **Try it without hardware.** Included mock servers cover plant data, aggregates,
+  and Alarms & Conditions.
+- **Choose Python or Node.** Both implement the same tool contract; install through
+  PyPI, npm, the Claude Desktop bundle, or standalone executables.
+- **Go beyond single readings.** Browse variables, subscribe to changes, inspect
+  history, and query alarms where the connected OPC UA server supports them.
+
+**Already running an OPC UA server?** With Claude Code and Node 22.13+ installed:
+
+```bash
+claude mcp add opcua -e OPCUA_SERVER_URL=opc.tcp://localhost:4840 -- npx -y opcua-mcp-server
+```
+
+Replace the endpoint with yours. For a first local trial, use the
+[mock setup below](#try-it-against-the-mock), including its full endpoint path.
+Claude Desktop users can follow the [bundle installation guide](docs/install.md).
+
+> **Start with a mock or lab server.** Connections default to no encryption or
+> authentication, and the tools can write values and invoke methods. Configure
+> security and account permissions before connecting equipment; see the
+> [security policy and known limitations](SECURITY.md).
 
 ## Overview
 
-Two interchangeable implementations — **Python** and **TypeScript/Node** — expose
-the same OPC UA operations as MCP tools: read and write nodes, browse the address
-space, call methods, read history and server-side aggregates, and subscribe to
-events and alarms. Both connect to any OPC UA server. Pick whichever runtime fits
-your stack.
+Two implementations — **Python** and **TypeScript/Node** — expose OPC UA operations
+as MCP tools: read and write nodes, browse the address space, call methods, read
+history and server-side aggregates, and subscribe to events and data changes.
+Available operations depend on the server's capabilities and account permissions.
+See the [compatibility matrix](docs/compatibility.md) for the scope of the
+repository's test coverage and integrations still awaiting reports.
 
 ```mermaid
 flowchart LR
-    A["AI client<br/>(Claude Desktop / Code / Cursor)"] -->|MCP over stdio| B["OPC UA MCP Server<br/>(Python or Node)"]
-    B -->|OPC UA| C["OPC UA Server<br/>(PLC / SCADA / mock)"]
+    A["AI client"] -->|MCP over stdio| B["OPC UA MCP Server"]
+    B -->|OPC UA| C["PLC / SCADA / mock"]
 ```
 
 ## Quick Start
@@ -311,9 +338,9 @@ here, where they would drift.
 
 ## Try it against the mock
 
-The repo ships a simulated industrial plant — sensors, actuators, methods,
-history and alarm events — so you can try the tools without touching real
-equipment.
+The main mock provides sensors, actuators, methods, history, and plain events.
+Separate mocks cover aggregates and retained alarms (Alarms & Conditions); see
+[compatibility](docs/compatibility.md). No physical equipment is needed.
 
 ```bash
 git clone https://github.com/midhunxavier/OPCUA-MCP.git && cd OPCUA-MCP

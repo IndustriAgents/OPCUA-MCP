@@ -34,9 +34,29 @@ def test_tool_names_are_unique():
 
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)
 def test_tool_has_required_fields(tool):
-    for field in ("name", "capability", "description", "inputSchema"):
+    for field in (
+        "name",
+        "accessClass",
+        "annotations",
+        "capability",
+        "description",
+        "inputSchema",
+    ):
         assert field in tool, f"{tool.get('name')} is missing {field!r}"
     assert tool["description"].strip(), f"{tool['name']} has an empty description"
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)
+def test_tool_access_metadata_is_safe(tool):
+    access = tool["accessClass"]
+    assert access in {"read", "monitor", "alarm-action", "control"}
+    annotations = tool["annotations"]
+    assert set(annotations) == {"readOnlyHint", "destructiveHint", "idempotentHint"}
+    assert all(isinstance(value, bool) for value in annotations.values())
+    if access in {"alarm-action", "control"}:
+        assert annotations["readOnlyHint"] is False
+    if access == "control":
+        assert annotations["destructiveHint"] is True
 
 
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)

@@ -4,7 +4,7 @@
   "display_name": "OPC UA",
   "version": "0.3.0",
   "description": "Read industrial sensors and control equipment on any OPC UA server.",
-  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools: read and write nodes, browse the address space, call methods, subscribe to data changes and to events, acknowledge alarms, and read history and server-side aggregates.\n\nSet the endpoint below to your OPC UA server's URL, for example `opc.tcp://192.168.0.10:4840`.\n\n**Security:** the remaining settings are optional and default to an unencrypted, anonymous connection, which is fine for a simulator or a lab server. Against real equipment, set a security policy (Basic256Sha256 unless your server is older) with a client certificate and key, and a username and password. Note that this server can **write nodes and call methods**, so scope the OPC UA account it logs in as to exactly what you intend Claude to be able to do.",
+  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools.\n\nSet the endpoint below to your OPC UA server's URL. The default **observe** profile can read, browse and monitor but cannot write, call methods or acknowledge alarms. Use **operator** with explicit target allowlists for production control; **full** is intended for a tightly scoped OPC UA account.\n\n**Security:** the connection defaults to unencrypted and anonymous for local simulation. Control tools remain blocked on an insecure channel unless the lab-only override is enabled. Against real equipment, set Basic256Sha256, a client certificate and key, and credentials scoped to exactly the nodes and methods required.",
   "author": {
     "name": "Midhun Xavier",
     "url": "https://github.com/midhunxavier"
@@ -31,7 +31,14 @@
         "OPCUA_CLIENT_CERT": "${user_config.opcua_client_cert}",
         "OPCUA_CLIENT_KEY": "${user_config.opcua_client_key}",
         "OPCUA_USERNAME": "${user_config.opcua_username}",
-        "OPCUA_PASSWORD": "${user_config.opcua_password}"
+        "OPCUA_PASSWORD": "${user_config.opcua_password}",
+        "OPCUA_PROFILE": "${user_config.opcua_profile}",
+        "OPCUA_POLICY_FILE": "${user_config.opcua_policy_file}",
+        "OPCUA_ALLOWED_TOOLS": "${user_config.opcua_allowed_tools}",
+        "OPCUA_ALLOWED_WRITE_NODES": "${user_config.opcua_allowed_write_nodes}",
+        "OPCUA_ALLOWED_METHODS": "${user_config.opcua_allowed_methods}",
+        "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS": "${user_config.opcua_allow_acknowledge_alarms}",
+        "OPCUA_ALLOW_INSECURE_CONTROL": "${user_config.opcua_allow_insecure_control}"
       }
     }
   },
@@ -78,6 +85,51 @@
       "title": "Password",
       "description": "Required if a username is set. Sent in clear text unless a security policy is configured.",
       "sensitive": true,
+      "required": false
+    },
+    "opcua_profile": {
+      "type": "string",
+      "title": "Tool profile",
+      "description": "observe (read/monitor only), operator (explicit target allowlists), or full. Restart the connector after changing it.",
+      "default": "observe",
+      "required": true
+    },
+    "opcua_policy_file": {
+      "type": "file",
+      "title": "Policy file",
+      "description": "Optional version-1 JSON policy. Form fields below override values from this file.",
+      "required": false
+    },
+    "opcua_allowed_tools": {
+      "type": "string",
+      "title": "Allowed tools",
+      "description": "Optional comma-separated tool allowlist. It can only narrow the selected profile.",
+      "required": false
+    },
+    "opcua_allowed_write_nodes": {
+      "type": "string",
+      "title": "Writable node IDs",
+      "description": "Comma-separated exact node IDs writable in operator mode.",
+      "required": false
+    },
+    "opcua_allowed_methods": {
+      "type": "string",
+      "title": "Callable methods",
+      "description": "Comma-separated object_node_id|method_node_id pairs callable in operator mode.",
+      "required": false
+    },
+    "opcua_allow_acknowledge_alarms": {
+      "type": "boolean",
+      "title": "Allow alarm acknowledgement",
+      "description": "Expose acknowledgement in operator mode.",
+      "default": false,
+      "required": false
+    },
+    "opcua_allow_insecure_control": {
+      "type": "boolean",
+      "title": "Allow insecure control (lab only)",
+      "description": "Permit control tools without OPC UA channel security. Never enable against production equipment.",
+      "default": false,
       "required": false
     }
   },

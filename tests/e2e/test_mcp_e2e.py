@@ -85,7 +85,15 @@ ISO_UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
 
 
 def _server_params(impl: str, url: str) -> StdioServerParameters:
-    env = {**os.environ, "OPCUA_SERVER_URL": url}
+    # The shared E2E suite exercises control operations against a deliberately
+    # unsecured in-process fixture. Production defaults are observe-only, so
+    # tests must opt in to this lab-only combination explicitly.
+    env = {
+        **os.environ,
+        "OPCUA_SERVER_URL": url,
+        "OPCUA_PROFILE": "full",
+        "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+    }
     if impl == "python":
         return StdioServerParameters(
             command="uv",
@@ -293,6 +301,25 @@ async def test_get_all_variables(server):
     assert "Temperature" in text
 
 
+async def test_get_all_variables_honours_traversal_budget(server):
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "get_all_variables",
+            {"max_nodes": 1, "max_depth": 1, "include_values": False},
+        )
+    assert not result.is_error, text_of(result)
+    assert "truncated at max_nodes=1" in text_of(result), impl
+
+
+async def test_get_all_variables_rejects_an_unknown_root(server):
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool("get_all_variables", {"root_node_id": UNKNOWN_NODE})
+    assert result.is_error is True, impl
+    assert f"Failed to discover variables below {UNKNOWN_NODE}" in text_of(result)
+
+
 async def test_browse_children(server):
     _impl, params = server
     async with connect(params) as session:
@@ -325,6 +352,43 @@ async def test_write_boolean_node(server):
         )
     assert not result.is_error, text_of(result)
     assert "Success" in text_of(result) or "wrote" in text_of(result).lower()
+
+
+async def test_batch_write_uses_typed_values_in_one_operation(server):
+    impl, params = server
+    writes = [
+        {"node_id": NODE["ValvePosition"], "value": "42.25"},
+        {"node_id": NODE["PumpEnabled"], "value": "false"},
+    ]
+    async with connect(params) as session:
+        written = await session.call_tool("write_multiple_opcua_nodes", {"nodes_to_write": writes})
+        read = await session.call_tool(
+            "read_multiple_opcua_nodes",
+            {"node_ids": [NODE["ValvePosition"], NODE["PumpEnabled"]]},
+        )
+    assert not written.is_error, f"{impl}: {text_of(written)}"
+    assert text_of(written).count("Success") == 2, f"{impl}: {text_of(written)}"
+    values = text_of(read).lower()
+    assert "42.25" in values and "false" in values, f"{impl}: {values}"
+
+
+async def test_batch_write_keeps_valid_items_when_one_node_is_rejected(server):
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "write_multiple_opcua_nodes",
+            {
+                "nodes_to_write": [
+                    {"node_id": NODE["ValvePosition"], "value": "31.5"},
+                    {"node_id": UNKNOWN_NODE, "value": "1"},
+                ]
+            },
+        )
+        read = await session.call_tool("read_opcua_node", {"node_id": NODE["ValvePosition"]})
+    assert not result.is_error, f"{impl}: {text_of(result)}"
+    text = text_of(result)
+    assert "Success" in text and UNKNOWN_NODE in text and "Error" in text, f"{impl}: {text}"
+    assert "31.5" in text_of(read), f"{impl}: valid batch member was not written"
 
 
 async def test_call_method_start_then_stop(server):

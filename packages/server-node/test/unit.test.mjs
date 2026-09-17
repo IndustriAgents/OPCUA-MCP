@@ -26,6 +26,7 @@ import {
 } from "node-opcua-client";
 
 import { toDate } from "../build/dates.js";
+import { OpcuaConnection } from "../build/connection.js";
 import {
   EVENT_DEFAULTS,
   droppedEventsMessage,
@@ -47,6 +48,27 @@ import {
   terminateFailedMessage,
   unknownSubscriptionMessage,
 } from "../build/subscriptions.js";
+
+describe("OpcuaConnection", () => {
+  test("concurrent callers share one connection attempt", async () => {
+    const connection = new OpcuaConnection();
+    let attempts = 0;
+    let release;
+    connection.open = async () => {
+      attempts += 1;
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+    };
+
+    const first = connection.connect();
+    const second = connection.connect();
+    assert.equal(attempts, 1);
+    release();
+    await Promise.all([first, second]);
+    assert.equal(attempts, 1);
+  });
+});
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

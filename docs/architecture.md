@@ -96,7 +96,22 @@ contract, on both; it is what the parity test enforces, and it is what
 `docs/examples.md` documents. If the SDKs converge, this becomes an additive
 change on top.
 
-## Capability gating
+## Policy and capability gating
+
+`contract/tools.json` assigns every tool an access class (`read`, `monitor`,
+`alarm-action`, or `control`) and MCP safety annotations. Both runtimes build the
+visible catalog from the same metadata, then enforce the selected deployment
+policy again at invocation time. The second check is the security boundary: a
+client with a cached tool list cannot call a tool that has since been disabled.
+
+The default `observe` profile is fail-closed. `operator` requires exact node and
+method allowlists, and validates every member of a batch before the OPC UA call.
+`full` is available for tightly controlled deployments. Control tools are hidden
+unless the OPC UA channel is secured or a conspicuous lab-only override is set.
+An optional versioned JSON policy makes the same rules deployable through normal
+configuration management; environment variables can narrow or override it.
+
+Tool visibility is the intersection of policy and server capability:
 
 Some tools only make sense against servers that support them. Rather than
 advertising a tool that always fails, each runtime probes the connected OPC UA
@@ -108,8 +123,8 @@ server at `tools/list` time and filters:
 | `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_aggregate_opcua_node` |
 
 The probes are **best-effort by design**: any failure yields "not supported"
-rather than an error. A transient OPC UA outage must not strip the core tools
-from `tools/list`.
+rather than an error. Python reads these through the lifecycle's active session;
+it does no network I/O at import time and creates no throwaway probe sessions.
 
 > There are three mocks, on purpose. The main one (`packages/mock-server/`,
 > :4840) enables history and advertises **no** aggregate functions, so the suite
@@ -217,6 +232,17 @@ validates them in one module — `security.ts` / `security.py` — which the cli
 factory, the capability probes and the startup check all go through, so a
 probe cannot end up on a different security footing than the session it
 precedes.
+
+Write conversion uses the target node's server-reported `Variant` metadata, not
+the host language type of its current value. The shared codec performs strict
+boolean parsing, integer range checks, lossless Int64/UInt64 conversion,
+base64 ByteString decoding, ISO DateTime parsing and element-wise array
+conversion. Mutating operations are never retried automatically.
+
+Address-space discovery is breadth-first and bounded by both depth and inspected
+node count, with a visited set for cyclic reference graphs. Its response says
+when the budget truncated the search; callers can select a narrower root or
+increase the explicit limit instead of triggering an unbounded plant-wide crawl.
 
 Identity is derived rather than restated: with a client certificate configured,
 both runtimes announce the `subjectAltName` URI of that certificate as the

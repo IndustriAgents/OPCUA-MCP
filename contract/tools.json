@@ -3,7 +3,7 @@
   "resultShapes": {
     "$comment": "Canonical response shapes, referenced by a tool's \"resultShape\". Both servers must produce the referenced shape verbatim: a client (or a model) that learns one server's output must be able to read the other's. See issue #23.",
     "historyRecords": {
-      "$comment": "Returned as one MCP text content block per record, each block the JSON object described by \"items\". An empty result is zero blocks. The Python server additionally returns the array as structured content.",
+      "$comment": "Returned as one MCP text content block per record for compatibility. The canonical structured result is {\"result\": [records...]}, and tools/list advertises that wrapper as outputSchema.",
       "type": "array",
       "items": {
         "type": "object",
@@ -25,7 +25,7 @@
       }
     },
     "subscriptionRecords": {
-      "$comment": "Returned as one MCP text content block per record, each block the JSON object described by \"items\" — the same framing as \"historyRecords\". `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
+      "$comment": "Returned as one MCP text content block per record for compatibility and as {\"result\": [records...]} structured content. `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
       "type": "array",
       "items": {
         "type": "object",
@@ -72,7 +72,7 @@
       }
     },
     "eventRecords": {
-      "$comment": "Returned as one MCP text content block per event, each block the JSON object described by \"items\". No events is zero blocks. `read_events` appends one further block, plain prose rather than a record, when its buffer overflowed since the last read — losing events silently would let an agent read a burst of alarms as quiet. The Python server additionally returns the array as structured content. Every field is present on every record; a field the event does not carry — the condition fields of a plain BaseEventType, say — is null. The field order and the OPC UA browse paths behind it are \"events.fields\" below, which is what both servers build their EventFilter select clauses from.",
+      "$comment": "Returned as one MCP text content block per event for compatibility and as {\"result\": [records...]} structured content. No events is zero blocks. `read_events` appends one further prose block when its buffer overflowed; the structured result contains records only. Every field is present on every record; a field the event does not carry is null. The field order and OPC UA browse paths are \"events.fields\" below.",
       "type": "array",
       "items": {
         "type": "object",
@@ -204,6 +204,8 @@
   "tools": [
     {
       "name": "read_opcua_node",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "capability": null,
       "description": "Read the value of a specific OPC UA node",
       "inputSchema": {
@@ -219,6 +221,8 @@
     },
     {
       "name": "write_opcua_node",
+      "accessClass": "control",
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
       "capability": null,
       "description": "Write a value to a specific OPC UA node",
       "inputSchema": {
@@ -229,8 +233,7 @@
             "description": "The OPC UA node ID in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=3'."
           },
           "value": {
-            "type": "string",
-            "description": "The value to write to the node. Will be converted based on node type."
+            "description": "JSON scalar or array to write. It is converted and range-checked using the target node's OPC UA Variant data type; ByteString uses base64 and DateTime uses ISO 8601."
           }
         },
         "required": ["node_id", "value"]
@@ -238,6 +241,8 @@
     },
     {
       "name": "browse_opcua_node_children",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "capability": null,
       "description": "Browse the children of a specific OPC UA node",
       "inputSchema": {
@@ -253,6 +258,8 @@
     },
     {
       "name": "read_multiple_opcua_nodes",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "capability": null,
       "description": "Read the values of multiple OPC UA nodes in a single request",
       "inputSchema": {
@@ -269,6 +276,8 @@
     },
     {
       "name": "write_multiple_opcua_nodes",
+      "accessClass": "control",
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
       "capability": null,
       "description": "Write values to multiple OPC UA nodes in a single request",
       "inputSchema": {
@@ -280,7 +289,9 @@
               "type": "object",
               "properties": {
                 "node_id": { "type": "string" },
-                "value": { "type": "string" }
+                "value": {
+                  "description": "JSON scalar or array converted using this node's OPC UA Variant data type."
+                }
               },
               "required": ["node_id", "value"]
             },
@@ -292,6 +303,8 @@
     },
     {
       "name": "call_opcua_method",
+      "accessClass": "control",
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
       "capability": null,
       "description": "Call a method on a specific OPC UA object node",
       "inputSchema": {
@@ -316,16 +329,41 @@
     },
     {
       "name": "get_all_variables",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "capability": null,
-      "description": "Get all available variables from the OPC UA server, excluding those under the built-in 'Server' object",
+      "description": "Discover OPC UA variables with explicit traversal limits, excluding those under the built-in 'Server' object",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "root_node_id": {
+            "type": "string",
+            "description": "Node at which discovery starts. Defaults to the Objects folder (ns=0;i=85)."
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Maximum object depth to browse below the root. Defaults to 8; capped at 64."
+          },
+          "max_nodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "description": "Maximum referenced nodes to inspect before returning a truncated result. Defaults to 500; capped at 5000."
+          },
+          "include_values": {
+            "type": "boolean",
+            "description": "Read each variable's current value. Defaults to true; set false for a cheaper address-space inventory."
+          }
+        },
         "required": []
       }
     },
     {
       "name": "subscribe_opcua_node",
+      "accessClass": "monitor",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "resultShape": "subscriptionRecords",
       "capability": null,
       "description": "Subscribe to data changes on a specific OPC UA node. The OPC UA server pushes each new value into a buffer this MCP server keeps; re-read it with `list_subscriptions` or the `opcua://subscriptions` resource instead of polling `read_opcua_node`",
@@ -354,6 +392,8 @@
     },
     {
       "name": "list_subscriptions",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "resultShape": "subscriptionRecords",
       "capability": null,
       "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created",
@@ -365,6 +405,8 @@
     },
     {
       "name": "unsubscribe_opcua_node",
+      "accessClass": "monitor",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "capability": null,
       "description": "Cancel an active OPC UA data-change subscription and discard its buffered changes",
       "inputSchema": {
@@ -380,6 +422,8 @@
     },
     {
       "name": "subscribe_events",
+      "accessClass": "monitor",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "capability": null,
       "description": "Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. Returns at once; the events themselves are collected in the background and read with read_events. Calling this again for the same node restarts the subscription with the new settings",
       "inputSchema": {
@@ -403,6 +447,8 @@
     },
     {
       "name": "read_events",
+      "accessClass": "monitor",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "resultShape": "eventRecords",
       "capability": null,
       "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, a note saying how many events were lost follows them",
@@ -423,6 +469,8 @@
     },
     {
       "name": "list_active_alarms",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "resultShape": "eventRecords",
       "capability": null,
       "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the server's own current set and needs no prior subscription. Fails rather than answering with a partial list if the server does not finish within timeout_seconds",
@@ -443,6 +491,8 @@
     },
     {
       "name": "acknowledge_alarm",
+      "accessClass": "alarm-action",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "capability": null,
       "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition",
       "inputSchema": {
@@ -466,6 +516,8 @@
     },
     {
       "name": "read_history_opcua_node",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "resultShape": "historyRecords",
       "capability": "history",
       "description": "Read the historical values of a specific OPC UA node",
@@ -494,6 +546,8 @@
     },
     {
       "name": "read_aggregate_opcua_node",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "resultShape": "historyRecords",
       "capability": "aggregate",
       "description": "Calculate the historical aggregates over a defined time range, divided into smaller chunks defined by the `processing_interval` (in milliseconds). The server divides the [`start_time`, `end_time`] domain into these intervals, returning one aggregated value per interval",

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.midhunxavier/opcua",
+  "title": "OPC UA MCP Server",
+  "description": "MCP server for OPC UA: read, write, browse, call methods, history, events and alarms.",
+  "repository": {
+    "url": "https://github.com/midhunxavier/OPCUA-MCP",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/midhunxavier/OPCUA-MCP#readme",
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "opcua-mcp-server",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "OPCUA_SERVER_URL",
+          "description": "OPC UA endpoint, including its path. The bundled plant mock listens on opc.tcp://localhost:4840/freeopcua/server/.",
+          "format": "string",
+          "default": "opc.tcp://localhost:4840",
+          "isRequired": true
+        },
+        {
+          "name": "OPCUA_SECURITY_POLICY",
+          "description": "None, Basic128Rsa15, Basic256, Basic256Sha256, and on the Node runtime also Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss. Anything other than None needs the client certificate and key below.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_SECURITY_MODE",
+          "description": "None, Sign or SignAndEncrypt. Defaults to SignAndEncrypt once a security policy is set.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_CLIENT_CERT",
+          "description": "Path to the client certificate (PEM or DER) the session presents.",
+          "format": "filepath"
+        },
+        {
+          "name": "OPCUA_CLIENT_KEY",
+          "description": "Path to the private key matching OPCUA_CLIENT_CERT. A path, not key material.",
+          "format": "filepath"
+        },
+        {
+          "name": "OPCUA_APPLICATION_URI",
+          "description": "Application URI announced to the server. Defaults to the subjectAltName URI of the client certificate; set it only for a certificate that carries none.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_USERNAME",
+          "description": "OPC UA username. The session is anonymous when unset.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_PASSWORD",
+          "description": "Password for OPCUA_USERNAME. Without a security policy it crosses the network in clear text.",
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "OPCUA_RECONNECT_INITIAL_DELAY_MS",
+          "description": "First wait before retrying a dropped or refused connection, in ms. Each further attempt doubles it.",
+          "format": "number",
+          "default": "1000"
+        },
+        {
+          "name": "OPCUA_RECONNECT_MAX_DELAY_MS",
+          "description": "Ceiling for the doubling backoff, in ms.",
+          "format": "number",
+          "default": "8000"
+        },
+        {
+          "name": "OPCUA_RECONNECT_MAX_RETRY",
+          "description": "Retries after the first attempt. 0 disables retrying; -1 retries forever.",
+          "format": "number",
+          "default": "3"
+        },
+        {
+          "name": "OPCUA_SESSION_TIMEOUT_MS",
+          "description": "Session timeout asked of the OPC UA server, in ms. It also sets the keep-alive period.",
+          "format": "number",
+          "default": "60000"
+        },
+        {
+          "name": "OPCUA_PROFILE",
+          "description": "Tool profile. observe (default) advertises read, browse, history and monitoring tools only; operator adds explicitly allowlisted writes and methods; full exposes every tool.",
+          "format": "string",
+          "default": "observe",
+          "choices": [
+            "observe",
+            "operator",
+            "full"
+          ]
+        },
+        {
+          "name": "OPCUA_POLICY_FILE",
+          "description": "Path to a version-1 JSON policy file. The environment variables below override what it sets.",
+          "format": "filepath"
+        },
+        {
+          "name": "OPCUA_ALLOWED_TOOLS",
+          "description": "Comma-separated tool allowlist. It can only narrow the selected profile, never widen it.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_ALLOWED_WRITE_NODES",
+          "description": "Comma-separated exact node IDs the operator profile may write. A batch write is rejected outright if any target falls outside it.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_ALLOWED_METHODS",
+          "description": "Comma-separated object_node_id|method_node_id pairs the operator profile may call.",
+          "format": "string"
+        },
+        {
+          "name": "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
+          "description": "Allow the operator profile to acknowledge alarms. Defaults to false.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "OPCUA_ALLOW_INSECURE_CONTROL",
+          "description": "Lab-only override permitting control tools on an unsecured OPC UA channel. Defaults to false.",
+          "format": "boolean",
+          "default": "false"
+        }
+      ]
+    }
+  ]
+}

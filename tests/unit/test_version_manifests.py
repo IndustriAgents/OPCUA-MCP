@@ -26,6 +26,7 @@ PYTHON_PYPROJECT = ROOT / "packages" / "server-python" / "pyproject.toml"
 MOCK_PYPROJECT = ROOT / "packages" / "mock-server" / "pyproject.toml"
 MCPB_MANIFEST = ROOT / "packages" / "server-node" / "mcpb" / "manifest.json"
 NODE_LOCKFILE = ROOT / "packages" / "server-node" / "package-lock.json"
+SERVER_JSON = ROOT / "server.json"
 
 
 def _node_version() -> str:
@@ -50,6 +51,8 @@ def test_manifests_agree_on_version():
         "server-python/pyproject.toml": _py_version(PYTHON_PYPROJECT),
         "mock-server/pyproject.toml": _py_version(MOCK_PYPROJECT),
         "server-node/mcpb/manifest.json": json.loads(MCPB_MANIFEST.read_text())["version"],
+        "server.json": json.loads(SERVER_JSON.read_text())["version"],
+        "server.json packages[0]": json.loads(SERVER_JSON.read_text())["packages"][0]["version"],
     }
     assert len(set(versions.values())) == 1, f"version drift across manifests: {versions}"
 
@@ -82,3 +85,21 @@ def test_the_npm_lockfile_records_the_package_version():
     expected = _node_version()
     assert lock["version"] == expected, "package-lock.json top-level version is stale"
     assert lock["packages"][""]["version"] == expected, 'packages[""] version is stale'
+
+
+def test_the_registry_manifest_points_at_this_package():
+    """`server.json` and the npm manifest have to agree on name and identifier.
+
+    The MCP Registry proves ownership by matching its entry's `name` against the
+    `mcpName` of the published npm package, so a typo in either is not a cosmetic
+    fault: it makes the listing unverifiable, and only a fresh npm release can fix
+    it. The version halves of this pair are covered above.
+    """
+    registry = json.loads(SERVER_JSON.read_text())
+    package = json.loads(NODE_PKG.read_text())
+    assert registry["name"] == package.get("mcpName"), (
+        f"server.json name {registry['name']!r} != package.json mcpName {package.get('mcpName')!r}"
+    )
+    assert registry["packages"][0]["identifier"] == package["name"], (
+        "server.json names a different npm package than the one this repo publishes"
+    )

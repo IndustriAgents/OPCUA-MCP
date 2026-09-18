@@ -52,6 +52,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   useful when something else has just failed. Every other tool's "not connected"
   error names it. Calling it also re-establishes a dropped connection, so it
   doubles as "try again now".
+- **MCP Registry metadata.** A root `server.json` describes the npm
+  distribution, its stdio transport and every environment variable it reads, and
+  `packages/server-node/package.json` now carries the matching
+  `mcpName: io.github.midhunxavier/opcua`. Unit tests hold the two names, the npm
+  identifier and all the version fields together, so the pair that proves package
+  ownership cannot drift. Nothing is submitted to the registry by this change —
+  the first submission needs a release whose npm tarball carries `mcpName`, which
+  the already-published 0.3.0 cannot; [docs/mcp-registry.md](docs/mcp-registry.md)
+  has the steps.
+- **[ROADMAP.md](ROADMAP.md)** — what exists, what is next, and what is only an
+  idea, linked to the issues that track each item.
+- **[docs/compatibility.md](docs/compatibility.md)** — which OPC UA servers,
+  capabilities, runtimes and clients are actually covered by the test suite,
+  separated from what is merely expected to work. No third-party server has a
+  recorded result yet; a compatibility issue template collects them.
+
 - **Production tool policy and typed control boundary.** Both runtimes now
   default to an observe-only profile, share tool risk/annotation metadata, and
   enforce profile, tool and exact node/method allowlists on every invocation.
@@ -196,6 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   condition instance rather than against our own idea of one.
 
 ### Changed
+- The README badge and the contribution guide said **Node 18+**; the package has
+  required Node 22.13+ since 0.3.0. Both now say so.
 - **The Python server now targets the `mcp` 2.x API.** 0.3.0 pinned `mcp[cli]<2`
   because 2.x renamed `FastMCP` to `MCPServer` and the server died on import
   without it; the pin is now `>=2.2.0,<3` and the server imports

@@ -64,6 +64,11 @@ npm install -g opcua-mcp-server        # or: uv tool install opcua-mcp-server
 opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
 ```
 
+`--install` writes absolute paths rather than a bare `npx`, which matters more
+than it sounds: Claude Desktop is launched from the GUI and does not inherit a
+login shell's `PATH`. `--dry-run` shows the result without writing it. Without a
+permanent install, `npx` and `uvx` fetch the package on demand.
+
 **Prefer to configure it yourself?** Add this to your MCP client config and point
 `OPCUA_SERVER_URL` at your OPC UA endpoint:
 
@@ -320,24 +325,6 @@ Why each of these matters, what is still not protected, and the full X.509 story
 **[SECURITY.md](SECURITY.md)**. Generating a certificate a server will accept —
 including a file-naming trap on the Python runtime — is
 **[docs/certificates.md](docs/certificates.md)**.
-
-## Installation
-
-Most users need only the [Quick Start](#quick-start) above — `npx` and `uvx`
-fetch the package on demand. To install it permanently:
-
-```bash
-npm install -g opcua-mcp-server    # or: uv tool install opcua-mcp-server
-opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
-```
-
-`--install` writes absolute paths rather than a bare `npx`, which matters more
-than it sounds: Claude Desktop is launched from the GUI and does not inherit a
-login shell's `PATH`. `--dry-run` shows the result without writing it.
-
-Every route — the `.mcpb` bundle, single-file executables for machines with no
-runtime at all, editing the config by hand, and which runtime uses which
-libraries: **[docs/install.md](docs/install.md)**.
 
 ## Try it against the mock
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-18
+
+0.4.0 was tagged but never reached npm or PyPI: its publish workflow failed the
+verify job it runs before publishing, and skipped both registry jobs. The GitHub
+release and its downloadable artifacts were built and are correct — the failure
+was a flaky *test*, not a defect in either server. This release is 0.4.0 plus the
+fix for that test, so **0.4.1 is the first published release of the 0.4 line**
+and the 0.4.0 notes below describe what is in it.
+
+Tags in this repository are immutable by ruleset, which is why this is a new
+version rather than a re-tag.
+
 ### Fixed
 - **Three end-to-end tests raced the mock's simulation loop.** Every actuator in
   the bundled mock is republished from the simulation's own state once a second,
@@ -835,7 +847,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.0...v0.2.1

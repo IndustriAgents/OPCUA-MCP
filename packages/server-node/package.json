@@ -1,6 +1,6 @@
 {
   "name": "opcua-mcp-server",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP server for OPC UA: read, write, browse, call methods, history, events and alarms.",
   "main": "build/index.js",
   "type": "module",

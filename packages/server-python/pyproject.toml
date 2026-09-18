@@ -1,6 +1,6 @@
 [project]
 name = "opcua-mcp-server"
-version = "0.4.0"
+version = "0.4.1"
 description = "MCP server exposing OPC UA read/write/browse/method/history tools (MCPServer + python-opcua)."
 readme = "README.md"
 requires-python = ">=3.10"

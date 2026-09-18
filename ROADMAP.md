@@ -3,7 +3,7 @@
 What exists, what is being worked on next, and what is only an idea. This is an
 order of work, not a schedule: nothing here carries a release date.
 
-The manifests are at **0.4.0**. [CHANGELOG.md](CHANGELOG.md) records what has
+The manifests are at **0.4.1**. [CHANGELOG.md](CHANGELOG.md) records what has
 actually shipped — including entries under `[Unreleased]`, which are merged but
 not yet published to npm or PyPI. The
 [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is the phased plan currently

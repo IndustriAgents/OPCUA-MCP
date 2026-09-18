@@ -26,12 +26,13 @@ That interchangeability is not maintained by discipline. It is maintained by
 | **Node** | Builds its `tools/list` response directly from it. `npm run build` copies it to `build/contract.json` so the npm package is self-contained. |
 | **Python** | Reads tool descriptions and capability node IDs from it. Input schemas are derived by `MCPServer` from the function signatures, and checked against the contract by a test. |
 
-The contract also pins what the tools *return*, where the answer is more than
-free text. A tool names a shape from `resultShapes`; the history family
-(`read_history_opcua_node`, `read_aggregate_opcua_node`) shares
-`historyRecords`, one flat `{value, timestamp, status}` record per historical
-value or aggregate interval, and the event family (`read_events`,
-`list_active_alarms`) shares `eventRecords`. Encoding a value keys on the OPC UA
+The contract also pins what the tools *return*. **Every** tool names a shape
+from `resultShapes` — ten of the seventeen named none until 0.4.0, and for those
+the output format, error wording and defaults were two hand-written copies that
+no test compared, which is where every divergence between the two runtimes
+turned out to live. `read_opcua_history` produces `historyRecords`, one flat
+`{value, timestamp, status}` record per historical value or aggregate interval;
+`read_events` and `list_active_alarms` share `eventRecords`. Encoding a value keys on the OPC UA
 data type rather than the language one — python-opcua and node-opcua represent
 the same reading with entirely different native types (a ByteString is `bytes`
 vs a `Buffer`, an Int64 a plain int vs a `[high, low]` pair), so anything
@@ -61,7 +62,7 @@ parity test reads the resource from each and checks it against the shape.
 
 An MCP tool call is request/response, so an OPC UA subscription cannot answer its
 caller — the notifications arrive whenever the OPC UA server publishes, long
-after `subscribe_opcua_node` returned. Each runtime therefore owns the
+after `subscribe_opcua_nodes` returned. Each runtime therefore owns the
 subscription and *buffers* what it delivers (`src/subscriptions.ts` /
 `subscriptions.py`), and the agent reads the accumulation back through
 `list_subscriptions` or the `opcua://subscriptions` resource.
@@ -69,7 +70,7 @@ subscription and *buffers* what it delivers (`src/subscriptions.ts` /
 The buffer is a ring of `buffer_size` records with a `change_count` beside it, so
 an agent that looks away for a minute sees how much it missed rather than
 silently losing it. One OPC UA subscription per monitored node, which is what
-lets a single `unsubscribe_opcua_node` take the whole thing down rather than
+lets a single `unsubscribe_opcua_nodes` take the whole thing down rather than
 leaving an empty subscription behind.
 
 Teardown is not optional, and it is the part that is easy to get wrong: closing
@@ -119,8 +120,16 @@ server at `tools/list` time and filters:
 
 | Capability | Probe | Gates |
 |---|---|---|
-| `history` | Read `AccessHistoryDataCapability` (`ns=0;i=11193`) is true | `read_history_opcua_node` |
-| `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_aggregate_opcua_node` |
+| `history` | Read `AccessHistoryDataCapability` (`ns=0;i=11193`) is true | `read_opcua_history` |
+| `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_opcua_history`, and its `aggregate_function` argument |
+
+A tool declares `capabilities` as a *list*, and is offered when the server
+reports any member. `read_opcua_history` names both, because a server with
+aggregates and no raw history can still answer an aggregate read — gating it on
+`history` alone would hide the one thing such a server is good at. The
+`aggregate_function` argument is then gated on its own, appearing only where
+aggregates exist and carrying that server's own function list in its
+description. Capability gating applies to an argument, not only to a tool.
 
 The probes are **best-effort by design**: any failure yields "not supported"
 rather than an error. Python reads these through the lifecycle's active session;

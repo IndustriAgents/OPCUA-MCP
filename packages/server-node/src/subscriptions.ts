@@ -2,7 +2,7 @@
 //
 // An MCP tool call is request/response, so a subscription cannot answer the
 // caller directly: the notifications arrive whenever the OPC UA server decides
-// to publish, long after `subscribe_opcua_node` has returned. What this manager
+// to publish, long after `subscribe_opcua_nodes` has returned. What this manager
 // does instead is own the OPC UA subscription and *buffer* what it delivers, so
 // the agent can read the accumulated changes back at its own pace — through
 // `list_subscriptions` or the `opcua://subscriptions` resource.

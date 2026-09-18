@@ -2,7 +2,7 @@
 
 An MCP tool call is request/response, so a subscription cannot answer the caller
 directly: the notifications arrive whenever the OPC UA server decides to publish,
-long after ``subscribe_opcua_node`` has returned. What this module does instead is
+long after ``subscribe_opcua_nodes`` has returned. What this module does instead is
 own the OPC UA subscription and *buffer* what it delivers, so the agent can read
 the accumulated changes back at its own pace — through ``list_subscriptions`` or
 the ``opcua://subscriptions`` resource.
@@ -142,7 +142,7 @@ class _DataChangeHandler:
     """python-opcua's handler protocol, forwarding into one entry's buffer.
 
     One handler per subscription, because this server creates one subscription
-    per monitored node — which is what lets a single ``unsubscribe_opcua_node``
+    per monitored node — which is what lets a single ``unsubscribe_opcua_nodes``
     take the whole thing down rather than leaving an empty subscription behind.
     """
 

@@ -319,7 +319,7 @@ export class OpcuaTools {
   ) {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
-    // every `subscribe_opcua_node` handle the agent holds silently dead.
+    // every `subscribe_opcua_nodes` handle the agent holds silently dead.
     this.conn.onSessionReplaced = (session) => this.subs.reattach(session);
   }
 

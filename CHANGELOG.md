@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Three end-to-end tests raced the mock's simulation loop.** Every actuator in
+  the bundled mock is republished from the simulation's own state once a second,
+  so a test that wrote one and read it back was racing a timer. It passed
+  locally, passed in CI, and then failed the 0.4.0 release verify — reading back
+  `50.0` where it had written `31.5`, which is the actuator's default.
+
+  The mock had no node that could be written and read back deterministically,
+  which is a gap in a test fixture for an OPC UA server. It now has two
+  (`Scratch/ScratchDouble`, `Scratch/ScratchBoolean`) that nothing simulates, and
+  the three tests use them. `test_mock_server_e2e.py` pins both halves of the
+  contract — an actuator must revert, a scratch node must not — so re-pointing a
+  write test at an actuator fails there, with an explanation, rather than
+  intermittently somewhere else.
+
+  Test fixture only; no change to either shipped server.
+
 ## [0.4.0] — 2026-09-18
 
 Two correctness bugs, two security features, and a tool surface that went from

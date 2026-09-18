@@ -43,6 +43,13 @@ NODE = {
     "ResetSystemCommand": "ns=2;i=26",  # Boolean command variable
     "IndustrialControlSystem": "ns=2;i=1",
     "Methods": "ns=2;i=27",
+    # The only writable nodes the simulation leaves alone. Every other writable
+    # node is an actuator the mock republishes from its own state once a second,
+    # so writing one and reading it back races a timer — which is precisely how
+    # `test_batch_write_keeps_valid_items_when_one_node_is_rejected` passed here
+    # and then failed a release verify. Write-then-read-back belongs on these.
+    "ScratchDouble": "ns=2;i=41",
+    "ScratchBoolean": "ns=2;i=42",
 }
 
 # A node id the mock does not have, for the failure-path tests.
@@ -388,22 +395,28 @@ async def test_write_boolean_node(server):
 async def test_batch_write_uses_typed_values_in_one_operation(server):
     impl, params = server
     writes = [
-        {"node_id": NODE["ValvePosition"], "value": "42.25"},
-        {"node_id": NODE["PumpEnabled"], "value": "false"},
+        {"node_id": NODE["ScratchDouble"], "value": "42.25"},
+        {"node_id": NODE["ScratchBoolean"], "value": "false"},
     ]
     async with connect(params) as session:
         written = await session.call_tool("write_opcua_nodes", {"nodes": writes})
         read = await session.call_tool(
             "read_opcua_nodes",
-            {"node_ids": [NODE["ValvePosition"], NODE["PumpEnabled"]]},
+            {"node_ids": [NODE["ScratchDouble"], NODE["ScratchBoolean"]]},
         )
     assert not written.is_error, f"{impl}: {text_of(written)}"
     assert [record["status"] for record in records_of(written)] == ["Good", "Good"], (
         f"{impl}: {text_of(written)}"
     )
+    # Read back, because the point is the *conversion*: both were sent as
+    # strings and must arrive as a Double and a Boolean, not as "42.25" and
+    # "false". A Good status says the server took the write, not what it stored.
     values = {record["node_id"]: record["value"] for record in records_of(read)}
-    assert values[NODE["ValvePosition"]] == 42.25, f"{impl}: {values}"
-    assert values[NODE["PumpEnabled"]] is False, f"{impl}: {values}"
+    types = {record["node_id"]: record["data_type"] for record in records_of(read)}
+    assert values[NODE["ScratchDouble"]] == 42.25, f"{impl}: {values}"
+    assert types[NODE["ScratchDouble"]] == "Double", f"{impl}: {types}"
+    assert values[NODE["ScratchBoolean"]] is False, f"{impl}: {values}"
+    assert types[NODE["ScratchBoolean"]] == "Boolean", f"{impl}: {types}"
 
 
 async def test_batch_write_keeps_valid_items_when_one_node_is_rejected(server):
@@ -413,12 +426,12 @@ async def test_batch_write_keeps_valid_items_when_one_node_is_rejected(server):
             "write_opcua_nodes",
             {
                 "nodes": [
-                    {"node_id": NODE["ValvePosition"], "value": "31.5"},
+                    {"node_id": NODE["ScratchDouble"], "value": "31.5"},
                     {"node_id": UNKNOWN_NODE, "value": "1"},
                 ]
             },
         )
-        read = await session.call_tool("read_opcua_nodes", {"node_ids": [NODE["ValvePosition"]]})
+        read = await session.call_tool("read_opcua_nodes", {"node_ids": [NODE["ScratchDouble"]]})
     assert not result.is_error, f"{impl}: {text_of(result)}"
     good, rejected = records_of(result)
     assert good["status"] == "Good", f"{impl}: {good}"

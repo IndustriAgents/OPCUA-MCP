@@ -16,6 +16,8 @@ Run:
 
 from __future__ import annotations
 
+import time
+
 from opcua import Client, ua
 
 # ValvePosition: a writable Double in the mock's address space, and a node id it
@@ -30,6 +32,12 @@ def _write_double(node_id: str, value: float) -> ua.WriteValue:
     item.AttributeId = ua.AttributeIds.Value
     item.Value = ua.DataValue(ua.Variant(value, ua.VariantType.Double))
     return item
+
+
+#: A writable actuator the simulation republishes once a second, and a writable
+#: node it never touches. `tests/e2e/test_mcp_e2e.py` keeps the same map.
+ACTUATOR_NODE_ID = "ns=2;i=13"
+SCRATCH_DOUBLE_NODE_ID = "ns=2;i=41"
 
 
 def test_a_write_to_an_unknown_node_is_answered_per_item(opcua_server):
@@ -87,5 +95,45 @@ def test_the_session_survives_a_write_to_an_unknown_node(opcua_server):
 
         temperature = client.get_node("ns=2;i=3").get_value()
         assert isinstance(temperature, float), f"session unusable afterwards: {temperature!r}"
+    finally:
+        client.disconnect()
+
+
+def test_the_simulation_reverts_an_actuator_but_leaves_the_scratch_nodes_alone(opcua_server):
+    """The mock's own contract, pinned — because a test bet against it and lost.
+
+    Every actuator here is republished from the simulation's state once a second.
+    That is realistic and deliberate: the README tells people their writes to
+    those nodes are transient. It also means a test that writes an actuator and
+    reads it back is racing a one-second timer, which passes locally, passes in
+    CI, and then fails a release verify — which is exactly what
+    `test_batch_write_keeps_valid_items_when_one_node_is_rejected` did, reading
+    back 50.0 where it had written 31.5.
+
+    The `Scratch` nodes exist so write-then-read-back has somewhere safe to live.
+    This test states both halves, so that re-pointing a write test at an actuator
+    fails *here*, with an explanation, rather than intermittently somewhere else.
+    """
+    client = Client(opcua_server)
+    client.connect()
+    try:
+        actuator = client.get_node(ACTUATOR_NODE_ID)
+        scratch = client.get_node(SCRATCH_DOUBLE_NODE_ID)
+        for node in (actuator, scratch):
+            node.set_value(ua.Variant(31.5, ua.VariantType.Double))
+            assert node.get_value() == 31.5, "the write did not land at all"
+
+        # Longer than the simulation's one-second period, so this is not a race
+        # in the other direction.
+        time.sleep(1.8)
+
+        assert actuator.get_value() != 31.5, (
+            "an actuator kept a written value; if the mock stopped republishing "
+            "them, this test and the comments pointing at it are now misleading"
+        )
+        assert scratch.get_value() == 31.5, (
+            "the scratch node was overwritten — something now simulates it, and "
+            "every write-then-read-back test in the suite has become a race"
+        )
     finally:
         client.disconnect()

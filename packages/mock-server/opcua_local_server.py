@@ -116,6 +116,10 @@ class IndustrialControlSystem:
         methods_folder = industrial_system.add_folder(2, "Methods")
         self._create_control_methods(methods_folder)
 
+        # Create scratch folder: the only writable nodes the simulation leaves alone
+        scratch_folder = industrial_system.add_folder(2, "Scratch")
+        self._create_scratch_variables(scratch_folder)
+
         logging.info("Address space setup completed")
 
     def historize(self):
@@ -226,6 +230,32 @@ class IndustrialControlSystem:
         )
         motor_speed_node.set_writable(False)
         self.nodes["motor_speed"] = motor_speed_node
+
+    def _create_scratch_variables(self, parent_folder: Node):
+        """Writable variables the simulation never touches.
+
+        Every other writable node here is an *actuator*, and the simulation loop
+        republishes each one from `system_state` once a second — which is
+        realistic, and is why the README tells people their writes to those nodes
+        are transient. It also means a test that writes a value and reads it back
+        is racing a one-second timer: it passes locally, passes in CI, and then
+        fails in a release verify. That is exactly what happened to
+        `test_batch_write_keeps_valid_items_when_one_node_is_rejected`.
+
+        So these exist purely to be written and read back. Nothing simulates
+        them, nothing else reads them, and they are outside `system_state` so
+        `_update_opcua_nodes` cannot reach them. A Double and a Boolean, because
+        the write path converts by data type and those are the two that catch a
+        conversion bug (a Boolean written as 1/0, a string not parsed to a
+        number).
+        """
+        scratch_double = parent_folder.add_variable(2, "ScratchDouble", 0.0)
+        scratch_double.set_writable(True)
+        self.scratch_double = scratch_double
+
+        scratch_bool = parent_folder.add_variable(2, "ScratchBoolean", False)
+        scratch_bool.set_writable(True)
+        self.scratch_bool = scratch_bool
 
     def _create_actuator_variables(self, parent_folder: Node):
         """Create actuator variables that can be controlled."""

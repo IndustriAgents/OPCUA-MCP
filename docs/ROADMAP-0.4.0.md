@@ -98,10 +98,10 @@ unchanged: call_opcua_method · get_server_status · list_subscriptions ·
 
 | # | Phase | Closes | Risk | Release |
 |---|-------|--------|------|---------|
-| 1 | Python batch-read error result | — | low | 0.3.1 |
-| 2 | `browseNext` on Node + explicit truncation | — | low | 0.3.1 |
-| 3 | Server-certificate verification + X.509 user auth | #45, #7 | medium | 0.3.2 |
-| 4 | Contract-declared policy guards + node-ID canonicalisation | — | medium | 0.3.2 |
+| 1 | Python batch-read error result | #76 | low | ✅ done |
+| 2 | `browseNext` on Node + explicit truncation | #75 | low | ✅ done |
+| 3 | Server-certificate verification + X.509 user auth | #45, #7 | medium | ✅ done |
+| 4 | Contract-declared policy guards + node-ID canonicalisation | — | medium | ✅ done |
 | 5 | Tool consolidation + `resultShape` on all 13 | #8, #9 | **high** | **0.4.0** |
 | 6 | Typed method arguments from `InputArguments` | #10 | medium | 0.4.1 |
 | 7 | Browse-path addressing + name search | #11 | low | 0.4.1 |
@@ -209,12 +209,23 @@ on both runtimes, and accept allowlist entries as `nsu=<uri>;i=5`, resolved to a
 index per session against the NamespaceArray that `get_server_status` already
 reads. This is the one change with no cheaper substitute.
 
-**Two smaller decisions in the same PR.** `monitor` tools bypass the
-secure-channel gate entirely (`classVisible` returns `true` before it is
-reached) — but they create real subscriptions on the PLC, so whether that is
-intended needs settling rather than inheriting. And `describePolicy` prints the
-identical `insecure-control=enabled` string for a properly secured deployment and
-an active lab override, so the "conspicuous" override is not.
+**Two smaller decisions in the same PR, both now settled.** `monitor` tools stay
+outside the secure-channel gate: that gate exists to stop *control* over a
+channel anyone can read or forge, and a subscription costs the server resources
+but changes nothing in the plant — it is read arriving by another route, and
+gating it would deny the default `observe` profile its main tool on exactly the
+deployments that must watch something before they may touch it. The reasoning is
+now in the code rather than implied by a missing branch. And `describePolicy`,
+which printed the identical `insecure-control=enabled` for a properly secured
+deployment and an active lab override, now prints `control=secured`,
+`control=INSECURE-OVERRIDE` or `control=blocked`.
+
+**One bug the tests caught during implementation.** The first draft resolved an
+unresolvable `nsu=` form to a placeholder string. Two *different* unresolvable
+ids then shared that placeholder and compared equal — so an allowlist entry for
+an unknown URI authorised a request naming a different unknown URI. Unresolvable
+now means "deny", and unresolvable allowlist entries are dropped rather than
+kept.
 
 **Tests.** A shared `tests/fixtures/node-id-forms.json` on the
 `value-encoding.json` model, so neither runtime can skip a case; policy e2e

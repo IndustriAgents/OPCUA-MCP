@@ -32,6 +32,7 @@ import { setDefaultAutoSelectFamily } from "net";
 
 import { SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
 import { CONTRACT } from "./contract.js";
+import { toolPolicy } from "./policy.js";
 import {
   clientSecurityOptions,
   describeSecurity,
@@ -189,6 +190,16 @@ export class OpcuaConnection {
       this.state = "connected";
       this.lastError = null;
       console.error("OPC UA session created");
+
+      // Read the NamespaceArray and hand it to the policy, every connect.
+      //
+      // A namespace *index* is assigned per session, so an allowlist pinned by
+      // namespace URI (`nsu=…;i=5`) can only be resolved once the server has
+      // said what its namespaces are — and a server that restarted may have
+      // loaded them in a different order, which is the whole reason that form
+      // exists. One read of one mandatory node; failing it is not fatal, but it
+      // does leave URI-pinned entries unresolved, and the policy denies those.
+      await this.bindPolicyNamespaces(session);
     } catch (error) {
       if (client) {
         try {
@@ -292,6 +303,20 @@ export class OpcuaConnection {
     if (this.connected) return;
     if (this.state === "reconnecting" && (await this.awaitReconnection())) return;
     await this.reconnect();
+  }
+
+  /** Tell the tool policy which namespace URI is at which index on this server. */
+  private async bindPolicyNamespaces(session: ClientSession): Promise<void> {
+    try {
+      const value = await session.readVariableValue(CONTRACT.diagnostics.namespaceArrayNodeId);
+      const uris: unknown = value?.value?.value ?? null;
+      toolPolicy().bindNamespaces(Array.isArray(uris) ? uris.map(String) : []);
+    } catch (error) {
+      console.error(
+        `WARNING: could not read the server's NamespaceArray, so policy entries written as ` +
+          `nsu=<uri>;… cannot be resolved and will be denied: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /** Throw the client away and build a new one, whatever state it was in.

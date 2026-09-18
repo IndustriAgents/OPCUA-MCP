@@ -29,6 +29,11 @@ ALWAYS = lambda path: True  # noqa: E731
 
 CERTS = {"OPCUA_CLIENT_CERT": "/pki/client.pem", "OPCUA_CLIENT_KEY": "/pki/client.key"}
 
+#: A *fully* secured configuration: encrypted channel **and** a pinned server
+#: certificate. `CERTS` alone is no longer that — an unpinned server certificate
+#: is encryption to whoever answered, and now says so (#45).
+PINNED = {**CERTS, "OPCUA_SERVER_CERT": "/pki/server.pem"}
+
 
 def parse(env: dict[str, str]) -> SecurityConfig:
     return parse_security_config(env, exists=ALWAYS)
@@ -52,7 +57,7 @@ def test_a_policy_alone_implies_the_strongest_mode():
     """Silently signing when the operator asked for a policy would be a downgrade."""
     config = parse({"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS})
     assert (config.policy, config.mode) == ("Basic256Sha256", "SignAndEncrypt")
-    assert security_warnings(config) == []
+    assert not any("unencrypted" in warning for warning in security_warnings(config))
 
 
 def test_explicit_sign_mode_is_kept():
@@ -230,7 +235,13 @@ def test_warns_that_credentials_cross_an_unencrypted_channel():
     assert not any("clear text" in warning for warning in security_warnings(parse({})))
 
 
-def test_a_secured_channel_warns_about_nothing():
+def test_an_encrypted_channel_still_warns_while_the_server_is_unverified():
+    """Encryption without pinning is encryption to whoever answered (#45).
+
+    This used to assert silence, which was the bug: `policy=Basic256Sha256`
+    reads like the connection is safe, and the one thing it does not establish
+    is *who* is on the other end.
+    """
     config = parse(
         {
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
@@ -239,7 +250,97 @@ def test_a_secured_channel_warns_about_nothing():
             **CERTS,
         }
     )
+    [warning] = security_warnings(config)
+    assert "certificate is not being verified" in warning
+    assert "impersonate the endpoint" in warning
+
+
+def test_a_secured_and_pinned_channel_warns_about_nothing():
+    config = parse(
+        {
+            "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_USERNAME": "operator",
+            "OPCUA_PASSWORD": "hunter2",
+            **PINNED,
+        }
+    )
     assert security_warnings(config) == []
+
+
+def test_refuses_to_pin_a_server_certificate_on_an_unsecured_channel():
+    """Ignoring it would be worse (#45).
+
+    OPCUA_SERVER_CERT in a config file reads like protection, and with
+    policy=None the server presents no certificate at all — so it would verify
+    precisely nothing while looking like it verified everything.
+    """
+    with pytest.raises(ValueError, match="OPCUA_SERVER_CERT requires OPCUA_SECURITY_POLICY"):
+        parse({"OPCUA_SERVER_CERT": "/pki/server.pem"})
+
+
+def test_requires_the_user_certificate_and_its_key_together():
+    base = {"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS}
+    with pytest.raises(ValueError, match="must be set together"):
+        parse({**base, "OPCUA_USER_CERT": "/pki/user.pem"})
+    with pytest.raises(ValueError, match="must be set together"):
+        parse({**base, "OPCUA_USER_KEY": "/pki/user.key"})
+
+
+def test_refuses_certificate_and_username_identities_at_once():
+    """A session carries one user identity token (#7).
+
+    Accepting both would pick one silently, and the one not picked is the one
+    the operator believes is in force.
+    """
+    with pytest.raises(ValueError, match="cannot be combined with OPCUA_USERNAME"):
+        parse(
+            {
+                "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+                **CERTS,
+                "OPCUA_USER_CERT": "/pki/user.pem",
+                "OPCUA_USER_KEY": "/pki/user.key",
+                "OPCUA_USERNAME": "operator",
+                "OPCUA_PASSWORD": "hunter2",
+            }
+        )
+
+
+def test_refuses_x509_user_authentication_on_an_unsecured_channel():
+    with pytest.raises(ValueError, match="OPCUA_USER_CERT requires OPCUA_SECURITY_POLICY"):
+        parse({"OPCUA_USER_CERT": "/pki/user.pem", "OPCUA_USER_KEY": "/pki/user.key"})
+
+
+@pytest.mark.parametrize("missing", ["OPCUA_SERVER_CERT", "OPCUA_USER_CERT"])
+def test_checks_that_the_new_certificate_paths_exist(missing):
+    """Same treatment the client certificate already got: a typo is a startup error."""
+    extra = (
+        {"OPCUA_USER_CERT": "/nope.pem", "OPCUA_USER_KEY": "/nope.key"}
+        if missing == "OPCUA_USER_CERT"
+        else {"OPCUA_SERVER_CERT": "/nope.pem"}
+    )
+    with pytest.raises(ValueError, match=f"{missing} does not exist"):
+        parse_security_config(
+            {"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS, **extra},
+            exists=lambda path: not path.startswith("/nope"),
+        )
+
+
+def test_the_startup_summary_names_the_identity_kind_and_whether_pinning_is_on():
+    described = describe_security(
+        parse(
+            {
+                "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+                **PINNED,
+                "OPCUA_USER_CERT": "/pki/user.pem",
+                "OPCUA_USER_KEY": "/pki/user.key",
+            }
+        )
+    )
+    assert "user=certificate server-cert=pinned" in described
+    # ...and says nothing about pinning when it is off, so the word keeps
+    # meaning something when it does appear.
+    unpinned = describe_security(parse({"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS}))
+    assert "server-cert" not in unpinned
 
 
 def test_warnings_never_leak_the_password():

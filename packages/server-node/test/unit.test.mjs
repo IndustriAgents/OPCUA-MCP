@@ -27,6 +27,7 @@ import {
 
 import { browseAllReferences } from "../build/browse.js";
 import { toDate } from "../build/dates.js";
+import { canonicalNodeId, namespaceUriForm, resolveNodeId } from "../build/node-ids.js";
 import { OpcuaConnection } from "../build/connection.js";
 import {
   EVENT_DEFAULTS,
@@ -270,6 +271,11 @@ describe("history records", () => {
 // Pretend every configured path exists; path checking is covered separately.
 const ALWAYS = () => true;
 const CERTS = { OPCUA_CLIENT_CERT: "/pki/client.pem", OPCUA_CLIENT_KEY: "/pki/client.key" };
+
+// A *fully* secured configuration: encrypted channel and a pinned server
+// certificate. CERTS alone is no longer that — an unpinned server certificate is
+// encryption to whoever answered, and now says so (#45).
+const PINNED = { ...CERTS, OPCUA_SERVER_CERT: "/pki/server.pem" };
 const parseSecurity = (env) => parseSecurityConfig(env, ALWAYS);
 
 /** Asserts that parsing `env` fails with exactly `message`. */
@@ -302,7 +308,100 @@ describe("parseSecurityConfig", () => {
     const config = parseSecurity({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS });
     assert.equal(config.policy, "Basic256Sha256");
     assert.equal(config.mode, "SignAndEncrypt");
-    assert.deepEqual(securityWarnings(config), []);
+    assert.equal(
+      securityWarnings(config).some((warning) => warning.includes("unencrypted")),
+      false
+    );
+  });
+
+  test("refuses to pin a server certificate on an unsecured channel", () => {
+    // Ignoring it would be worse: OPCUA_SERVER_CERT in a config file reads like
+    // protection, and with policy=None the server presents no certificate at
+    // all, so it would verify precisely nothing.
+    assert.throws(
+      () => parseSecurity({ OPCUA_SERVER_CERT: "/pki/server.pem" }),
+      /OPCUA_SERVER_CERT requires OPCUA_SECURITY_POLICY/
+    );
+  });
+
+  test("requires the user certificate and its key together", () => {
+    const base = { OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS };
+    assert.throws(
+      () => parseSecurity({ ...base, OPCUA_USER_CERT: "/pki/user.pem" }),
+      /must be set together/
+    );
+    assert.throws(
+      () => parseSecurity({ ...base, OPCUA_USER_KEY: "/pki/user.key" }),
+      /must be set together/
+    );
+  });
+
+  test("refuses certificate and username identities at once", () => {
+    // A session carries one user identity token. Accepting both would pick one
+    // silently, and the one not picked is the one the operator believes is in
+    // force.
+    assert.throws(
+      () =>
+        parseSecurity({
+          OPCUA_SECURITY_POLICY: "Basic256Sha256",
+          ...CERTS,
+          OPCUA_USER_CERT: "/pki/user.pem",
+          OPCUA_USER_KEY: "/pki/user.key",
+          OPCUA_USERNAME: "operator",
+          OPCUA_PASSWORD: "hunter2",
+        }),
+      /cannot be combined with OPCUA_USERNAME/
+    );
+  });
+
+  test("refuses X.509 user authentication on an unsecured channel", () => {
+    assert.throws(
+      () => parseSecurity({ OPCUA_USER_CERT: "/pki/user.pem", OPCUA_USER_KEY: "/pki/user.key" }),
+      /OPCUA_USER_CERT requires OPCUA_SECURITY_POLICY/
+    );
+  });
+
+  test("checks that the new certificate paths exist", () => {
+    // Same treatment the client certificate already got: a typo in a path is
+    // found at startup, not as an opaque library error against real equipment.
+    for (const missing of ["OPCUA_SERVER_CERT", "OPCUA_USER_CERT"]) {
+      assert.throws(
+        () =>
+          parseSecurityConfig(
+            {
+              OPCUA_SECURITY_POLICY: "Basic256Sha256",
+              ...CERTS,
+              ...(missing === "OPCUA_USER_CERT"
+                ? { OPCUA_USER_CERT: "/nope.pem", OPCUA_USER_KEY: "/nope.key" }
+                : { OPCUA_SERVER_CERT: "/nope.pem" }),
+            },
+            (path) => !path.startsWith("/nope")
+          ),
+        new RegExp(`${missing} does not exist`)
+      );
+    }
+  });
+
+  test("the startup summary names the identity kind and whether pinning is on", () => {
+    assert.match(
+      describeSecurity(
+        parseSecurity({
+          OPCUA_SECURITY_POLICY: "Basic256Sha256",
+          ...PINNED,
+          OPCUA_USER_CERT: "/pki/user.pem",
+          OPCUA_USER_KEY: "/pki/user.key",
+        })
+      ),
+      /user=certificate server-cert=pinned/
+    );
+    // ...and says nothing about pinning when it is off, so the word keeps meaning
+    // something when it does appear.
+    assert.equal(
+      describeSecurity(
+        parseSecurity({ OPCUA_SECURITY_POLICY: "Basic256Sha256", ...CERTS })
+      ).includes("server-cert"),
+      false
+    );
   });
 
   test("keeps an explicit Sign mode", () => {
@@ -510,12 +609,28 @@ describe("security wiring", () => {
     );
   });
 
-  test("a secured channel warns about nothing", () => {
+  test("an encrypted channel still warns while the server is unverified", () => {
+    // This used to assert silence, which was the bug: `policy=Basic256Sha256`
+    // reads like the connection is safe, and the one thing it does not
+    // establish is *who* is on the other end (#45).
     const config = parseSecurity({
       OPCUA_SECURITY_POLICY: "Basic256Sha256",
       OPCUA_USERNAME: "operator",
       OPCUA_PASSWORD: "hunter2",
       ...CERTS,
+    });
+    const [warning, ...rest] = securityWarnings(config);
+    assert.deepEqual(rest, []);
+    assert.match(warning, /certificate is not being verified/);
+    assert.match(warning, /impersonate the endpoint/);
+  });
+
+  test("a secured and pinned channel warns about nothing", () => {
+    const config = parseSecurity({
+      OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_USERNAME: "operator",
+      OPCUA_PASSWORD: "hunter2",
+      ...PINNED,
     });
     assert.deepEqual(securityWarnings(config), []);
   });
@@ -950,5 +1065,50 @@ describe("browse continuation points", () => {
       () => browseAllReferences(session, "ns=2;i=1"),
       /Browse failed with status: BadContinuationPointInvalid/
     );
+  });
+});
+
+describe("node id forms", () => {
+  // The cases live in tests/fixtures/node-id-forms.json, which tests/unit/
+  // test_node_ids.py reads too. Both runtimes parse the *same* policy file, so a
+  // form one canonicalises and the other does not is an allowlist that
+  // authorises different writes depending on which server the operator started.
+  const FIXTURE = JSON.parse(
+    readFileSync(join(ROOT, "..", "..", "tests", "fixtures", "node-id-forms.json"), "utf8")
+  );
+
+  test("canonical spelling matches the shared fixture, case for case", () => {
+    assert.ok(FIXTURE.canonical.length >= 10, "fixture shrank; the Python suite reads it too");
+    for (const { name, given, expected } of FIXTURE.canonical) {
+      assert.equal(canonicalNodeId(given), expected, name);
+    }
+  });
+
+  test("resolution against a NamespaceArray matches the shared fixture", () => {
+    assert.ok(FIXTURE.resolved.length >= 7, "fixture shrank; the Python suite reads it too");
+    for (const { name, given, expected } of FIXTURE.resolved) {
+      assert.equal(resolveNodeId(given, FIXTURE.namespaces), expected, name);
+    }
+  });
+
+  test("the namespace-URI form splits on the first separator only", () => {
+    // An `s=` identifier may contain ';', and truncating one would repoint it.
+    assert.deepEqual(namespaceUriForm("nsu=urn:plant:line-a;s=Tag;with;semicolons"), {
+      uri: "urn:plant:line-a",
+      identifier: "s=Tag;with;semicolons",
+    });
+  });
+
+  test("a plain node id is not the namespace-URI form", () => {
+    assert.equal(namespaceUriForm("ns=2;i=5"), null);
+    assert.equal(namespaceUriForm("i=2253"), null);
+  });
+
+  test("resolution without a NamespaceArray cannot resolve a URI", () => {
+    // Unknown is not empty. Resolving optimistically would authorise a write to
+    // whatever node happened to sit at the guessed index.
+    assert.equal(resolveNodeId("nsu=urn:plant:line-a;i=5", []), null);
+    // ...while an index form needs no server to be understood.
+    assert.equal(resolveNodeId("ns=2;i=5", []), "ns=2;i=5");
   });
 });

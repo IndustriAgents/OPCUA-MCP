@@ -13,6 +13,7 @@ import {
   type UserIdentityInfo,
   UserTokenType,
 } from "node-opcua-client";
+import { keyOperationsFromPrivateKey, readCertificate, readPrivateKey } from "node-opcua-crypto";
 
 import { existsSync } from "fs";
 
@@ -53,6 +54,27 @@ export interface SecurityConfig {
   username?: string;
   /** Password for `username`. May be empty, so `undefined` — not "" — means unset. */
   password?: string;
+  /**
+   * The OPC UA *server* certificate this client expects, pinned.
+   *
+   * Unset, both client libraries take whatever certificate the endpoint
+   * presents and encrypt to it — which protects against passive eavesdropping
+   * but not against whoever managed to answer. Set, a server presenting
+   * anything else cannot complete the handshake.
+   */
+  serverCert?: string;
+  /**
+   * Certificate identifying the *user*, for X.509 authentication.
+   *
+   * Deliberately not `clientCert`. That one secures the channel and is the
+   * application's identity; this one is the user's, is a different key pair,
+   * and is what the server checks against its user list. Conflating the two is
+   * the obvious way to get this wrong, so they are named apart and validated
+   * apart.
+   */
+  userCert?: string;
+  /** Private key for `userCert`. Signs the server's challenge; never sent. */
+  userKey?: string;
 }
 
 /** Reports whether a path exists; injectable so the parser stays testable. */
@@ -135,7 +157,56 @@ export function parseSecurityConfig(
 
   const applicationUri = read(env, "OPCUA_APPLICATION_URI");
 
+  // --- server certificate verification ---------------------------------------
+  const serverCert = read(env, "OPCUA_SERVER_CERT");
+  if (serverCert !== undefined && policy === "None") {
+    // Refused rather than ignored. With no channel security the server's
+    // certificate is never exchanged, so pinning it would verify nothing while
+    // reading, in a config file, exactly like protection. A security control
+    // that silently does nothing is worse than its absence.
+    throw new Error(
+      "OPCUA_SERVER_CERT requires OPCUA_SECURITY_POLICY to be set to a policy other than " +
+        "None; with no channel security the server presents no certificate to verify"
+    );
+  }
+
+  // --- X.509 user authentication ----------------------------------------------
+  const userCert = read(env, "OPCUA_USER_CERT");
+  const userKey = read(env, "OPCUA_USER_KEY");
+  if ((userCert === undefined) !== (userKey === undefined)) {
+    throw new Error(
+      "OPCUA_USER_CERT and OPCUA_USER_KEY must be set together (the user's certificate and " +
+        "the private key that signs the server's challenge)"
+    );
+  }
+  if (userCert !== undefined && policy === "None") {
+    throw new Error(
+      "OPCUA_USER_CERT requires OPCUA_SECURITY_POLICY to be set to a policy other than None; " +
+        "the certificate challenge is signed over the server certificate, which an unsecured " +
+        "channel does not carry"
+    );
+  }
+
+  for (const [name, path] of [
+    ["OPCUA_SERVER_CERT", serverCert],
+    ["OPCUA_USER_CERT", userCert],
+    ["OPCUA_USER_KEY", userKey],
+  ] as const) {
+    if (path && !exists(path)) {
+      throw new Error(`${name} does not exist: ${path}`);
+    }
+  }
+
   const username = read(env, "OPCUA_USERNAME");
+  if (userCert !== undefined && username !== undefined) {
+    // One session carries one user identity token. Accepting both would mean
+    // choosing one silently, and the one not chosen is the one the operator
+    // thinks is in force.
+    throw new Error(
+      "OPCUA_USER_CERT cannot be combined with OPCUA_USERNAME; a session has one user " +
+        "identity, so use either certificate or username authentication"
+    );
+  }
   // Not `read`: an empty password is a real (if unwise) credential, so only an
   // absent variable counts as unset — except when there is no username to pair
   // it with, where a blank value can only mean "not configured". MCP client
@@ -158,6 +229,9 @@ export function parseSecurityConfig(
     applicationUri,
     username,
     password,
+    serverCert,
+    userCert,
+    userKey,
   };
 }
 
@@ -173,8 +247,18 @@ export function securityConfig(): SecurityConfig {
 
 /** One-line, secret-free summary for the startup log. */
 export function describeSecurity(config: SecurityConfig): string {
-  const user = config.username === undefined ? "anonymous" : `"${config.username}"`;
-  return `policy=${config.policy} mode=${config.mode} user=${user}`;
+  const user =
+    config.userCert !== undefined
+      ? "certificate"
+      : config.username === undefined
+        ? "anonymous"
+        : `"${config.username}"`;
+  // `server-cert=` only when pinning is on: a line that said `pinned` vs
+  // `unpinned` on every startup would train the reader to skip it, and this is
+  // the one word that distinguishes "encrypted" from "encrypted to whoever
+  // answered".
+  const pinned = config.serverCert === undefined ? "" : " server-cert=pinned";
+  return `policy=${config.policy} mode=${config.mode} user=${user}${pinned}`;
 }
 
 /**
@@ -188,7 +272,17 @@ export function describeSecurity(config: SecurityConfig): string {
  */
 export function securityWarnings(config: SecurityConfig): string[] {
   if (config.policy !== "None") {
-    return [];
+    // Encryption without a pinned server certificate is encryption to whoever
+    // answered — DNS, ARP, a compromised switch or a mistyped endpoint all
+    // reach it. Said once, on a secured connection, because this is the gap a
+    // reader of `policy=Basic256Sha256` is least likely to suspect.
+    return config.serverCert === undefined
+      ? [
+          "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT to " +
+            "pin it. Encryption without it protects against passive eavesdropping, not " +
+            "against an attacker who can impersonate the endpoint.",
+        ]
+      : [];
   }
 
   const warnings = [
@@ -204,7 +298,12 @@ export function securityWarnings(config: SecurityConfig): string[] {
   return warnings;
 }
 
-/** Client options that select the configured policy, mode, certificate and URI. */
+/** Client options that select the configured policy, mode, certificate and URI.
+ *
+ * `serverCertificate`, when pinned, is also what spares python-opcua's client
+ * the extra endpoint round-trip it otherwise makes to fetch one — the two
+ * runtimes end up doing the same thing for the same reason.
+ */
 export function clientSecurityOptions(config: SecurityConfig) {
   return {
     securityMode: MessageSecurityMode[config.mode],
@@ -212,11 +311,28 @@ export function clientSecurityOptions(config: SecurityConfig) {
     ...(config.clientCert ? { certificateFile: config.clientCert } : {}),
     ...(config.clientKey ? { privateKeyFile: config.clientKey } : {}),
     ...(config.applicationUri ? { applicationUri: config.applicationUri } : {}),
+    ...(config.serverCert ? { serverCertificate: readCertificate(config.serverCert) } : {}),
   };
 }
 
-/** The identity to activate the session with. */
+/** The identity to activate the session with.
+ *
+ * Three mutually exclusive forms, and `parseSecurityConfig` has already refused
+ * any combination that would express two at once — so the order of these checks
+ * cannot silently pick a winner.
+ */
 export function userIdentity(config: SecurityConfig): UserIdentityInfo {
+  if (config.userCert !== undefined && config.userKey !== undefined) {
+    return {
+      type: UserTokenType.Certificate,
+      certificateData: readCertificate(config.userCert),
+      // `keyOperations`, not the deprecated raw-PEM `privateKey`: the key signs
+      // the server's challenge through a provider and never becomes a string in
+      // this process. python-opcua holds the key in memory either way, so this
+      // is one place the runtimes genuinely differ — in Node's favour.
+      keyOperations: keyOperationsFromPrivateKey(readPrivateKey(config.userKey)),
+    };
+  }
   if (config.username === undefined) {
     return { type: UserTokenType.Anonymous };
   }

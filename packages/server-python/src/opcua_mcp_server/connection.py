@@ -36,6 +36,8 @@ from typing import TypeVar
 from opcua import Client
 
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
+from .contract import NAMESPACE_ARRAY_NODE_ID
+from .policy import tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
 
 T = TypeVar("T")
@@ -184,7 +186,30 @@ class OpcuaConnection:
         client.session_timeout = timeout
         client.secure_channel_timeout = timeout
         client.connect()
+
+        # Read the NamespaceArray and hand it to the policy, every connect.
+        #
+        # A namespace *index* is assigned per session, so an allowlist pinned by
+        # namespace URI (``nsu=…;i=5``) can only be resolved once the server has
+        # said what its namespaces are — and a server that restarted may have
+        # loaded them in a different order, which is the whole reason that form
+        # exists. One read of one mandatory node; failing it is not fatal, but it
+        # does leave URI-pinned entries unresolved, and the policy denies those.
+        self._bind_policy_namespaces(client)
         return client
+
+    @staticmethod
+    def _bind_policy_namespaces(client: Client) -> None:
+        """Tell the tool policy which namespace URI is at which index here."""
+        try:
+            uris = client.get_node(NAMESPACE_ARRAY_NODE_ID).get_value()
+            tool_policy().bind_namespaces([str(uri) for uri in (uris or [])])
+        except Exception as error:
+            print(
+                "WARNING: could not read the server's NamespaceArray, so policy entries "
+                f"written as nsu=<uri>;… cannot be resolved and will be denied: {error}",
+                file=sys.stderr,
+            )
 
     def disconnect(self) -> None:
         """Drop the connection, quietly. Shared by shutdown and rebuild."""

@@ -90,14 +90,17 @@ async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_
         for _ in range(10):
             result = await session.call_tool(
                 "write_opcua_nodes",
-                {"nodes": [{"node_id": NODE["ValvePosition"], "value": 42.5}]},
+                {"nodes": [{"node_id": NODE["ScratchDouble"], "value": 42.5}]},
             )
             if not result.is_error:
                 break
             await asyncio.sleep(1.0)
 
         assert not result.is_error, f"{impl}: write never recovered: {text_of(result)}"
-        readback = await read_until_ok(session, NODE["ValvePosition"])
+        # ScratchDouble rather than an actuator: the mock republishes every
+        # actuator from its own state once a second, so reading one back after a
+        # write races that timer. Nothing touches this node but the test.
+        readback = await read_until_ok(session, NODE["ScratchDouble"])
         assert records_of(readback)[0]["value"] == 42.5, text_of(readback)
 
 

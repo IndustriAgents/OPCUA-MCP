@@ -25,6 +25,7 @@ import {
   coerceNodeId,
 } from "node-opcua-client";
 
+import { browseAllReferences } from "../build/browse.js";
 import { toDate } from "../build/dates.js";
 import { OpcuaConnection } from "../build/connection.js";
 import {
@@ -827,5 +828,127 @@ describe("build assets", () => {
     const canonical = readFileSync(join(ROOT, "..", "..", "contract", "tools.json"), "utf8");
     const staged = readFileSync(join(ROOT, "build", "contract.json"), "utf8");
     assert.equal(staged, canonical, "build/contract.json drifted from contract/tools.json");
+  });
+});
+
+describe("browse continuation points", () => {
+  // The bundled mock cannot produce a continuation point — python-opcua's server
+  // has no server-side implementation of them and ignores
+  // RequestedMaxReferencesPerNode — so a stubbed session is the only way to
+  // exercise the drain. That is also why this bug survived: nothing the repo
+  // could run against would ever have caught it.
+  const reference = (name) => ({
+    nodeId: coerceNodeId(`ns=2;i=${name}`),
+    browseName: new QualifiedName({ namespaceIndex: 2, name: `Tag${name}` }),
+  });
+
+  /** A session answering a scripted list of BrowseResult-shaped objects. */
+  function stubSession(results) {
+    const calls = { browse: 0, browseNext: [] };
+    return {
+      calls,
+      async browse() {
+        calls.browse += 1;
+        return results[0];
+      },
+      async browseNext(continuationPoint, release) {
+        calls.browseNext.push({ continuationPoint, release });
+        return results[calls.browseNext.length];
+      },
+    };
+  }
+
+  test("follows continuation points until the server stops sending them", async () => {
+    const session = stubSession([
+      {
+        statusCode: StatusCodes.Good,
+        references: [reference(1), reference(2)],
+        continuationPoint: Buffer.from([0xaa]),
+      },
+      {
+        statusCode: StatusCodes.Good,
+        references: [reference(3)],
+        continuationPoint: Buffer.from([0xbb]),
+      },
+      { statusCode: StatusCodes.Good, references: [reference(4)], continuationPoint: null },
+    ]);
+
+    const references = await browseAllReferences(session, "ns=2;i=1");
+
+    assert.equal(references.length, 4, "every page must be collected, not just the first");
+    assert.deepEqual(
+      references.map((ref) => ref.browseName.name),
+      ["Tag1", "Tag2", "Tag3", "Tag4"]
+    );
+    assert.equal(session.calls.browse, 1);
+    assert.equal(session.calls.browseNext.length, 2);
+  });
+
+  test("never releases a continuation point it still wants the rest of", async () => {
+    // `releaseContinuationPoints: true` tells the server to throw the remainder
+    // away. Passing it here would truncate the answer while looking like paging.
+    const session = stubSession([
+      {
+        statusCode: StatusCodes.Good,
+        references: [reference(1)],
+        continuationPoint: Buffer.from([0xaa]),
+      },
+      { statusCode: StatusCodes.Good, references: [reference(2)], continuationPoint: null },
+    ]);
+
+    await browseAllReferences(session, "ns=2;i=1");
+
+    assert.equal(session.calls.browseNext[0].release, false);
+    assert.deepEqual(session.calls.browseNext[0].continuationPoint, Buffer.from([0xaa]));
+  });
+
+  test("an empty continuation point ends the walk", async () => {
+    // Some servers send a zero-length buffer rather than null for "no more".
+    const session = stubSession([
+      {
+        statusCode: StatusCodes.Good,
+        references: [reference(1)],
+        continuationPoint: Buffer.alloc(0),
+      },
+    ]);
+
+    const references = await browseAllReferences(session, "ns=2;i=1");
+
+    assert.equal(references.length, 1);
+    assert.equal(session.calls.browseNext.length, 0, "must not ask for a page that is not there");
+  });
+
+  test("a bad status on the first result is an error, not an empty list", async () => {
+    const session = stubSession([
+      { statusCode: StatusCodes.BadNodeIdUnknown, references: [], continuationPoint: null },
+    ]);
+
+    await assert.rejects(
+      () => browseAllReferences(session, "ns=2;i=999999"),
+      /Browse failed with status: BadNodeIdUnknown/
+    );
+  });
+
+  test("a bad status on a continued result is an error, not a short list", async () => {
+    // The case that matters most: an expired continuation point answers with a
+    // bad status and no references. Unchecked, the loop would end and return
+    // page one as a complete, successful answer.
+    const session = stubSession([
+      {
+        statusCode: StatusCodes.Good,
+        references: [reference(1)],
+        continuationPoint: Buffer.from([0xaa]),
+      },
+      {
+        statusCode: StatusCodes.BadContinuationPointInvalid,
+        references: [],
+        continuationPoint: null,
+      },
+    ]);
+
+    await assert.rejects(
+      () => browseAllReferences(session, "ns=2;i=1"),
+      /Browse failed with status: BadContinuationPointInvalid/
+    );
   });
 });

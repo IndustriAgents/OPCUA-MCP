@@ -579,6 +579,32 @@ async def test_a_rejected_node_in_a_batch_read_stays_a_partial_result(server):
     assert UNKNOWN_NODE in text and "Error" in text, f"{impl}: no per-node error status: {text!r}"
 
 
+async def test_a_batch_read_that_fails_wholesale_is_an_error_on_both(server):
+    """A batch read that cannot run at all is an MCP error, not a text result.
+
+    The other half of the test above, and the one that was missing: a *per-node*
+    rejection stays inside a successful result, but a failure of the whole
+    operation must set `isError` so the model cannot reason over the excuse as
+    if it were data.
+
+    The Python server returned `"Error reading multiple nodes: …"` as a normal
+    result until this test existed. It was the last survivor of the sweep in #63,
+    which fixed four sibling handlers and missed this one precisely because
+    nothing asserted it.
+
+    A node id that is not a node id at all fails before any request is sent, so
+    both client libraries reject it locally and neither needs the mock's help.
+    """
+    impl, params = server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "read_multiple_opcua_nodes", {"node_ids": ["not-a-node-id"]}
+        )
+    text = text_of(result)
+    assert result.is_error is True, f"{impl}: expected an error result, got {text!r}"
+    assert "Failed to read multiple nodes" in text, f"{impl}: got {text!r}"
+
+
 # --- data-change subscriptions (issue #3) --------------------------------------
 
 

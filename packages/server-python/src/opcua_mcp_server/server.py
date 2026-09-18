@@ -644,8 +644,10 @@ def read_multiple_opcua_nodes(node_ids: list[str], ctx: Context) -> str:
         node_ids (List[str]): A list of OPC UA node IDs to read (e.g., ['ns=2;i=2', 'ns=2;i=3']).
 
     Returns:
-        str: A string representation of a dictionary mapping node IDs to their
-             values, or an error message.
+        str: A JSON object mapping node IDs to their values. A node the server
+             rejects is one ``Error: …`` status among them; a failure of the
+             whole operation is raised as a `ToolError`, which reaches the
+             client as an MCP error result rather than as text.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
@@ -663,7 +665,7 @@ def read_multiple_opcua_nodes(node_ids: list[str], ctx: Context) -> str:
         return json.dumps(results, indent=2, default=str)
 
     except Exception as e:
-        return f"Error reading multiple nodes: {e!s}"
+        raise ToolError(f"Failed to read multiple nodes: {e!s}") from e
 
 
 # Tool: Write multiple OPC UA nodes

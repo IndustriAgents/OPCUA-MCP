@@ -282,6 +282,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises rather than returning as text.
 
 ### Fixed
+- **The Node server now follows browse continuation points** (#75). A server may
+  cap how many references one `BrowseResponse` carries whatever the client asks
+  for, and answer the rest behind a continuation point. The Node server took the
+  first result and stopped, so `browse_opcua_node_children` and
+  `get_all_variables` returned a *truncated child list as a success* on any node
+  wide enough to be paged — a wrong answer delivered confidently, and exactly the
+  shape of address space the target hardware has. The Python server has drained
+  the points since #2; both now share one helper per runtime, so the traversal
+  and the single browse cannot drift apart again. Every result is status-checked,
+  the continued ones included: an expired continuation point is now an error
+  rather than a short list.
+
+  There is no end-to-end test of this and there cannot be one — `python-opcua`'s
+  *server* implements continuation points nowhere and ignores
+  `RequestedMaxReferencesPerNode`, so no mock in this repo can emit one. That is
+  also why the gap survived this long. It is pinned instead by mirrored unit
+  tests on both runtimes (`test/unit.test.mjs`, `tests/unit/test_browse.py`) that
+  stub the session.
+- **A Python batch read that fails wholesale is now an error result** (#76).
+  `read_multiple_opcua_nodes` returned `"Error reading multiple nodes: …"` as a
+  *successful* result, so a model saw the failure as data and would reason over
+  the excuse as if it were readings. The last survivor of the sweep in #63, which
+  fixed four sibling handlers and missed this one because nothing asserted it;
+  the Node server has thrown here all along. A per-node rejection is unchanged —
+  it stays a status inside a successful result, because promoting it would
+  discard every other node's value.
 - **The mock OPC UA server now answers a write to a node it does not have**
   (#64). python-opcua bit-tests the AccessLevel of every node a non-admin
   session writes to — every client here, the endpoints being anonymous — and

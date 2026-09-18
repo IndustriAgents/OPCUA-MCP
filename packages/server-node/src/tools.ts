@@ -9,7 +9,6 @@ import {
   DataValue,
   StatusCodes,
   CallMethodResult,
-  BrowseResult,
   ReferenceDescription,
   HistoryData,
   AggregateFunction,
@@ -17,6 +16,7 @@ import {
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { browseAllReferences } from "./browse.js";
 import { OpcuaConnection, notConnectedMessage } from "./connection.js";
 import { CONTRACT } from "./contract.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
@@ -639,17 +639,12 @@ export class OpcuaTools {
     }
 
     try {
-      const browseResult = await this.session.browse(nodeId);
+      const references = await browseAllReferences(this.session, nodeId);
 
-      if (browseResult.statusCode !== StatusCodes.Good) {
-        throw new Error(`Browse failed with status: ${browseResult.statusCode.toString()}`);
-      }
-
-      const childrenInfo =
-        browseResult.references?.map((ref: ReferenceDescription) => ({
-          node_id: ref.nodeId.toString(),
-          browse_name: `${ref.browseName.namespaceIndex}:${ref.browseName.name}`,
-        })) || [];
+      const childrenInfo = references.map((ref: ReferenceDescription) => ({
+        node_id: ref.nodeId.toString(),
+        browse_name: `${ref.browseName.namespaceIndex}:${ref.browseName.name}`,
+      }));
 
       return {
         content: [
@@ -972,16 +967,12 @@ export class OpcuaTools {
       while (queue.length > 0 && !truncated) {
         const { nodeId, depth } = queue.shift()!;
         try {
-          const browseResult = await this.session!.browse(nodeId);
+          // Same drain as `browse_opcua_node_children`, and deliberately the
+          // same helper: a traversal that browses short is the bug this tool
+          // would hide best, because nobody counts a plant's variables by hand.
+          const references = await browseAllReferences(this.session!, nodeId);
 
-          if (browseResult.statusCode !== StatusCodes.Good || !browseResult.references) {
-            if (nodeId === rootNodeId) {
-              throw new Error(`Browse failed with status: ${browseResult.statusCode.toString()}`);
-            }
-            continue;
-          }
-
-          for (const ref of browseResult.references) {
+          for (const ref of references) {
             try {
               const childNodeId = ref.nodeId.toString();
               if (visited.has(childNodeId)) {

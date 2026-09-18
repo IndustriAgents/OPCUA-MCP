@@ -24,13 +24,20 @@
 
 ## Overview
 
-Two interchangeable implementations — **Python** and **TypeScript/Node** — expose
-the same OPC UA operations as MCP tools: read and write nodes, browse the address
+Thirteen MCP tools over plain OPC UA: read and write nodes, browse the address
 space, call methods, read history and server-side aggregates, and subscribe to
-events and alarms. Both speak plain OPC UA, so both connect to any server that
-does; which tools are actually offered depends on the server's capabilities, the
-permissions of the OPC UA account, and the configured
-[tool profile](#configuration). Pick whichever runtime fits your stack.
+data changes, events and alarms. It connects to any server that speaks OPC UA —
+PLC, SCADA gateway or historian.
+
+What is actually offered on a given connection depends on three things: what the
+server advertises it can do, what the OPC UA account is permitted to do, and
+which [tool profile](#deciding-what-the-agent-may-do) you configured. The default
+profile is read-only.
+
+There are **two interchangeable implementations**, Python and TypeScript/Node,
+held to one shared contract by the test suite — same tools, same arguments, same
+responses. Install whichever your machine already has; nothing below depends on
+the choice.
 
 Which servers and operations the test suite exercises, and which are only
 reported by users, is set out in
@@ -48,9 +55,7 @@ flowchart LR
 [latest release](https://github.com/midhunxavier/OPCUA-MCP/releases/latest) and
 drag it into **Settings → Extensions**. It carries the server and every
 dependency, Claude Desktop supplies the runtime, and the OPC UA endpoint is a
-field in the settings form — no Node, no Python, no JSON to edit. There are
-[single-file executables](docs/install.md#2-single-file-executable--no-runtime-at-all)
-too, for machines with no runtime and no network.
+field in the settings form — no Node, no Python, no JSON to edit.
 
 **Already have a runtime?** Install the package and let it write the config:
 
@@ -59,10 +64,8 @@ npm install -g opcua-mcp-server        # or: uv tool install opcua-mcp-server
 opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
 ```
 
-**Prefer to configure it yourself?** Add one of these to your MCP client config
-and point `OPCUA_SERVER_URL` at your OPC UA endpoint.
-
-**Node** (via `npx`):
+**Prefer to configure it yourself?** Add this to your MCP client config and point
+`OPCUA_SERVER_URL` at your OPC UA endpoint:
 
 ```json
 {
@@ -76,27 +79,27 @@ and point `OPCUA_SERVER_URL` at your OPC UA endpoint.
 }
 ```
 
-**Python** (via [`uvx`](https://docs.astral.sh/uv/)):
+<details>
+<summary>Python instead of Node, or Claude Code in one line</summary>
+
+The two runtimes are interchangeable — same tools, same arguments, same
+responses — so this is a question of what is already on the machine, not of
+capability. For the Python package, swap the command:
 
 ```json
-{
-  "mcpServers": {
-    "opcua": {
-      "command": "uvx",
-      "args": ["opcua-mcp-server"],
-      "env": { "OPCUA_SERVER_URL": "opc.tcp://localhost:4840" }
-    }
-  }
-}
+{ "command": "uvx", "args": ["opcua-mcp-server"] }
 ```
 
-For Claude Code, one command does it:
+Claude Code needs no file at all:
 
 ```bash
 claude mcp add opcua -e OPCUA_SERVER_URL=opc.tcp://localhost:4840 -- npx -y opcua-mcp-server
 ```
 
-All four routes, and what to do when Claude Desktop cannot start the server:
+</details>
+
+Single-file executables for machines with no runtime and no network, and what to
+do when Claude Desktop cannot start the server:
 **[docs/install.md](docs/install.md)**.
 
 > **No OPC UA server to hand?** This repo ships a mock industrial plant — see
@@ -131,13 +134,10 @@ server actually offers. What a server cannot do is not on the menu, rather than
 failing at call time.
 
 **One tool per operation, not one per arity.** Reading one node and reading fifty
-is the same request with a longer list, so it is the same tool — and the same
-code path, which is the point: the single/batch pairs this replaced were each
-written twice per runtime, and that is where the two most recent correctness bugs
-([#75](https://github.com/midhunxavier/OPCUA-MCP/issues/75),
-[#76](https://github.com/midhunxavier/OPCUA-MCP/issues/76)) lived.
+is the same request with a longer list, so it is one tool and one code path.
+Batching is the caller's choice, not a different API.
 
-Both servers also expose one **resource**Both servers also expose one **resource**, `opcua://subscriptions`: the same
+Both servers also expose one **resource**, `opcua://subscriptions`: the same
 records `list_subscriptions` returns, re-readable without spending a tool call.
 
 Full per-tool reference with inputs, outputs and a node-ID map:
@@ -157,69 +157,32 @@ Once configured, you can ask in plain language:
 - *"What alarms are active right now?"*
 - *"Acknowledge the high-temperature alarm — I'm looking into it"*
 
-Real responses from the bundled mock plant, via the published package:
+Every answer comes back as a record, not prose. A reading carries its data type,
+its OPC UA status and both timestamps — because quality and age are what decide
+whether a value can be acted on, and a bare number carries neither:
 
 ```
 read_opcua_nodes  node_ids=["ns=2;i=3", "ns=2;i=12"]
-→ { "node_id": "ns=2;i=3", "value": 23.101165241243347, "data_type": "Double",
-    "status": "Good", "source_timestamp": "2026-09-10T13:15:12.214Z",
+→ { "node_id": "ns=2;i=3", "value": 23.10, "data_type": "Double", "status": "Good",
+    "source_timestamp": "2026-09-10T13:15:12.214Z",
     "server_timestamp": "2026-09-10T13:15:12.214Z" }
   { "node_id": "ns=2;i=12", "value": true, "data_type": "Boolean", … }
+```
 
-write_opcua_nodes  nodes=[{"node_id": "ns=2;i=13", "value": 80}]
-→ { "node_id": "ns=2;i=13", "status": "Good", "error": null }
+A walk of the address space says whether it finished, so a partial answer can
+never pass for a complete one:
 
+```
 browse_opcua_nodes  depth=4  node_class="Variable"  include_values=true
-→ { "nodes": [
-      { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", "node_class": "Variable",
-        "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 26.34,
-        "description": "Temperature" }, … ],
+→ { "nodes": [ { "node_id": "ns=2;i=3", "browse_name": "2:Temperature",
+                 "node_class": "Variable", "data_type": "Double", "value": 26.34, … } ],
     "truncated": false, "inspected": 22 }
-
-browse_opcua_nodes  browse_path="/Objects/IndustrialControlSystem/Sensors/Temperature"  depth=0
-→ { "nodes": [ { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", … } ],
-    "truncated": false, "inspected": 1 }
-
-read_opcua_history  node_id="ns=2;i=3"  num_values=2
-→ { "value": 24.231991377989036, "timestamp": "2026-09-10T13:15:12.214Z", "status": "Good" }
-  { "value": 26.089859958260515, "timestamp": "2026-09-10T13:15:11.208Z", "status": "Good" }
-
-read_opcua_history  node_id="ns=2;i=3"  start_time="2026-09-10T12:00:00Z"
-                    aggregate_function="Average"  processing_interval=60000
-→ { "value": 25.4, "timestamp": "2026-09-10T12:00:00.000Z", "status": "Good" }
-  { "value": 25.9, "timestamp": "2026-09-10T12:01:00.000Z", "status": "Good" } …
-
-subscribe_opcua_nodes  node_ids=["ns=2;i=3"]  publishing_interval=500
-→ { "subscription_id": "sub-1", "node_id": "ns=2;i=3", "publishing_interval": 500,
-    "sampling_interval": 500, "buffer_size": 20, "change_count": 0, "changes": [] }
-
-list_subscriptions            # a few seconds later
-→ { "subscription_id": "sub-1", …, "change_count": 4, "changes": [
-      { "value": 25.33, "timestamp": "2026-09-10T13:15:11.478Z", "status": "Good" },
-      { "value": 26.05, "timestamp": "2026-09-10T13:15:12.481Z", "status": "Good" }, … ] }
-
-list_active_alarms
-→ { "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=",
-    "event_type": "ns=0;i=9341",
-    "source_node": "ns=1;i=1001",
-    "source_name": "Temperature",
-    "time": "2026-09-10T13:15:12.214Z",
-    "message": "Condition is 100.000 and state is High",
-    "severity": 700,
-    "condition_id": "ns=1;i=1002",
-    "condition_name": "HighTemperatureAlarm",
-    "active": true, "acked": false, "retain": true }
-
-acknowledge_alarm  event_id="ZjW7HJrVSFzDV2sMsX7sEQAAAAE="  comment="on it"
-→ { "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=", "condition_id": "ns=1;i=1002",
-    "status": "Good" }
 ```
 
 **Every tool declares a result shape**, and both runtimes are held to it. The
-shapes live in `contract/tools.json` (`resultShapes`); the suite checks each
-runtime's *actual* output against them, and then diffs the two runtimes against
-each other. Until 0.4.0 ten of the seventeen tools declared no shape at all, and
-every divergence the two servers had lived in exactly that gap.
+shapes live in `contract/tools.json`; the suite checks each runtime's *actual*
+output against them and then diffs the two runtimes against each other — so a
+client that has learned one server's answers can read the other's.
 
 A per-node rejection is a status inside a successful result, never a failed call:
 one unreadable node in a batch of fifty must not discard the other forty-nine.
@@ -228,15 +191,7 @@ Only a failure of the whole operation is an error.
 Events are collected, not pushed: MCP is request/response, so `subscribe_events`
 starts a real OPC UA subscription in the background and `read_events` hands over
 what has arrived since you last asked. `list_active_alarms` does not need one —
-it asks the server for its retained conditions directly (ConditionRefresh), and
-says so plainly when the server has no Alarms & Conditions support to ask.
-
-Bad input is rejected identically by both runtimes:
-
-```
-read_opcua_history  node_id="ns=2;i=3"  start_time="2026-02-30T00:00:00Z"
-→ Error: Invalid date/time: "2026-02-30T00:00:00Z". Use ISO 8601, e.g. 2026-04-23T17:40:00Z
-```
+it asks the server for its retained conditions directly (ConditionRefresh).
 
 ## Configuration
 
@@ -267,6 +222,46 @@ Both runtimes read the same environment variables:
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
 | `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
 
+### Staying connected
+
+Neither server needs restarting when the OPC UA server does. A dropped
+connection is retried with exponential backoff on the four
+`OPCUA_RECONNECT_*` / `OPCUA_SESSION_TIMEOUT_MS` settings above, the read and
+write paths transparently re-establish a dead session, and the data-change
+subscriptions an agent is holding are re-created on the new session — the IDs
+keep working and the values already buffered are still there to be read.
+
+Reconnection is driven by tool calls rather than by a timer: if the endpoint is
+unreachable when the MCP client starts, the server still starts, and the first
+call that needs a session connects. `get_server_status` is the one tool that
+answers either way — it reports `connected: false` and the reason instead of
+failing, and every other tool's error points at it.
+
+The defaults (three retries, 1–8s apart) keep a single tool call from hanging for
+long. Raise `OPCUA_RECONNECT_MAX_RETRY` for a site where outages are measured in
+minutes; the last waiting a call will do is the sum of the delays.
+
+### Deciding what the agent may do
+
+Three profiles, and the default is the restrictive one:
+
+| `OPCUA_PROFILE` | What it offers |
+|---|---|
+| `observe` *(default)* | Read, browse, history and monitoring. No writes, no methods |
+| `operator` | The above, plus **only** the write targets and methods you allowlist |
+| `full` | Every tool |
+
+`operator` is the one worth understanding. A write to a node outside
+`OPCUA_ALLOWED_WRITE_NODES` is refused before anything reaches OPC UA, and one
+forbidden target rejects an entire batch rather than letting part of it through.
+Both `operator` and `full` also require a secured OPC UA channel unless
+`OPCUA_ALLOW_INSECURE_CONTROL=true` says otherwise in as many words.
+
+The policy is enforced again on **every call**, not only when tools are listed —
+an MCP client may hold a stale catalogue, and a hidden tool is a usability
+feature rather than a security boundary. Every control call is also recorded on
+stderr with its targets and its outcome.
+
 ### Writing an allowlist that stays correct
 
 `OPCUA_ALLOWED_WRITE_NODES` and `OPCUA_ALLOWED_METHODS` accept two forms:
@@ -287,96 +282,44 @@ every connect and resolve URI-pinned entries against it, so the allowlist follow
 the node rather than the index. An entry naming a URI the server does not
 publish matches nothing and is reported on stderr at connect time.
 
-Spelling no longer matters: `i=2253` and `ns=0;i=2253` are the same node, entries
+Spelling does not matter: `i=2253` and `ns=0;i=2253` are the same node, entries
 are trimmed, and both runtimes canonicalise identically (pinned by
 `tests/fixtures/node-id-forms.json`).
 
-### Staying connected
+Larger deployments can put all of it in a version-1 JSON file
+(`OPCUA_POLICY_FILE`) instead of the environment; the shape, and a worked
+example, are in **[SECURITY.md](SECURITY.md#tool-profiles-and-control-policy)**.
 
-Neither server needs restarting when the OPC UA server does. A dropped
-connection is retried with exponential backoff on the four
-`OPCUA_RECONNECT_*` / `OPCUA_SESSION_TIMEOUT_MS` settings above, the read and
-write paths transparently re-establish a dead session, and the data-change
-subscriptions an agent is holding are re-created on the new session — the IDs
-keep working and the values already buffered are still there to be read.
+### Connecting securely
 
-Reconnection is driven by tool calls rather than by a timer: if the endpoint is
-unreachable when the MCP client starts, the server still starts, and the first
-call that needs a session connects. `get_server_status` is the one tool that
-answers either way — it reports `connected: false` and the reason instead of
-failing, and every other tool's error points at it.
+The defaults are unencrypted and unauthenticated, which suits the mock plant and
+nothing else. A real deployment wants a policy, a client certificate, an identity
+and a pinned server certificate:
 
-The defaults (three retries, 1–8s apart) keep a single tool call from hanging for
-long. Raise `OPCUA_RECONNECT_MAX_RETRY` for a site where outages are measured in
-minutes; the last waiting a call will do is the sum of the delays.
-
-The default `observe` profile advertises only read, browse, history and monitoring
-tools. `operator` exposes only explicitly allowlisted write targets and methods;
-an entire batch write is rejected before touching OPC UA if any target is outside
-the allowlist. `full` exposes all tools. Both `operator` and `full` still require
-a secured OPC UA channel unless `OPCUA_ALLOW_INSECURE_CONTROL=true` is set
-explicitly. Policy is enforced again on every call, not only when tools are
-listed, and configuration changes take effect after restarting the MCP process.
-
-Example production policy (`OPCUA_POLICY_FILE=/etc/opcua-mcp-policy.json`):
-
-```json
-{
-  "version": 1,
-  "profile": "operator",
-  "allowed_tools": ["read_opcua_nodes", "write_opcua_nodes", "call_opcua_method"],
-  "control": {
-    "writable_nodes": ["ns=2;s=Line1.SpeedSetpoint"],
-    "callable_methods": [
-      { "object_id": "ns=2;s=Line1", "method_id": "ns=2;s=Line1.Reset" }
-    ],
-    "acknowledge_alarms": false
-  }
-}
-```
-
-Encrypted, authenticated connection to a real server:
-
-```json
-{
-  "mcpServers": {
-    "opcua": {
-      "command": "npx",
-      "args": ["-y", "opcua-mcp-server"],
-      "env": {
-        "OPCUA_SERVER_URL": "opc.tcp://plc.example.internal:4840",
-        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
-        "OPCUA_CLIENT_CERT": "/etc/opcua/client.pem",
-        "OPCUA_CLIENT_KEY": "/etc/opcua/client_key.pem",
-        "OPCUA_USERNAME": "mcp-operator",
-        "OPCUA_PASSWORD": "…",
-        "OPCUA_PROFILE": "operator",
-        "OPCUA_POLICY_FILE": "/etc/opcua-mcp-policy.json"
-      }
-    }
-  }
-}
+```bash
+OPCUA_SECURITY_POLICY=Basic256Sha256     # implies SignAndEncrypt
+OPCUA_CLIENT_CERT=/etc/opcua/client.pem  # this server's identity
+OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
+OPCUA_SERVER_CERT=/etc/opcua/server.pem  # pin the server you meant to reach
+OPCUA_USERNAME=mcp-operator              # or OPCUA_USER_CERT for X.509
+OPCUA_PASSWORD=…
 ```
 
 Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
 Anything the OPC UA spec cannot honour — a mode without a policy, a policy
-without a certificate, a username without a password — is refused at startup
-with a message naming the variable, rather than failing later against live
-equipment. The server certificate is taken from the endpoint description during
-the handshake, so no server certificate file is needed.
+without a certificate, a username without a password, a path that does not exist
+— is refused at startup with a message naming the variable, rather than failing
+later against live equipment.
 
-Generating a client certificate the server will accept, and getting it into its
-trust list, is **[docs/certificates.md](docs/certificates.md)**.
+`OPCUA_USERNAME` / `OPCUA_PASSWORD` authenticate the session but encrypt nothing:
+without a security policy the password crosses the network in clear text unless
+the server's user-token policy protects it, and both servers say so on stderr.
+Pair credentials with a policy.
 
-`OPCUA_USERNAME` / `OPCUA_PASSWORD` authenticate the session but encrypt
-nothing: without a security policy the password crosses the network in clear
-text unless the server's user-token policy protects it, and both servers say so
-on stderr. Pair credentials with a policy.
-
-On the **Python runtime**, certificate and key files are parsed as PEM only when
-they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
-called `client.key` fails to load — name it `client_key.pem`. The Node runtime
-sniffs the contents and accepts either name.
+Why each of these matters, what is still not protected, and the full X.509 story:
+**[SECURITY.md](SECURITY.md)**. Generating a certificate a server will accept —
+including a file-naming trap on the Python runtime — is
+**[docs/certificates.md](docs/certificates.md)**.
 
 ## Installation
 
@@ -384,59 +327,34 @@ Most users need only the [Quick Start](#quick-start) above — `npx` and `uvx`
 fetch the package on demand. To install it permanently:
 
 ```bash
-# Node
-npm install -g opcua-mcp-server
-opcua-mcp-server            # also available as: opcua-mcp
-
-# Python
-uv tool install opcua-mcp-server   # or: pip install opcua-mcp-server
-opcua-mcp-server
-```
-
-Either command, once installed, can register itself with Claude Desktop:
-
-```bash
+npm install -g opcua-mcp-server    # or: uv tool install opcua-mcp-server
 opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
 ```
 
-That writes absolute paths rather than a bare `npx`, which matters more than it
-sounds: Claude Desktop is launched from the GUI and does not inherit a login
-shell's `PATH`. `--dry-run` shows the result without writing it. Downloadable
-artifacts for machines with no runtime at all — the `.mcpb` bundle and the
-single-file executables — are covered in **[docs/install.md](docs/install.md)**.
+`--install` writes absolute paths rather than a bare `npx`, which matters more
+than it sounds: Claude Desktop is launched from the GUI and does not inherit a
+login shell's `PATH`. `--dry-run` shows the result without writing it.
 
-| | Python | Node |
-|---|---|---|
-| Requires | Python 3.10+ | Node 22.13+ |
-| Package | [PyPI `opcua-mcp-server`](https://pypi.org/project/opcua-mcp-server/) | [npm `opcua-mcp-server`](https://www.npmjs.com/package/opcua-mcp-server) |
-| Framework | `mcp` (`MCPServer`) | `@modelcontextprotocol/sdk` |
-| OPC UA library | `opcua` (FreeOpcUa) | `node-opcua-client` |
-| Source | `packages/server-python/` | `packages/server-node/` |
-
-Exact dependency versions live in the manifests
-([`pyproject.toml`](packages/server-python/pyproject.toml),
-[`package.json`](packages/server-node/package.json)) rather than being restated
-here, where they would drift.
+Every route — the `.mcpb` bundle, single-file executables for machines with no
+runtime at all, editing the config by hand, and which runtime uses which
+libraries: **[docs/install.md](docs/install.md)**.
 
 ## Try it against the mock
 
 The repo ships a simulated industrial plant — sensors, actuators, methods,
 history and events — so you can try the tools without touching real equipment.
-Two smaller mocks cover what it deliberately does not model: server-side
-aggregates (`packages/mock-server-aggregate`, port 4841) and Alarms & Conditions
-with retained, acknowledgeable alarms (`packages/mock-server-alarms`, port 4842).
-The [compatibility matrix](docs/compatibility.md) says which mock covers what.
 
 ```bash
 git clone https://github.com/midhunxavier/OPCUA-MCP.git && cd OPCUA-MCP
 uv sync --all-packages
-uv run --no-sync opcua-mock-server     # listens on opc.tcp://localhost:4840/freeopcua/server/
+uv run --no-sync opcua-mock-server     # opc.tcp://localhost:4840/freeopcua/server/
 ```
 
-Then point your MCP client at
-`opc.tcp://localhost:4840/freeopcua/server/`. See
-[`.mcp.json.example`](.mcp.json.example) for a ready-made config, and
-[docs/testing.md](docs/testing.md) for an MCP Inspector walkthrough and example
+Point your MCP client at that URL — [`.mcp.json.example`](.mcp.json.example) is a
+ready-made config. Two smaller mocks cover what the main one deliberately does
+not model, server-side aggregates and acknowledgeable alarms; the
+[compatibility matrix](docs/compatibility.md) says which covers what, and
+[docs/testing.md](docs/testing.md) has an MCP Inspector walkthrough with example
 prompts.
 
 ## Development & testing
@@ -461,7 +379,7 @@ Full guide, including the MCP Inspector and AI-agent walkthroughs:
 > connection itself still defaults to `SecurityPolicy.None` and
 > `MessageSecurityMode.None` — unauthenticated and unencrypted. That combination
 > is for the bundled mock and local development. For production, configure both
-> channel security and an `operator` allowlist as shown above. Control tools are
+> channel security and an `operator` allowlist — see the two sections above. Control tools are
 > blocked on an insecure channel unless the explicit lab override is set.
 
 See [SECURITY.md](SECURITY.md) for the security posture, what the servers do and

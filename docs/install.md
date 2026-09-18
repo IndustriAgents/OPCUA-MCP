@@ -144,6 +144,33 @@ If Claude Desktop reports the server failing to start, replace `"npx"` with the
 absolute path to your `node` and give it the absolute path to the server — that
 is exactly what `--install` does, and why.
 
+## Which runtime am I installing?
+
+Either. They are interchangeable — the same tools with the same arguments and
+the same responses, held to one shared contract by the test suite — so this is a
+question of what the machine already has, not of capability.
+
+| | Python | Node |
+|---|---|---|
+| Requires | Python 3.10+ | Node 22.13+ |
+| Package | [PyPI `opcua-mcp-server`](https://pypi.org/project/opcua-mcp-server/) | [npm `opcua-mcp-server`](https://www.npmjs.com/package/opcua-mcp-server) |
+| Fetch on demand | `uvx opcua-mcp-server` | `npx -y opcua-mcp-server` |
+| Install permanently | `uv tool install opcua-mcp-server` | `npm install -g opcua-mcp-server` |
+| MCP framework | `mcp` (`MCPServer`) | `@modelcontextprotocol/sdk` |
+| OPC UA library | `opcua` (FreeOpcUa) | `node-opcua-client` |
+| Source | `packages/server-python/` | `packages/server-node/` |
+
+Exact dependency versions live in the manifests
+([`pyproject.toml`](../packages/server-python/pyproject.toml),
+[`package.json`](../packages/server-node/package.json)) rather than being
+restated here, where they would drift.
+
+Two differences that are not cosmetic. The Node runtime implements two extra
+security policies (`Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`) that
+`python-opcua` does not, and it sniffs certificate files by content where the
+Python runtime goes by extension — so a PEM key must be named `*.pem` there. Both
+are covered in [certificates.md](certificates.md).
+
 ## Building the artifacts yourself
 
 None of the downloads are required; each is one command from a checkout.

@@ -55,7 +55,7 @@ async def read_until_ok(session, node_id: str, attempts: int = 10, delay: float 
     """
     result = None
     for _ in range(attempts):
-        result = await session.call_tool("read_opcua_node", {"node_id": node_id})
+        result = await session.call_tool("read_opcua_nodes", {"node_ids": [node_id]})
         if not result.is_error:
             return result
         await asyncio.sleep(delay)
@@ -65,21 +65,21 @@ async def read_until_ok(session, node_id: str, attempts: int = 10, delay: float 
 async def test_reads_recover_after_the_server_restarts(impl, restartable_opcua_server):
     server = restartable_opcua_server
     async with connect(params_for(impl, server.url)) as session:
-        before = await session.call_tool("read_opcua_node", {"node_id": NODE["Temperature"]})
+        before = await session.call_tool("read_opcua_nodes", {"node_ids": [NODE["Temperature"]]})
         assert not before.is_error, text_of(before)
 
         server.restart()
 
         after = await read_until_ok(session, NODE["Temperature"])
         assert not after.is_error, f"{impl}: never recovered: {text_of(after)}"
-        assert "value:" in text_of(after)
+        assert records_of(after)[0]["status"] == "Good", text_of(after)
 
 
 async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_server):
     """Not just reads: the write path re-establishes a dead session too.
 
     Worth its own test because a write is the case where retrying is a decision
-    rather than an obvious win — `write_opcua_node` is idempotent, so the servers
+    rather than an obvious win — `write_opcua_nodes` is idempotent, so the servers
     may repeat it on a fresh session, and this is the assertion that they do.
     """
     server = restartable_opcua_server
@@ -89,7 +89,8 @@ async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_
         result = None
         for _ in range(10):
             result = await session.call_tool(
-                "write_opcua_node", {"node_id": NODE["ValvePosition"], "value": 42.5}
+                "write_opcua_nodes",
+                {"nodes": [{"node_id": NODE["ValvePosition"], "value": 42.5}]},
             )
             if not result.is_error:
                 break
@@ -97,7 +98,7 @@ async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_
 
         assert not result.is_error, f"{impl}: write never recovered: {text_of(result)}"
         readback = await read_until_ok(session, NODE["ValvePosition"])
-        assert "42.5" in text_of(readback), text_of(readback)
+        assert records_of(readback)[0]["value"] == 42.5, text_of(readback)
 
 
 async def test_status_reports_the_reconnection(impl, restartable_opcua_server):
@@ -142,8 +143,8 @@ async def test_subscriptions_are_re_established_after_a_restart(impl, restartabl
     server = restartable_opcua_server
     async with connect(params_for(impl, server.url)) as session:
         created = await session.call_tool(
-            "subscribe_opcua_node",
-            {"node_id": NODE["Temperature"], "publishing_interval": 200, "buffer_size": 50},
+            "subscribe_opcua_nodes",
+            {"node_ids": [NODE["Temperature"]], "publishing_interval": 200, "buffer_size": 50},
         )
         assert not created.is_error, text_of(created)
         subscription_id = records_of(created)[0]["subscription_id"]

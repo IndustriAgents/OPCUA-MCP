@@ -47,16 +47,14 @@ PY_PKG_DIR = ROOT / "packages" / "server-python"
 # Tools every build must advertise regardless of server capabilities. Capability
 # -gated tools (history/aggregate) are covered by the e2e suite instead.
 CORE_TOOLS = {
-    "read_opcua_node",
-    "write_opcua_node",
-    "browse_opcua_node_children",
-    "read_multiple_opcua_nodes",
-    "write_multiple_opcua_nodes",
+    "read_opcua_nodes",
+    "browse_opcua_nodes",
+    "write_opcua_nodes",
     "call_opcua_method",
-    "get_all_variables",
-    "subscribe_opcua_node",
+    "get_server_status",
+    "subscribe_opcua_nodes",
     "list_subscriptions",
-    "unsubscribe_opcua_node",
+    "unsubscribe_opcua_nodes",
     "subscribe_events",
     "read_events",
     "list_active_alarms",

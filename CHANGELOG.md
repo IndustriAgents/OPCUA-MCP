@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — BREAKING
+
+- **The tool surface is consolidated from seventeen tools to thirteen.** Four
+  single/batch pairs, and the raw/aggregate history pair, become one tool each.
+  Reading one node and reading fifty is the same request with a longer list, so
+  it is now the same tool — and, more to the point, the same *code path*.
+
+  | Removed | Use instead |
+  |---|---|
+  | `read_opcua_node` | `read_opcua_nodes` with `node_ids: [id]` |
+  | `read_multiple_opcua_nodes` | `read_opcua_nodes` (`node_ids` unchanged) |
+  | `write_opcua_node` | `write_opcua_nodes` with `nodes: [{node_id, value}]` |
+  | `write_multiple_opcua_nodes` | `write_opcua_nodes` (`nodes_to_write` → `nodes`) |
+  | `browse_opcua_node_children` | `browse_opcua_nodes` (same `node_id`; `depth` defaults to 1) |
+  | `get_all_variables` | `browse_opcua_nodes` with `depth`, `node_class: "Variable"`, `include_values: true` |
+  | `read_history_opcua_node` | `read_opcua_history` (same arguments) |
+  | `read_aggregate_opcua_node` | `read_opcua_history` with `aggregate_function` |
+  | `subscribe_opcua_node` | `subscribe_opcua_nodes` with `node_ids: [id]` |
+  | `unsubscribe_opcua_node` | `unsubscribe_opcua_nodes` with `subscription_ids: [id]` |
+
+  No deprecated aliases. Keeping the old names alive would mean keeping the
+  second code path alive, and that path is precisely the problem: each merged
+  pair was the same operation written twice per runtime — four copies — which is
+  where the two most recent correctness bugs actually lived. #75 was a missing
+  browse continuation-point drain that reached two tools independently because
+  each browsed separately; #76 was a batch read reporting failure as success on
+  one runtime while its single-node sibling did not.
+
+  `browse_opcua_nodes` also absorbs what #11 asked two further tools for, so the
+  count goes down rather than up: `browse_path` resolves `/Objects/Plant/Temp`
+  to a node id (with `depth: 0`, that is all it does), and `name_filter`
+  searches browse names. Both reuse the one traversal.
+
+- **Every tool now declares a result shape, and returns records rather than
+  prose.** Ten of the seventeen tools declared `resultShape: null`, and for those
+  the output format, error wording and defaults were two hand-written copies that
+  no test compared — the parity suite could prove the two servers *advertise* the
+  same thing, never that they *do* the same thing. Four confirmed divergences
+  lived in exactly that gap.
+
+  Six shapes are new (`nodeValues`, `nodeRefs`, `writeResults`, `methodResult`,
+  `eventSubscription`, `acknowledgement`), bringing every tool under one. Callers
+  parsing text will need to change:
+
+  | Tool | Was | Now |
+  |---|---|---|
+  | read | `Node ns=2;i=3 value: 26.9` | `{node_id, value, data_type, status, source_timestamp, server_timestamp}` |
+  | write | `Successfully wrote 80 to node …` | `{node_id, status, error}` |
+  | browse | `Children of ns=2;i=1: [{…}]` (Python `repr`, Node JSON) | `{nodes: [...], truncated, inspected}` |
+  | discovery | `Found 22 variables: - Name: …` | the same `nodeRefs` object |
+  | method call | `Method call successful. … Result: True` | `{object_node_id, method_node_id, status, outputs}` |
+  | unsubscribe | `Unsubscribed sub-1 from node … after 4 changes` | the subscription record as it was when cancelled |
+  | subscribe_events | `Subscribed to events from node …` | `{node_id, severity_min, buffer_size, replaced}` |
+  | acknowledge_alarm | `Acknowledged alarm ns=1;i=1002 (event …)` | `{event_id, condition_id, status}` |
+
+  This closes [#8](https://github.com/midhunxavier/OPCUA-MCP/issues/8): a reading
+  now carries its data type, its OPC UA status and both timestamps, because the
+  quality and the age are what decide whether a value can be acted on and a bare
+  number carries neither.
+
+  **Read values now go through the shared codec.** `read_opcua_node` and
+  `get_all_variables` stringified natively on both runtimes and so diverged by
+  construction — a Boolean rendered `true` against `True`, an Int64 as
+  node-opcua's `[high, low]` pair against a plain int. The fixture that exists to
+  prevent exactly that (`tests/fixtures/value-encoding.json`) only ever fed the
+  history family; the read path was outside its reach. It no longer is.
+
+- **`write_opcua_nodes` accepts an explicit `data_type`**, closing
+  [#9](https://github.com/midhunxavier/OPCUA-MCP/issues/9). Without it each node
+  is read first to learn its type, which costs a round trip and cannot work for a
+  **write-only** node — reading it is exactly what such a node refuses. A batch
+  that declares every type sends no reads at all.
+
+- **`call_opcua_method` converts arguments to the types the method declares**,
+  closing [#10](https://github.com/midhunxavier/OPCUA-MCP/issues/10). It parsed
+  every argument float → int → string and then forced `Double` or `String`, so a
+  method expecting a `Boolean` or an `Int32` was called with the wrong type and
+  either failed or — worse — acted on a coerced value. The declared types come
+  from the method's own `InputArguments`; the old heuristic survives only as the
+  fallback for a method that publishes none.
+
+- **Capability gating moved from the tool to the argument** where the two history
+  tools merged. `read_opcua_history` is offered when the server reports
+  historical access *or* aggregates — either makes some form of it usable — and
+  `aggregate_function` appears only with the latter, its description naming that
+  server's own function list. A server offering only aggregates is no longer left
+  with no history tool at all.
+
+- **Traversal bounds live in the contract** (`traversal`), not as literals in
+  both runtimes. A browse that stops at `max_nodes` reports `truncated: true`
+  rather than trailing prose, so a prefix of the address space can no longer pass
+  for all of it.
+
 ### Added
 - **Server-certificate verification** (#45). `OPCUA_SERVER_CERT` pins the
   certificate the OPC UA server must present. Without it — the behaviour up to

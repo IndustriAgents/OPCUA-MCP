@@ -5,7 +5,7 @@ import { CONTRACT } from "../build/contract.js";
 import { ToolPolicy, describePolicy, parsePolicyConfig } from "../build/policy.js";
 
 const byName = new Map(CONTRACT.tools.map((tool) => [tool.name, tool]));
-const control = new Set(["write_opcua_node", "write_multiple_opcua_nodes", "call_opcua_method"]);
+const control = new Set(["write_opcua_nodes", "call_opcua_method"]);
 
 function policy(env) {
   return new ToolPolicy(parsePolicyConfig(env));
@@ -41,13 +41,13 @@ describe("tool policy", () => {
       OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=13",
       OPCUA_ALLOWED_METHODS: "ns=2;i=27|ns=2;i=28",
     });
-    subject.authorize("write_opcua_node", { node_id: "ns=2;i=13" });
+    subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=2;i=13" }] });
     subject.authorize("call_opcua_method", {
       object_node_id: "ns=2;i=27",
       method_node_id: "ns=2;i=28",
     });
     assert.throws(
-      () => subject.authorize("write_opcua_node", { node_id: "ns=2;i=14" }),
+      () => subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=2;i=14" }] }),
       /not writable/
     );
     assert.throws(
@@ -63,21 +63,19 @@ describe("tool policy", () => {
   it("hides operator control families that have no configured targets", () => {
     const base = { OPCUA_PROFILE: "operator", OPCUA_SECURITY_POLICY: "Basic256Sha256" };
     const writeOnly = visible(policy({ ...base, OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=13" }));
-    assert.equal(writeOnly.has("write_opcua_node"), true);
-    assert.equal(writeOnly.has("write_multiple_opcua_nodes"), true);
+    assert.equal(writeOnly.has("write_opcua_nodes"), true);
     assert.equal(writeOnly.has("call_opcua_method"), false);
 
     const methodOnly = visible(policy({ ...base, OPCUA_ALLOWED_METHODS: "ns=2;i=27|ns=2;i=28" }));
-    assert.equal(methodOnly.has("write_opcua_node"), false);
-    assert.equal(methodOnly.has("write_multiple_opcua_nodes"), false);
+    assert.equal(methodOnly.has("write_opcua_nodes"), false);
     assert.equal(methodOnly.has("call_opcua_method"), true);
   });
 
   it("rejects direct calls to tools hidden from tools/list", () => {
     const subject = policy({});
-    assert.equal(subject.isVisible(byName.get("write_opcua_node")), false);
+    assert.equal(subject.isVisible(byName.get("write_opcua_nodes")), false);
     assert.throws(
-      () => subject.authorize("write_opcua_node", { node_id: "ns=2;i=13" }),
+      () => subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=2;i=13" }] }),
       /disabled by OPCUA_PROFILE=observe/
     );
   });
@@ -151,18 +149,18 @@ describe("contract-derived policy guards", () => {
     // A write whose target cannot be located is a write whose target cannot be
     // checked.
     const subject = operator();
-    assert.throws(() => subject.authorize("write_opcua_node", { value: 1 }), /requires node_id/);
     assert.throws(
-      () => subject.authorize("write_multiple_opcua_nodes", { nodes_to_write: [{ value: 1 }] }),
-      /requires nodes_to_write\.node_id/
+      () => subject.authorize("write_opcua_nodes", { nodes: [{ value: 1 }] }),
+      /requires nodes\.node_id/
     );
+    assert.throws(() => subject.authorize("write_opcua_nodes", {}), /requires nodes\.node_id/);
   });
 
   it("rejects the whole batch when one target is forbidden", () => {
     assert.throws(
       () =>
-        operator().authorize("write_multiple_opcua_nodes", {
-          nodes_to_write: [{ node_id: "ns=2;i=13" }, { node_id: "ns=2;i=99" }],
+        operator().authorize("write_opcua_nodes", {
+          nodes: [{ node_id: "ns=2;i=13" }, { node_id: "ns=2;i=99" }],
         }),
       /ns=2;i=99 is not writable/
     );
@@ -184,7 +182,7 @@ describe("node ids in the allowlist", () => {
       // other — a denial, which is safe, but indistinguishable from a policy
       // mistake.
       const subject = operator({ OPCUA_ALLOWED_WRITE_NODES: allowed });
-      subject.authorize("write_opcua_node", { node_id: requested, value: 1 });
+      subject.authorize("write_opcua_nodes", { nodes: [{ node_id: requested, value: 1 }] });
     });
   }
 
@@ -214,7 +212,7 @@ describe("namespace-URI allowlists", () => {
   it("authorises the node at that URI's index", () => {
     const subject = operator({ OPCUA_ALLOWED_WRITE_NODES: "nsu=urn:plant:line-a;i=5" });
     subject.bindNamespaces(NAMESPACES);
-    subject.authorize("write_opcua_node", { node_id: "ns=1;i=5", value: 1 });
+    subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=1;i=5", value: 1 }] });
   });
 
   it("follows a reordered NamespaceArray", () => {
@@ -223,12 +221,12 @@ describe("namespace-URI allowlists", () => {
     // physical node*, with nothing reporting anything wrong.
     const subject = operator({ OPCUA_ALLOWED_WRITE_NODES: "nsu=urn:plant:line-a;i=5" });
     subject.bindNamespaces(NAMESPACES);
-    subject.authorize("write_opcua_node", { node_id: "ns=1;i=5", value: 1 });
+    subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=1;i=5", value: 1 }] });
 
     subject.bindNamespaces(["http://opcfoundation.org/UA/", "urn:other", "urn:plant:line-a"]);
-    subject.authorize("write_opcua_node", { node_id: "ns=2;i=5", value: 1 });
+    subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=2;i=5", value: 1 }] });
     assert.throws(
-      () => subject.authorize("write_opcua_node", { node_id: "ns=1;i=5", value: 1 }),
+      () => subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=1;i=5", value: 1 }] }),
       /not writable/
     );
   });
@@ -240,7 +238,7 @@ describe("namespace-URI allowlists", () => {
       // The last one is the case that caught a real bug: an unresolvable id on
       // *both* sides used to share a placeholder and so compare equal.
       assert.throws(
-        () => subject.authorize("write_opcua_node", { node_id: candidate, value: 1 }),
+        () => subject.authorize("write_opcua_nodes", { nodes: [{ node_id: candidate, value: 1 }] }),
         /not writable/,
         candidate
       );
@@ -252,7 +250,7 @@ describe("namespace-URI allowlists", () => {
     // node happened to sit at the guessed index.
     const subject = operator({ OPCUA_ALLOWED_WRITE_NODES: "nsu=urn:plant:line-a;i=5" });
     assert.throws(
-      () => subject.authorize("write_opcua_node", { node_id: "ns=1;i=5", value: 1 }),
+      () => subject.authorize("write_opcua_nodes", { nodes: [{ node_id: "ns=1;i=5", value: 1 }] }),
       /not writable/
     );
   });

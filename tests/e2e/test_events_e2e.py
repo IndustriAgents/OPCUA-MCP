@@ -59,7 +59,8 @@ def alarm_server(request, alarm_opcua_server):
 async def _trigger_alarm(session) -> None:
     """Drive the main mock into its alarm state, via the emergency-stop command."""
     result = await session.call_tool(
-        "write_opcua_node", {"node_id": NODE["EmergencyStopCommand"], "value": "true"}
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["EmergencyStopCommand"], "value": "true"}]},
     )
     assert not result.is_error, text_of(result)
     await asyncio.sleep(EVENT_SETTLE_SECONDS)
@@ -72,7 +73,8 @@ async def _reset_plant(session) -> None:
     latched in MAINTENANCE hands the next one a different machine.
     """
     await session.call_tool(
-        "write_opcua_node", {"node_id": NODE["ResetSystemCommand"], "value": "true"}
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ResetSystemCommand"], "value": "true"}]},
     )
     await asyncio.sleep(EVENT_SETTLE_SECONDS)
 
@@ -99,7 +101,12 @@ async def test_subscribe_then_read_receives_an_event(server):
     async with connect(params) as session:
         subscribed = await session.call_tool("subscribe_events", {})
         assert not subscribed.is_error, text_of(subscribed)
-        assert "Subscribed to events" in text_of(subscribed)
+        # A record rather than a sentence: it reports the values actually in
+        # force after clamping, which is what a caller has to know.
+        setup = subscribed.structured_content["result"]
+        assert setup["node_id"] == "ns=0;i=2253", setup
+        assert setup["buffer_size"] > 0, setup
+        assert setup["replaced"] is False, setup
 
         try:
             await _trigger_alarm(session)
@@ -241,11 +248,13 @@ async def test_lists_and_acknowledges_a_real_alarm(alarm_server):
     impl, params = alarm_server
     async with connect(params) as session:
         await session.call_tool(
-            "write_opcua_node", {"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "20"}
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "20"}]},
         )
         await asyncio.sleep(1)
         await session.call_tool(
-            "write_opcua_node", {"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "100"}
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "100"}]},
         )
         await asyncio.sleep(1)
 
@@ -290,12 +299,14 @@ async def test_condition_events_reach_the_buffer_too(alarm_server):
     impl, params = alarm_server
     async with connect(params) as session:
         await session.call_tool(
-            "write_opcua_node", {"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "20"}
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "20"}]},
         )
         await asyncio.sleep(1)
         await session.call_tool("subscribe_events", {})
         await session.call_tool(
-            "write_opcua_node", {"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "100"}
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "100"}]},
         )
         await asyncio.sleep(1.5)
         records = records_of(await session.call_tool("read_events", {}))

@@ -104,35 +104,40 @@ All four routes, and what to do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same seventeen tools, defined once in
+Both servers expose the same thirteen tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |
 |---|---|
-| `read_opcua_node` | Read a single node's value |
-| `write_opcua_node` | Write a value to a node |
-| `read_multiple_opcua_nodes` | Batch read |
-| `write_multiple_opcua_nodes` | Batch write |
-| `browse_opcua_node_children` | List a node's children |
+| `read_opcua_nodes` | Read one or more nodes — value, data type, status, timestamps |
+| `browse_opcua_nodes` | List children, walk a subtree, resolve a browse path, search by name |
+| `write_opcua_nodes` | Write to one or more nodes |
 | `call_opcua_method` | Invoke a method on an object node |
-| `get_all_variables` | Inventory every variable in the address space |
 | `get_server_status` | Connection state, server health and the namespace array |
-| `subscribe_opcua_node` | Watch a node for data changes instead of polling it |
+| `subscribe_opcua_nodes` | Watch nodes for data changes instead of polling them |
 | `list_subscriptions` | The active subscriptions, each with its buffered changes |
-| `unsubscribe_opcua_node` | Cancel one subscription |
+| `unsubscribe_opcua_nodes` | Cancel subscriptions |
 | `subscribe_events` | Start collecting events from a notifier node |
 | `read_events` | Read the events collected since the last read |
 | `list_active_alarms` | The alarms the server is currently retaining |
 | `acknowledge_alarm` | Acknowledge one of them, with a comment |
-| `read_history_opcua_node` † | Read historical, timestamped values |
-| `read_aggregate_opcua_node` † | Server-computed aggregates (Average, Min, Max, …) |
+| `read_opcua_history` † | Historical values, raw or summarised by a server-side aggregate |
 
-† **Capability-gated.** These appear only when the connected server advertises
-support — history via `AccessHistoryDataCapability`, aggregates via a non-empty
-`AggregateFunctions` folder. Against a server without them, the tools are simply
-not offered rather than failing at call time.
+† **Capability-gated.** `read_opcua_history` appears only when the connected
+server advertises historical access (`AccessHistoryDataCapability`) or aggregates
+(a non-empty `AggregateFunctions` folder). Its `aggregate_function` argument
+appears only with the latter, and its description then lists the functions that
+server actually offers. What a server cannot do is not on the menu, rather than
+failing at call time.
 
-Both servers also expose one **resource**, `opcua://subscriptions`: the same
+**One tool per operation, not one per arity.** Reading one node and reading fifty
+is the same request with a longer list, so it is the same tool — and the same
+code path, which is the point: the single/batch pairs this replaced were each
+written twice per runtime, and that is where the two most recent correctness bugs
+([#75](https://github.com/midhunxavier/OPCUA-MCP/issues/75),
+[#76](https://github.com/midhunxavier/OPCUA-MCP/issues/76)) lived.
+
+Both servers also expose one **resource**Both servers also expose one **resource**, `opcua://subscriptions`: the same
 records `list_subscriptions` returns, re-readable without spending a tool call.
 
 Full per-tool reference with inputs, outputs and a node-ID map:
@@ -155,28 +160,36 @@ Once configured, you can ask in plain language:
 Real responses from the bundled mock plant, via the published package:
 
 ```
-read_opcua_node   node_id="ns=2;i=3"
-→ Node ns=2;i=3 value: 23.101165241243347
+read_opcua_nodes  node_ids=["ns=2;i=3", "ns=2;i=12"]
+→ { "node_id": "ns=2;i=3", "value": 23.101165241243347, "data_type": "Double",
+    "status": "Good", "source_timestamp": "2026-09-10T13:15:12.214Z",
+    "server_timestamp": "2026-09-10T13:15:12.214Z" }
+  { "node_id": "ns=2;i=12", "value": true, "data_type": "Boolean", … }
 
-write_opcua_node  node_id="ns=2;i=13"  value="80"
-→ Successfully wrote 80 to node ns=2;i=13
+write_opcua_nodes  nodes=[{"node_id": "ns=2;i=13", "value": 80}]
+→ { "node_id": "ns=2;i=13", "status": "Good", "error": null }
 
-get_all_variables
-→ Found 22 variables:
+browse_opcua_nodes  depth=4  node_class="Variable"  include_values=true
+→ { "nodes": [
+      { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", "node_class": "Variable",
+        "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 26.34,
+        "description": "Temperature" }, … ],
+    "truncated": false, "inspected": 22 }
 
-  - Name: Temperature
-    NodeID: ns=2;i=3
-    Object ID: ns=2;i=2
-    Value: 26.34449150525422
-    Data Type: ns=0;i=11
-    Description: Temperature
-  …
+browse_opcua_nodes  browse_path="/Objects/IndustrialControlSystem/Sensors/Temperature"  depth=0
+→ { "nodes": [ { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", … } ],
+    "truncated": false, "inspected": 1 }
 
-read_history_opcua_node  node_id="ns=2;i=3"  num_values=2
+read_opcua_history  node_id="ns=2;i=3"  num_values=2
 → { "value": 24.231991377989036, "timestamp": "2026-09-10T13:15:12.214Z", "status": "Good" }
   { "value": 26.089859958260515, "timestamp": "2026-09-10T13:15:11.208Z", "status": "Good" }
 
-subscribe_opcua_node  node_id="ns=2;i=3"  publishing_interval=500
+read_opcua_history  node_id="ns=2;i=3"  start_time="2026-09-10T12:00:00Z"
+                    aggregate_function="Average"  processing_interval=60000
+→ { "value": 25.4, "timestamp": "2026-09-10T12:00:00.000Z", "status": "Good" }
+  { "value": 25.9, "timestamp": "2026-09-10T12:01:00.000Z", "status": "Good" } …
+
+subscribe_opcua_nodes  node_ids=["ns=2;i=3"]  publishing_interval=500
 → { "subscription_id": "sub-1", "node_id": "ns=2;i=3", "publishing_interval": 500,
     "sampling_interval": 500, "buffer_size": 20, "change_count": 0, "changes": [] }
 
@@ -198,14 +211,19 @@ list_active_alarms
     "active": true, "acked": false, "retain": true }
 
 acknowledge_alarm  event_id="ZjW7HJrVSFzDV2sMsX7sEQAAAAE="  comment="on it"
-→ Acknowledged alarm ns=1;i=1002 (event ZjW7HJrVSFzDV2sMsX7sEQAAAAE=)
+→ { "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAE=", "condition_id": "ns=1;i=1002",
+    "status": "Good" }
 ```
 
-Both runtimes return that same record shape — one record per historical value —
-for `read_history_opcua_node` and `read_aggregate_opcua_node` alike, one for the
-subscription family and one for the event family (`read_events`,
-`list_active_alarms`). All three are defined in `contract/tools.json`
-(`resultShapes`) and enforced against both servers by the test suite.
+**Every tool declares a result shape**, and both runtimes are held to it. The
+shapes live in `contract/tools.json` (`resultShapes`); the suite checks each
+runtime's *actual* output against them, and then diffs the two runtimes against
+each other. Until 0.4.0 ten of the seventeen tools declared no shape at all, and
+every divergence the two servers had lived in exactly that gap.
+
+A per-node rejection is a status inside a successful result, never a failed call:
+one unreadable node in a batch of fifty must not discard the other forty-nine.
+Only a failure of the whole operation is an error.
 
 Events are collected, not pushed: MCP is request/response, so `subscribe_events`
 starts a real OPC UA subscription in the background and `read_events` hands over
@@ -216,7 +234,7 @@ says so plainly when the server has no Alarms & Conditions support to ask.
 Bad input is rejected identically by both runtimes:
 
 ```
-read_history_opcua_node  node_id="ns=2;i=3"  start_time="2026-02-30T00:00:00Z"
+read_opcua_history  node_id="ns=2;i=3"  start_time="2026-02-30T00:00:00Z"
 → Error: Invalid date/time: "2026-02-30T00:00:00Z". Use ISO 8601, e.g. 2026-04-23T17:40:00Z
 ```
 
@@ -306,7 +324,7 @@ Example production policy (`OPCUA_POLICY_FILE=/etc/opcua-mcp-policy.json`):
 {
   "version": 1,
   "profile": "operator",
-  "allowed_tools": ["read_opcua_node", "write_opcua_node", "call_opcua_method"],
+  "allowed_tools": ["read_opcua_nodes", "write_opcua_nodes", "call_opcua_method"],
   "control": {
     "writable_nodes": ["ns=2;s=Line1.SpeedSetpoint"],
     "callable_methods": [

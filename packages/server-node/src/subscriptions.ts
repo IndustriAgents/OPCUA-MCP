@@ -99,6 +99,19 @@ export function unknownSubscriptionMessage(id: string): string {
   return `No such subscription: ${id}`;
 }
 
+/** The same, for a batch cancel — named in full so the caller can see which failed.
+ *
+ * Every id is checked before any subscription is cancelled, so this message
+ * means nothing was cancelled: a partial cancel would leave the caller unable to
+ * tell which handles still work, and would lose the buffered changes of the ones
+ * that did go, to a typo.
+ */
+export function unknownSubscriptionsMessage(ids: string[]): string {
+  return ids.length === 1
+    ? unknownSubscriptionMessage(ids[0])
+    : `No such subscriptions: ${ids.join(", ")}. Nothing was cancelled.`;
+}
+
 /** The message both runtimes give when the OPC UA server refuses an explicit cancel.
  *
  * Worth saying out loud rather than swallowing: the subscription is gone from

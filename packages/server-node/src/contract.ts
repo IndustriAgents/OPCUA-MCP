@@ -29,7 +29,8 @@ export interface ToolGuard {
 export interface ToolSpec {
   name: string;
   accessClass: AccessClass;
-  capability: string | null;
+  /** Capabilities of which the server must report at least one; empty means always. */
+  capabilities: string[];
   description: string;
   inputSchema: any;
   resultShape?: string;
@@ -45,6 +46,14 @@ export const CONTRACT: {
   resultShapes: Record<string, any>;
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
   diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
+  traversal: {
+    rootNodeId: string;
+    defaultDepth: number;
+    maxDepth: number;
+    defaultMaxNodes: number;
+    maxNodes: number;
+    skipBrowseName: string;
+  };
   events: {
     defaultNotifierNodeId: string;
     baseEventTypeNodeId: string;

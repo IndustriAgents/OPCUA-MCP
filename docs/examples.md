@@ -25,7 +25,7 @@ Both read the endpoint from `OPCUA_SERVER_URL` (default `opc.tcp://localhost:484
 
 ## Node ID reference (mock server)
 
-Discover these any time with `get_all_variables` or `browse_opcua_node_children`.
+Discover these any time with `browse_opcua_nodes`.
 
 | Node | NodeId | Type | Access |
 |------|--------|------|--------|
@@ -56,90 +56,126 @@ Discover these any time with `get_all_variables` or `browse_opcua_node_children`
 
 ## Core tools (both servers)
 
-### `read_opcua_node`
-Read one node's value.
-```json
-{ "node_id": "ns=2;i=3" }
-```
-```
-Node ns=2;i=3 value: 26.94
-```
-> Prompt: *"What is the current temperature?"*
-
-### `read_multiple_opcua_nodes`
-Batch read.
+### `read_opcua_nodes`
+Read one or more nodes. One call, one round trip, whether it is one node or fifty.
 ```json
 { "node_ids": ["ns=2;i=3", "ns=2;i=4", "ns=2;i=12"] }
 ```
 ```json
-{ "ns=2;i=3": 26.13, "ns=2;i=4": 1010.57, "ns=2;i=12": false }
+{ "node_id": "ns=2;i=3", "value": 26.13, "data_type": "Double", "status": "Good",
+  "source_timestamp": "2026-09-10T13:15:12.214Z",
+  "server_timestamp": "2026-09-10T13:15:12.214Z" }
+{ "node_id": "ns=2;i=4", "value": 1010.57, "data_type": "Double", … }
+{ "node_id": "ns=2;i=12", "value": false, "data_type": "Boolean", … }
 ```
+The quality and the age come with the value, because they are what decide whether
+it can be acted on: a `status` of `Good` and a `source_timestamp` from four hours
+ago are a stale reading, and a bare number cannot tell you that.
+
+A node the server rejects is one `Bad…` status among the others, never a failed
+call — one unreadable node must not discard the other forty-nine.
 > Prompt: *"Read temperature, pressure, and pump status together."*
 
-### `write_opcua_node`
-Write one node; the value is coerced to the node's data type.
+### `write_opcua_nodes`
+Write one or more nodes. **This changes physical equipment.**
 ```json
-{ "node_id": "ns=2;i=13", "value": "80" }      // Double actuator
-{ "node_id": "ns=2;i=24", "value": "true" }     // Boolean command
+{ "nodes": [
+  { "node_id": "ns=2;i=13", "value": 80 },
+  { "node_id": "ns=2;i=24", "value": true }
+] }
 ```
+```json
+{ "node_id": "ns=2;i=13", "status": "Good", "error": null }
+{ "node_id": "ns=2;i=24", "status": "Good", "error": null }
 ```
-Successfully wrote 80 to node ns=2;i=13
+Without `data_type` each node is read first to learn its type. Give it to skip
+that round trip — and to write a **write-only** node, which refuses the read:
+```json
+{ "nodes": [{ "node_id": "ns=2;i=13", "value": 80, "data_type": "Double" }] }
 ```
+`status` is what the OPC UA server answered; `error` is why this server never
+sent the write at all (an unconvertible value, a type it could not read). The two
+are separate because "the server refused" and "we never asked" are different
+problems with different fixes.
 > Note: the simulation republishes sensor/actuator state every ~1s, so direct
 > writes to those nodes are transient. Use the **command variables** or
 > **methods** to drive lasting state changes.
 > Prompt: *"Open valve V-101 to 80%."*
 
-### `write_multiple_opcua_nodes`
-Batch write.
-```json
-{ "nodes_to_write": [
-  { "node_id": "ns=2;i=13", "value": "80" },
-  { "node_id": "ns=2;i=14", "value": "30" }
-] }
-```
-```json
-[ { "node_id": "ns=2;i=13", "status": "Success" },
-  { "node_id": "ns=2;i=14", "status": "Success" } ]
-```
+### `browse_opcua_nodes`
+Explore the address space: list children, walk a subtree, resolve a path by name,
+or search. One tool for all four, because they are one traversal with different
+bounds.
 
-### `browse_opcua_node_children`
-List a node's children.
+**List a node's children** (the default, `depth: 1`):
 ```json
 { "node_id": "ns=2;i=1" }
 ```
 ```json
-[ { "node_id": "ns=2;i=2",  "browse_name": "2:Sensors" },
-  { "node_id": "ns=2;i=11", "browse_name": "2:Actuators" },
-  { "node_id": "ns=2;i=18", "browse_name": "2:SystemStatus" },
-  { "node_id": "ns=2;i=27", "browse_name": "2:Methods" } ]
+{ "nodes": [
+    { "node_id": "ns=2;i=2", "browse_name": "2:Sensors", "node_class": "Object",
+      "parent_node_id": "ns=2;i=1", "data_type": null, "value": null,
+      "description": null },
+    { "node_id": "ns=2;i=11", "browse_name": "2:Actuators", … },
+    { "node_id": "ns=2;i=27", "browse_name": "2:Methods", … } ],
+  "truncated": false, "inspected": 4 }
 ```
 > Prompt: *"What folders are under the Industrial Control System?"*
+
+**Inventory every variable** (what the retired `get_all_variables` did):
+```json
+{ "depth": 4, "node_class": "Variable", "include_values": true }
+```
+```json
+{ "nodes": [
+    { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", "node_class": "Variable",
+      "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 26.5,
+      "description": "Temperature" }, … ],
+  "truncated": false, "inspected": 22 }
+```
+The built-in `Server` subtree is always skipped — several hundred nodes of the
+server describing itself, identical everywhere, and `get_server_status` answers
+what anyone would browse it for.
+> Prompt: *"Give me a complete inventory of everything on this server."*
+
+**Resolve a name to a node id** (`depth: 0` returns just the addressed node):
+```json
+{ "browse_path": "/Objects/IndustrialControlSystem/Sensors/Temperature", "depth": 0 }
+```
+```json
+{ "nodes": [ { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", … } ],
+  "truncated": false, "inspected": 1 }
+```
+This is where to start when you know what a thing is *called* but not its numeric
+id. A bare segment matches whatever namespace it is in; write `2:Sensors` to pin
+one. A path that does not resolve is an error naming the segment that failed, not
+an empty result.
+
+**Search by name:**
+```json
+{ "depth": 4, "name_filter": "temp" }
+```
+> Prompt: *"Find me anything to do with temperature."*
+
+**`truncated` is part of the answer.** Every walk is bounded by `max_nodes`
+(default 500), and a walk that stopped early says so — a prefix of the address
+space is otherwise indistinguishable from all of it.
 
 ### `call_opcua_method`
 Call a method on an object node.
 ```json
 { "object_node_id": "ns=2;i=27", "method_node_id": "ns=2;i=28", "arguments": ["60"] }
 ```
+```json
+{ "object_node_id": "ns=2;i=27", "method_node_id": "ns=2;i=28",
+  "status": "Good", "outputs": [true] }
 ```
-Method call successful. Object: ns=2;i=27, Method: ns=2;i=28, Result: True
-```
+Arguments are converted to the types the method *declares*: this server reads the
+method's `InputArguments`, so a Boolean argument is sent as a Boolean and an
+Int32 as an Int32, rather than everything becoming a Double or a String.
 After this, `SystemMode` (`ns=2;i=19`) becomes `AUTO` and `ProductionRate`
 (`ns=2;i=21`) becomes `60` within ~1s.
 > Prompt: *"Start production at 60 units/hour, then stop it."*
-
-### `get_all_variables`
-Discover the whole address space (excludes the built-in `Server` subtree).
-```json
-{}
-```
-```
-Found 22 variables:
-- Name: Temperature   NodeID: ns=2;i=3   Value: 26.5   Data Type: ns=0;i=11
-- Name: PumpEnabled   NodeID: ns=2;i=12  Value: false  Data Type: ns=0;i=1
-...
-```
-> Prompt: *"Give me a complete inventory of everything on this server."*
 
 ### `get_server_status`
 Connection state, server health, and the namespace array — the first thing to try
@@ -198,15 +234,16 @@ Calling it is also what re-establishes a dropped connection, so it doubles as
 
 ---
 
-## History & aggregate tools (added in PR #1)
+## History and aggregates
 
-These are exposed **only when the server advertises the capability**. The mock
-server enables history (so the history tool appears) but advertises no aggregate
-functions (so the aggregate tool stays hidden).
+One tool, capability-gated. The mock server enables history and advertises no
+aggregate functions, so against it `read_opcua_history` appears *without* its
+`aggregate_function` argument.
 
-### `read_history_opcua_node` (both servers)
-Read recorded historical values for a node. Exposed only when the server
-advertises `AccessHistoryDataCapability`.
+### `read_opcua_history` (both servers)
+Read a node's stored history — raw readings, or one server-computed summary per
+interval. Offered when the server advertises historical access
+(`AccessHistoryDataCapability`) *or* aggregates.
 
 ```json
 { "node_id": "ns=2;i=3", "start_time": "2026-06-05T09:50:00Z",
@@ -234,17 +271,24 @@ returned raw `DataValue` JSON here instead
 
 > Prompt: *"Show the last 5 temperature readings from history."*
 
-### `read_aggregate_opcua_node`
-Computes aggregates (Average, Minimum, Maximum, …) over a time range, one value
-per `processing_interval` (ms). **Requires a server that advertises aggregate
-functions** — the bundled mock does not, so this tool is not exposed against it.
+#### With an aggregate
+Add `aggregate_function` and the server computes one summary value per
+`processing_interval` (ms) instead of returning raw readings — which is how to
+ask about a week of data without transferring a week of data.
 ```json
 { "node_id": "ns=2;i=3", "start_time": "2026-06-05T09:50:00Z",
   "aggregate_function": "Average", "processing_interval": 60000 }
 ```
 
-The result uses the same record shape as `read_history_opcua_node` above, one
-record per interval:
+**The argument only appears when the server advertises aggregates**, and its
+description then lists the functions that server actually offers. The bundled
+mock advertises none, so against it `read_opcua_history` is offered *without*
+`aggregate_function` — capability gating applied to the argument rather than to
+the whole tool, which is strictly more informative: you are told what this server
+can do, not merely that a tool is missing.
+
+The result uses the same record shape as the raw read above, one record per
+interval:
 
 ```json
 { "value": 25.83, "timestamp": "2026-06-05T09:50:00.000Z", "status": "Good" }
@@ -261,14 +305,14 @@ unlike history and aggregates, these are not capability-gated.
 
 An MCP tool call is request/response, so a subscription cannot call the agent
 back: the OPC UA notifications arrive whenever the server decides to publish,
-long after `subscribe_opcua_node` has returned. So the MCP server **buffers**
+long after `subscribe_opcua_nodes` has returned. So the MCP server **buffers**
 them. You subscribe once, then read the accumulated values back whenever you
 like — from `list_subscriptions` or from the `opcua://subscriptions` resource.
 
-### `subscribe_opcua_node`
-Start watching a node.
+### `subscribe_opcua_nodes`
+Start watching one or more nodes. Each gets its own subscription record and id.
 ```json
-{ "node_id": "ns=2;i=3", "publishing_interval": 500,
+{ "node_ids": ["ns=2;i=3"], "publishing_interval": 500,
   "sampling_interval": 0, "buffer_size": 20 }
 ```
 ```json
@@ -279,7 +323,7 @@ Start watching a node.
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `node_id` | — | The node to monitor. |
+| `node_ids` | — | The nodes to monitor. A single node is a one-element list. |
 | `publishing_interval` | `1000` | How often (ms) the OPC UA server publishes queued changes. Clamped to at least 50. |
 | `sampling_interval` | `0` | How often (ms) it samples the node. `0` means "sample at `publishing_interval`", and the record reports the rate actually in force. A shorter interval queues several readings per publish. |
 | `buffer_size` | `20` | How many of the most recent changes to retain. Clamped to 1..1000; older changes are discarded. |
@@ -305,21 +349,28 @@ Every active subscription and what it has collected since.
 ```
 
 One record per subscription, one content block each — the same framing as
-`read_history_opcua_node`, and each entry of `changes` is a `historyRecords`
+`read_opcua_history`, and each entry of `changes` is a `historyRecords`
 record. `change_count` counts every change received; `changes` holds only the
 newest `buffer_size` of them.
 
 > Prompt: *"What has the temperature done since I asked you to watch it?"*
 
-### `unsubscribe_opcua_node`
-Cancel one subscription and discard its buffer.
+### `unsubscribe_opcua_nodes`
+Cancel subscriptions and discard their buffers.
 ```json
-{ "subscription_id": "sub-1" }
+{ "subscription_ids": ["sub-1"] }
 ```
+```json
+{ "subscription_id": "sub-1", "node_id": "ns=2;i=3",
+  "publishing_interval": 500, "sampling_interval": 500,
+  "buffer_size": 20, "change_count": 4, "changes": [ … ] }
 ```
-Unsubscribed sub-1 from node ns=2;i=3 after 4 value changes
-```
-An ID that is not active is refused identically by both servers:
+The subscription is returned as it was at the moment it was cancelled, so
+anything still buffered can be read one last time rather than being thrown away
+with it.
+
+Every id is checked before any is cancelled, so an ID that is not active cancels
+nothing — a typo must not cost the buffers of the subscriptions named beside it:
 ```
 Error: No such subscription: sub-9
 ```

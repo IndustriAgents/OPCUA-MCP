@@ -184,8 +184,11 @@ export class EventSubscriptions {
     nodeId: string,
     severityMin: number,
     bufferSize: number
-  ): Promise<void> {
-    await this.drop(nodeId);
+  ): Promise<{ replaced: boolean }> {
+    // Reported back to the caller: re-subscribing silently discards whatever the
+    // previous subscription had buffered, and an agent that cannot tell that
+    // happened reads the missing events as quiet.
+    const replaced = await this.drop(nodeId);
 
     const subscription = await session.createSubscription2(subscriptionRequest());
     const buffer: EventBuffer = {
@@ -224,6 +227,7 @@ export class EventSubscriptions {
     });
 
     this.buffers.set(nodeId, buffer);
+    return { replaced };
   }
 
   /** Take up to `limit` of the oldest buffered events, removing them. */
@@ -243,11 +247,13 @@ export class EventSubscriptions {
   }
 
   /** Tear down the subscription for `nodeId`, if there is one. */
-  async drop(nodeId: string): Promise<void> {
+  /** Tear down the subscription for `nodeId`. True when there was one. */
+  async drop(nodeId: string): Promise<boolean> {
     const buffer = this.buffers.get(nodeId);
-    if (!buffer) return;
+    if (!buffer) return false;
     this.buffers.delete(nodeId);
     await terminateQuietly(buffer.subscription);
+    return true;
   }
 
   /** Tear every event subscription down — the shutdown path.

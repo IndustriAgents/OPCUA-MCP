@@ -1,9 +1,15 @@
-"""End-to-end tests for `read_aggregate_opcua_node` on both MCP servers.
+"""End-to-end tests for aggregate history reads on both MCP servers.
 
 These run against the aggregate-capable mock (`packages/mock-server-aggregate`,
 :4841) rather than the main mock, which deliberately advertises no aggregate
-functions. The negative case — the tool staying hidden when the server cannot
-support it — lives in ``test_mcp_e2e.py`` and runs against the main mock.
+functions.
+
+Since the history and aggregate tools merged, the capability gates an *argument*
+rather than a tool: `read_opcua_history` is offered wherever the server reports
+HistoricalAccess, and `aggregate_function` appears on it only where the server
+also advertises aggregates — with that server's own function list named in the
+description. The negative case, where the argument is withheld, is asserted
+against the main mock in ``test_contract_parity.py``.
 
 The mock ramps its Temperature node at a known rate, so aggregate output is
 checked arithmetically rather than merely for non-emptiness: with a +1.0/second
@@ -32,7 +38,7 @@ from test_mcp_e2e import (
     tool_names,
 )
 
-AGGREGATE_TOOL = "read_aggregate_opcua_node"
+AGGREGATE_TOOL = "read_opcua_history"
 
 # A deliberately non-UTC zone for the regression test below. UTC+5:30 is chosen
 # because it is not a whole number of hours, so a naive-local-time bug cannot be

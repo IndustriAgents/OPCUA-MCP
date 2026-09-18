@@ -226,22 +226,22 @@ Once configured, you can ask Claude to perform real-world OPC UA operations:
 ```
 User: "What's the temperature in reactor R-101?"
 Assistant: I'll read the temperature sensor for reactor R-101.
-Tool call: read_opcua_node with node_id "ns=2;i=11"
+Tool call: read_opcua_nodes with node_ids ["ns=2;i=11"]
 Result: "Reactor R-101 temperature: 87.3°C"
 
 User: "Turn on the main conveyor motor"
 Assistant: I'll start the main conveyor motor for you.
-Tool call: write_opcua_node with node_id "ns=2;i=12" and value "true"
+Tool call: write_opcua_nodes with nodes [{node_id: "ns=2;i=12", value: true}]
 Result: "Main conveyor motor started successfully"
 
 User: "Set the pump speed to 65%"
 Assistant: I'll adjust the pump speed to 65%.
-Tool call: write_opcua_node with node_id "ns=2;i=13" and value "65"
+Tool call: write_opcua_nodes with nodes [{node_id: "ns=2;i=13", value: 65}]
 Result: "Pump speed set to 65%"
 
 User: "What variables are available on this OPC UA server?"
 Assistant: I'll retrieve all available variables from the OPC UA server.
-Tool call: get_all_variables
+Tool call: browse_opcua_nodes
 Result: Found 5 variables:
 - Temperature (ns=2;i=2): 25.3°C - Temperature sensor
 - Pressure (ns=2;i=3): 5.0 bar - Pressure sensor  

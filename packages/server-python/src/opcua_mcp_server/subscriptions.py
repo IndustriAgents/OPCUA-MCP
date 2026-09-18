@@ -73,6 +73,19 @@ def unknown_subscription_message(subscription_id: str) -> str:
     return f"No such subscription: {subscription_id}"
 
 
+def unknown_subscriptions_message(subscription_ids: list[str]) -> str:
+    """The same, for a batch cancel — named in full so the caller sees which failed.
+
+    Every id is checked before any subscription is cancelled, so this message
+    means nothing was cancelled: a partial cancel would leave the caller unable
+    to tell which handles still work, and would lose the buffered changes of the
+    ones that did go, to a typo.
+    """
+    if len(subscription_ids) == 1:
+        return unknown_subscription_message(subscription_ids[0])
+    return f"No such subscriptions: {', '.join(subscription_ids)}. Nothing was cancelled."
+
+
 def delete_failed_message(subscription_id: str, reason: str) -> str:
     """The message both runtimes give when the server refuses an explicit cancel.
 

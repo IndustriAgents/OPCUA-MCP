@@ -91,8 +91,13 @@ unchanged: call_opcua_method · get_server_status · list_subscriptions ·
   `aggregate_function` is stripped from the advertised schema when the server
   advertises no aggregate functions. That schema already carries the live
   function list, so this is strictly more informative than hiding a whole tool.
-  **Accepted trade:** a server offering aggregates but no raw history
-  (spec-legal, vanishingly rare) would advertise a raw read it cannot serve.
+  **The accepted trade turned out to be unnecessary**, and a test found it: the
+  aggregate mock advertises aggregates *without* `AccessHistoryDataCapability`,
+  so gating the merged tool on `history` alone hid aggregates entirely — the
+  opposite of the intended trade. `capability` became `capabilities`, a list
+  satisfied by *any* member, and `read_opcua_history` names both. A raw read
+  against an aggregate-only server is refused by that server, which is honest,
+  rather than hidden here, which was not.
 
 ## Phases
 
@@ -102,10 +107,10 @@ unchanged: call_opcua_method · get_server_status · list_subscriptions ·
 | 2 | `browseNext` on Node + explicit truncation | #75 | low | ✅ done |
 | 3 | Server-certificate verification + X.509 user auth | #45, #7 | medium | ✅ done |
 | 4 | Contract-declared policy guards + node-ID canonicalisation | — | medium | ✅ done |
-| 5 | Tool consolidation + `resultShape` on all 13 | #8, #9 | **high** | **0.4.0** |
-| 6 | Typed method arguments from `InputArguments` | #10 | medium | 0.4.1 |
-| 7 | Browse-path addressing + name search | #11 | low | 0.4.1 |
-| 8 | Contract constants + audit-trail decision | — | low | 0.4.2 |
+| 5 | Tool consolidation + `resultShape` on all 13 | #8, #9 | **high** | ✅ done |
+| 6 | Typed method arguments from `InputArguments` | #10 | medium | ✅ done |
+| 7 | Browse-path addressing + name search | #11 | low | ✅ done |
+| 8 | Contract constants + audit-trail decision | — | low | **0.4.0** |
 
 ### Phase 1 — Python batch-read error result
 
@@ -284,9 +289,15 @@ new mock work.
 Folded into `browse_opcua_nodes` rather than added as `resolve_browse_path` and
 `find_nodes_by_name`, so the surface stays at 13:
 
-- `browse_path` — `TranslateBrowsePathsToNodeIds`, e.g.
-  `/Objects/Reactor/Temperature`. With `depth: 0` this is pure resolution: the
-  addressed node's record, including its `node_id`.
+- `browse_path` — resolved segment by segment against each node's children,
+  **not** through `TranslateBrowsePathsToNodeIds`. A RelativePath element carries
+  a *qualified* BrowseName, so translating `/Objects/Plant/Temperature` asks for
+  those names in namespace 0 — and a plant's own nodes are never in namespace 0,
+  so the server answers `BadNoMatch` for a path that is plainly right. Matching
+  here accepts a bare `Plant` in whatever namespace it is in, and honours an
+  explicit `2:Plant`. Browsing is also universal where TranslateBrowsePaths is
+  optional, so both runtimes behave the same on any server. With `depth: 0` this
+  is pure resolution: the addressed node's record, including its `node_id`.
 - `name_filter` — substring match over browse names during the traversal that
   already exists, bounded by the same `depth` and `max_nodes` guards.
 

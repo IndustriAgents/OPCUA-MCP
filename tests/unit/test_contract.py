@@ -38,7 +38,7 @@ def test_tool_has_required_fields(tool):
         "name",
         "accessClass",
         "annotations",
-        "capability",
+        "capabilities",
         "description",
         "inputSchema",
     ):
@@ -61,10 +61,19 @@ def test_tool_access_metadata_is_safe(tool):
 
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)
 def test_capability_is_declared(tool):
-    """A tool may only be gated on a capability the contract actually defines."""
-    capability = tool["capability"]
-    assert capability is None or capability in CAPABILITIES, (
-        f"{tool['name']} gated on unknown capability {capability!r}; known: {sorted(CAPABILITIES)}"
+    """A tool may only be gated on capabilities the contract actually defines.
+
+    A list, and satisfied by *any* of them: `read_opcua_history` names both
+    `history` and `aggregate`, because a server offering only aggregates can
+    still answer an aggregate read, and gating it on `history` alone would hide
+    the one thing such a server is good at.
+    """
+    capabilities = tool["capabilities"]
+    assert isinstance(capabilities, list), f"{tool['name']}: capabilities must be a list"
+    unknown = set(capabilities) - set(CAPABILITIES)
+    assert not unknown, (
+        f"{tool['name']} gated on unknown capabilities {sorted(unknown)}; "
+        f"known: {sorted(CAPABILITIES)}"
     )
 
 
@@ -204,20 +213,68 @@ def test_the_event_family_shares_one_result_shape():
     """Four tools, two servers, one shape — the lesson of #23 applied up front."""
     event_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["name"] in EVENT_TOOL_NAMES}
     assert event_family == {
-        "subscribe_events": None,
+        "subscribe_events": "eventSubscription",
         "read_events": "eventRecords",
         "list_active_alarms": "eventRecords",
-        "acknowledge_alarm": None,
+        "acknowledge_alarm": "acknowledgement",
     }
 
 
 def test_the_history_family_shares_one_result_shape():
-    """The divergence in #23 was two tools, both servers; one shape covers all four."""
-    history_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["capability"]}
-    assert history_family == {
-        "read_history_opcua_node": "historyRecords",
-        "read_aggregate_opcua_node": "historyRecords",
-    }
+    """The divergence in #23 was two tools, both servers; one tool now covers all."""
+    history_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["capabilities"]}
+    assert history_family == {"read_opcua_history": "historyRecords"}
+
+
+def test_every_tool_declares_a_result_shape():
+    """The systemic fix: the contract pins behaviour, not only interface.
+
+    Ten of the seventeen tools used to declare `resultShape: null`, and for those
+    the output format, error wording and defaults were two hand-written copies
+    that no test compared. The parity suite could prove the two servers
+    *advertise* the same thing; it could not prove they *do* the same thing — and
+    four confirmed divergences lived in exactly that gap.
+
+    With a shape on every tool, `tests/e2e/test_contract_parity.py` checks every
+    tool's actual output against the contract on both runtimes.
+    """
+    shapeless = [tool["name"] for tool in TOOLS if not tool.get("resultShape")]
+    assert shapeless == [], f"tools with no declared result shape: {shapeless}"
+
+
+def test_every_declared_shape_exists_and_every_shape_is_used():
+    """A shape nothing references is dead, and a reference to nothing is a typo."""
+    declared = {name for name in CONTRACT["resultShapes"] if not name.startswith("$")}
+    referenced = {tool["resultShape"] for tool in TOOLS if tool.get("resultShape")}
+    assert referenced <= declared, f"tools name shapes that do not exist: {referenced - declared}"
+    assert declared <= referenced, f"shapes nothing uses: {declared - referenced}"
+
+
+def test_the_tool_surface_stays_consolidated():
+    """13 tools, and the single/batch pairs are gone.
+
+    Not a count for its own sake. Each merged pair was the same operation written
+    twice per runtime — four copies — which is *why* the batch read reported
+    failures as successes on one runtime (#76) and the browse drained
+    continuation points on only one (#75). Re-splitting them would reopen the
+    ground those bugs grew in, so the shape of the surface is asserted rather
+    than left to review.
+    """
+    names = {tool["name"] for tool in TOOLS}
+    assert len(TOOLS) == 13, sorted(names)
+    for retired in (
+        "read_opcua_node",
+        "read_multiple_opcua_nodes",
+        "write_opcua_node",
+        "write_multiple_opcua_nodes",
+        "browse_opcua_node_children",
+        "get_all_variables",
+        "read_history_opcua_node",
+        "read_aggregate_opcua_node",
+        "subscribe_opcua_node",
+        "unsubscribe_opcua_node",
+    ):
+        assert retired not in names, f"{retired} came back"
 
 
 # --- diagnostics ---------------------------------------------------------------
@@ -234,7 +291,7 @@ def test_the_diagnostics_tool_names_the_server_status_shape():
     tool = next(t for t in TOOLS if t["name"] == "get_server_status")
     assert tool["resultShape"] == "serverStatus"
     assert tool["accessClass"] == "read", "a status report must survive an observe-only profile"
-    assert tool["capability"] is None, "every OPC UA server has ServerStatus"
+    assert tool["capabilities"] == [], "every OPC UA server has ServerStatus"
 
 
 # --- resources -----------------------------------------------------------------

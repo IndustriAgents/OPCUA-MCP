@@ -19,23 +19,21 @@ POLICY_ENV = {
 }
 
 REQUIRED_OBSERVE_TOOLS = {
-    "read_opcua_node",
-    "browse_opcua_node_children",
-    "read_multiple_opcua_nodes",
-    "get_all_variables",
+    "read_opcua_nodes",
+    "browse_opcua_nodes",
     # Diagnostics belong in the most restricted profile there is: an
     # observe-only deployment is exactly where "is this thing even connected?"
     # has to be answerable.
     "get_server_status",
-    "subscribe_opcua_node",
+    "subscribe_opcua_nodes",
     "list_subscriptions",
-    "unsubscribe_opcua_node",
+    "unsubscribe_opcua_nodes",
     "subscribe_events",
     "read_events",
     "list_active_alarms",
 }
 
-OPTIONAL_OBSERVE_TOOLS = {"read_history_opcua_node", "read_aggregate_opcua_node"}
+OPTIONAL_OBSERVE_TOOLS = {"read_opcua_history"}
 
 
 def observe_params(impl: str, url: str) -> StdioServerParameters:
@@ -84,8 +82,8 @@ async def test_default_profile_advertises_only_observe_tools(observe_server):
     tools = {tool.name: tool for tool in response.tools}
     assert set(tools) >= REQUIRED_OBSERVE_TOOLS, impl
     assert set(tools) <= REQUIRED_OBSERVE_TOOLS | OPTIONAL_OBSERVE_TOOLS, impl
-    assert tools["read_opcua_node"].annotations.read_only_hint is True
-    assert tools["subscribe_opcua_node"].annotations.read_only_hint is False
+    assert tools["read_opcua_nodes"].annotations.read_only_hint is True
+    assert tools["subscribe_opcua_nodes"].annotations.read_only_hint is False
     assert all(tool.annotations.destructive_hint is False for tool in tools.values())
 
 
@@ -93,8 +91,8 @@ async def test_hidden_control_tool_is_still_rejected_when_called_directly(observ
     impl, params = observe_server
     async with connect(params) as session:
         result = await session.call_tool(
-            "write_opcua_node",
-            {"node_id": "ns=2;i=2", "value": 999},
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": "ns=2;i=2", "value": 999}]},
         )
 
     assert result.is_error is True, impl
@@ -108,13 +106,13 @@ async def test_operator_profile_exposes_and_enforces_only_configured_targets(imp
     async with connect(operator_params(impl, opcua_server)) as session:
         names = {tool.name for tool in (await session.list_tools()).tools}
         allowed = await session.call_tool(
-            "write_opcua_node", {"node_id": "ns=2;i=13", "value": "27.5"}
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "27.5"}]}
         )
         denied = await session.call_tool(
-            "write_opcua_node", {"node_id": "ns=2;i=12", "value": "true"}
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=12", "value": "true"}]}
         )
 
-    assert {"write_opcua_node", "write_multiple_opcua_nodes"} <= names, impl
+    assert "write_opcua_nodes" in names, impl
     assert "call_opcua_method" not in names, impl
     assert not allowed.is_error, text_of(allowed)
     assert denied.is_error is True, impl

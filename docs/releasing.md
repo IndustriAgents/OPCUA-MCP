@@ -97,3 +97,15 @@ Everything else in CI runs from the source tree and from `uv.lock`, so it cannot
 see packaging faults, a dependency range that resolves to a breaking major, or a
 bundling change that only breaks once `node_modules` is no longer on disk. The
 first two have already shipped broken releases here.
+
+## The registry manifest
+
+The root [`server.json`](../server.json) carries the version twice — its own
+`version` and `packages[0].version` — and both have to match the npm package, so
+they belong in step 1 of the bump above. A unit test fails if they drift, and so
+does the `name` / `mcpName` pair that ties the registry entry to the published
+package.
+
+`server.json` is not published by any workflow here. Submitting it to the MCP
+Registry is a separate manual step, and the first submission needs a release
+whose npm tarball carries `mcpName` — see [mcp-registry.md](mcp-registry.md).

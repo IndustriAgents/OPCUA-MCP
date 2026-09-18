@@ -12,11 +12,11 @@
 [![GitHub stars](https://img.shields.io/github/stars/midhunxavier/OPCUA-MCP?style=social)](https://github.com/midhunxavier/OPCUA-MCP)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
-[![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org)
+[![Node.js 22.13+](https://img.shields.io/badge/node-22.13+-green.svg)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Quick Start](#quick-start) · [Install](docs/install.md) · [Tools](#tools) · [Examples](docs/examples.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Contributing](CONTRIBUTING.md)
+[Quick Start](#quick-start) · [Install](docs/install.md) · [Tools](#tools) · [Examples](docs/examples.md) · [Compatibility](docs/compatibility.md) · [Architecture](docs/architecture.md) · [Testing](docs/testing.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -27,8 +27,14 @@
 Two interchangeable implementations — **Python** and **TypeScript/Node** — expose
 the same OPC UA operations as MCP tools: read and write nodes, browse the address
 space, call methods, read history and server-side aggregates, and subscribe to
-events and alarms. Both connect to any OPC UA server. Pick whichever runtime fits
-your stack.
+events and alarms. Both speak plain OPC UA, so both connect to any server that
+does; which tools are actually offered depends on the server's capabilities, the
+permissions of the OPC UA account, and the configured
+[tool profile](#configuration). Pick whichever runtime fits your stack.
+
+Which servers and operations the test suite exercises, and which are only
+reported by users, is set out in
+**[docs/compatibility.md](docs/compatibility.md)**.
 
 ```mermaid
 flowchart LR
@@ -370,8 +376,11 @@ here, where they would drift.
 ## Try it against the mock
 
 The repo ships a simulated industrial plant — sensors, actuators, methods,
-history and alarm events — so you can try the tools without touching real
-equipment.
+history and events — so you can try the tools without touching real equipment.
+Two smaller mocks cover what it deliberately does not model: server-side
+aggregates (`packages/mock-server-aggregate`, port 4841) and Alarms & Conditions
+with retained, acknowledgeable alarms (`packages/mock-server-alarms`, port 4842).
+The [compatibility matrix](docs/compatibility.md) says which mock covers what.
 
 ```bash
 git clone https://github.com/midhunxavier/OPCUA-MCP.git && cd OPCUA-MCP
@@ -423,7 +432,14 @@ account for `observe` deployments.
 
 Contributions are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** for
 project layout, local development, adding a new tool to both servers, and PR
-conventions. Changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+conventions. What is planned next is in [ROADMAP.md](ROADMAP.md); changes that
+have landed are tracked in [CHANGELOG.md](CHANGELOG.md).
+
+Results from a real OPC UA server are the most useful thing to send: open a
+[compatibility report](https://github.com/midhunxavier/OPCUA-MCP/issues/new?template=compatibility_report.md)
+saying which server, which version and which tools worked. Test only on
+equipment you are authorised to use, and keep writes and method calls to a
+simulator or lab.
 
 ## License
 

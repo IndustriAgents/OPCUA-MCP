@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 
-import { ACCESS_CLASSES, CONTRACT, type ToolGuard, type ToolSpec } from "./contract.js";
+import { ACCESS_CLASSES } from "./access-classes.js";
+import { CONTRACT, type ToolGuard, type ToolSpec } from "./contract.js";
 import { namespaceUriForm, resolveNodeId } from "./node-ids.js";
 
 export type ToolProfile = "observe" | "operator" | "full";

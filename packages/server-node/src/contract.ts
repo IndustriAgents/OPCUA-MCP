@@ -6,16 +6,8 @@ import { dirname, join } from "path";
 
 export const BUILD_DIR = dirname(fileURLToPath(import.meta.url));
 
-/** Every access class the contract may declare.
- *
- * A list rather than only a type, because the policy layer needs to recognise
- * an *unknown* class at runtime — a contract is data, and data can carry a typo
- * that the compiler never sees. `ACCESS_CLASSES` in `policy.py` is the Python
- * half of this.
- */
-export const ACCESS_CLASSES = ["read", "monitor", "alarm-action", "control"] as const;
-
-export type AccessClass = (typeof ACCESS_CLASSES)[number];
+export type { AccessClass } from "./access-classes.js";
+import type { AccessClass } from "./access-classes.js";
 
 /** Where a control tool keeps the identifiers the policy layer must authorise.
  *

@@ -24,15 +24,19 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .contract import CONTRACT
 from .records import history_record
 
-#: Defaults and bounds, shared verbatim with the Node server. They appear in the
-#: record the agent reads back, so a difference between the runtimes is drift.
-DEFAULT_PUBLISHING_INTERVAL = 1000
-MIN_PUBLISHING_INTERVAL = 50
-DEFAULT_BUFFER_SIZE = 20
-MIN_BUFFER_SIZE = 1
-MAX_BUFFER_SIZE = 1000
+# Defaults and bounds, read from the contract rather than written here. They were
+# five constants declared identically in this file and in `subscriptions.ts` —
+# two copies of the same promise, which the tool descriptions also quote, so a
+# change had to be made in three places to be true. Now it is made in one.
+_LIMITS = CONTRACT["subscriptions"]
+DEFAULT_PUBLISHING_INTERVAL = _LIMITS["defaultPublishingIntervalMs"]
+MIN_PUBLISHING_INTERVAL = _LIMITS["minPublishingIntervalMs"]
+DEFAULT_BUFFER_SIZE = _LIMITS["defaultBufferSize"]
+MIN_BUFFER_SIZE = _LIMITS["minBufferSize"]
+MAX_BUFFER_SIZE = _LIMITS["maxBufferSize"]
 
 
 def resolve_options(

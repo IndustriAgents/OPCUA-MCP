@@ -139,7 +139,7 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     )
 
 
-def _values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
+def values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
     """Every value a guard path selects out of a call's arguments.
 
     Supports ``field`` and ``array[].field``. A path that selects nothing yields
@@ -155,11 +155,11 @@ def _values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
         found: list[str] = []
         for item in items:
             if isinstance(item, Mapping):
-                found.extend(_values_at(item, rest))
+                found.extend(values_at(item, rest))
         return found
     if rest:
         nested = arguments.get(head)
-        return _values_at(nested, rest) if isinstance(nested, Mapping) else []
+        return values_at(nested, rest) if isinstance(nested, Mapping) else []
     value = arguments.get(head)
     return [value] if isinstance(value, str) else []
 
@@ -280,7 +280,7 @@ class ToolPolicy:
             )
 
         for path in guard.get("nodeIdPaths", []):
-            found = _values_at(arguments, path)
+            found = values_at(arguments, path)
             if not found:
                 # The guard named an argument the call does not carry. Denying is
                 # the only safe reading: a write whose target cannot be located
@@ -292,8 +292,8 @@ class ToolPolicy:
                 self._require_writable(node_id)
 
         for pair in guard.get("methodPaths", []):
-            objects = _values_at(arguments, pair["objectPath"])
-            methods = _values_at(arguments, pair["methodPath"])
+            objects = values_at(arguments, pair["objectPath"])
+            methods = values_at(arguments, pair["methodPath"])
             if not objects or not methods:
                 raise PermissionError(
                     f"{name} requires {pair['objectPath']} and {pair['methodPath']} "

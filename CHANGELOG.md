@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-18
+
+Two correctness bugs, two security features, and a tool surface that went from
+seventeen tools to thirteen. The consolidation is breaking; the migration table
+is under **Changed — BREAKING** below.
+
+The thread running through all of it: the contract now pins *behaviour*, not only
+interface. Ten of the seventeen tools declared no result shape, and every
+divergence between the two runtimes lived in exactly that gap — so the fix for
+the bugs and the reason for the merge are the same fix.
+
 ### Changed — BREAKING
 
 - **The tool surface is consolidated from seventeen tools to thirteen.** Four
@@ -807,7 +818,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.1.2...v0.2.0

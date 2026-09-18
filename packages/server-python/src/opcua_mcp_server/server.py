@@ -31,7 +31,7 @@ from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .node_ids import canonical_node_id
-from .policy import describe_policy, tool_policy
+from .policy import describe_policy, tool_policy, values_at
 from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
 from .subscriptions import (
@@ -45,25 +45,55 @@ from .version import package_version
 _CAPABILITIES: dict[str, Any] = {"history": False, "aggregate_functions": {}}
 
 
-def _audit_targets(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name == "write_opcua_node":
-        return {"node_ids": [arguments.get("node_id")]}
-    if name == "write_multiple_opcua_nodes":
-        return {"node_ids": [item.get("node_id") for item in arguments.get("nodes_to_write", [])]}
-    if name == "call_opcua_method":
-        return {
-            "object_node_id": arguments.get("object_node_id"),
-            "method_node_id": arguments.get("method_node_id"),
-        }
-    if name == "acknowledge_alarm":
-        return {
-            "condition_id": arguments.get("condition_id"),
-            "event_id": arguments.get("event_id"),
-        }
-    return {}
+def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
+    """What a control call was aimed at, for the audit record.
+
+    Derived from the tool's own ``guard``, not from a chain on tool *names*. That
+    chain was the last one left after the policy layer stopped keying off names,
+    and it broke silently the moment the tools were renamed: every write logged
+    ``decision: "allowed"`` with no targets at all, which is an audit trail that
+    records that *something* was permitted without recording what. Reading the
+    same declaration the policy authorises from means the two can no longer
+    disagree about which arguments matter.
+    """
+    guard = spec.get("guard")
+    if not guard:
+        return {}
+    record: dict[str, Any] = {}
+
+    node_ids = [
+        value for path in guard.get("nodeIdPaths", []) for value in values_at(arguments, path)
+    ]
+    if node_ids:
+        record["node_ids"] = node_ids
+
+    for pair in guard.get("methodPaths", []):
+        objects = values_at(arguments, pair["objectPath"])
+        methods = values_at(arguments, pair["methodPath"])
+        record["object_node_id"] = objects[0] if objects else None
+        record["method_node_id"] = methods[0] if methods else None
+        break
+
+    for path in guard.get("auditPaths", []):
+        # Only what is present: an absent optional argument is not a target, and
+        # recording it as null would make every acknowledgement look
+        # half-specified.
+        values = values_at(arguments, path)
+        if values:
+            record[path] = values[0]
+    return record
 
 
 def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason: str = "") -> None:
+    """Write one line of the control audit trail to stderr.
+
+    Only ``control`` and ``alarm-action`` tools: an audit trail that also
+    recorded every read would bury the four lines anyone is looking for.
+
+    Never the *values* being written, only the targets. A setpoint is process
+    data, and this stream is the one an MCP client shows the user and a log
+    collector ships off the machine.
+    """
     spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
     if spec is None or spec["accessClass"] not in {"control", "alarm-action"}:
         return
@@ -73,7 +103,7 @@ def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason:
         "profile": tool_policy().config.profile,
         "tool": name,
         "decision": decision,
-        **_audit_targets(name, arguments),
+        **_audit_targets(spec, arguments),
     }
     if reason:
         record["reason"] = reason
@@ -289,6 +319,19 @@ class PolicyMCPServer(MCPServer):
             _audit_decision(name, arguments, "denied", str(exc))
             raise ToolError(str(exc)) from exc
 
+        # The outcome, not only the decision. "Permitted" and "happened" are
+        # different facts, and the gap between them is where a control call that
+        # reached the plant and then failed lives — which is the one an operator
+        # most needs to find afterwards.
+        try:
+            result = await self._run_tool(name, arguments, context, spec)
+        except Exception as error:
+            _audit_decision(name, arguments, "failed", describe_error(error))
+            raise
+        _audit_decision(name, arguments, "completed")
+        return result
+
+    async def _run_tool(self, name, arguments, context, spec):
         # The one tool that must answer while the connection is down: it exists
         # to say so, and reaches for the connection itself.
         if name == "get_server_status" or _CONNECTION is None:

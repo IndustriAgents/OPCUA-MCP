@@ -1,6 +1,6 @@
 [project]
 name = "opcua-local-server"
-version = "0.3.0"
+version = "0.4.0"
 description = "Mock industrial OPC UA server (simulated PLC/sensors) for local development and tests."
 readme = "README.md"
 requires-python = ">=3.10"

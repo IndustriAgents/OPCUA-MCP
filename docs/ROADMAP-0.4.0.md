@@ -110,7 +110,7 @@ unchanged: call_opcua_method · get_server_status · list_subscriptions ·
 | 5 | Tool consolidation + `resultShape` on all 13 | #8, #9 | **high** | ✅ done |
 | 6 | Typed method arguments from `InputArguments` | #10 | medium | ✅ done |
 | 7 | Browse-path addressing + name search | #11 | low | ✅ done |
-| 8 | Contract constants + audit-trail decision | — | low | **0.4.0** |
+| 8 | Contract constants + audit-trail decision | — | low | ✅ done |
 
 ### Phase 1 — Python batch-read error result
 
@@ -311,11 +311,53 @@ already does correctly: the traversal caps `64` / `5000` (`tools.ts:965-966`,
 `server.py:861-862`), the subscription clamps, the root default `ns=0;i=85`, and
 `RequestedMaxReferencesPerNode`.
 
-Settle the audit trail. It ships on both runtimes (`tools.ts:123-143`,
-`server.py:61-75`, emitting `event: "opcua_mcp_policy"`), but it is stderr-only
-with no persistence and logs the *decision* rather than the *outcome*. Either
-document it as shipped or finish it — `ROADMAP.md` currently claims it has no
-plan, which is the one factual error left in the docs.
+Settle the audit trail: **both**, as it turned out.
+
+Finished, because a regression this phase found made the choice for itself. The
+targets in each audit record came from an if/else on tool *names* — the last such
+chain in the repository, missed when Phase 4 replaced the policy's — so renaming
+the tools in Phase 5 left every control call logging `decision: "allowed"` with
+**no targets at all**. Silently, because the audit trail had no test. It is now
+derived from the same `guard` the policy authorises from, `decision` carries the
+*outcome* (`completed` / `failed`) as well as the verdict, and six end-to-end
+tests pin it on both runtimes — including that reads are never audited and that a
+written value never appears.
+
+Documented, because what it is *not* also needed saying: stderr-only, with no
+persistence, which `ROADMAP.md` now states plainly along with what to do instead
+(collect the stream). A built-in durable sink still has no design and is still
+recorded as having none.
+
+## Outcome
+
+All eight phases shipped in four pull requests, released as **0.4.0**:
+
+| PR | Phases | Closed |
+|---|---|---|
+| [#77](https://github.com/midhunxavier/OPCUA-MCP/pull/77) | 1–2 | #75, #76 |
+| [#78](https://github.com/midhunxavier/OPCUA-MCP/pull/78) | 3–4 | #45, #7 |
+| [#79](https://github.com/midhunxavier/OPCUA-MCP/pull/79) | 5–7 | #8, #9, #10, #11 |
+| [#80](https://github.com/midhunxavier/OPCUA-MCP/pull/80) | 8 + release | — |
+
+Three things this plan got wrong, all found by tests rather than by review:
+
+1. **The truncation flag was already reported.** Phase 2 claimed
+   `get_all_variables` computed it and never surfaced it. It did surface it, in
+   prose. Checked before writing code; the phase note was corrected rather than
+   the code.
+2. **The aggregate capability trade-off was backwards.** Phase 5 accepted that a
+   server with aggregates but no raw history would be offered a read it could not
+   serve. The bundled aggregate mock is exactly that server, and the real effect
+   was the opposite — the merged tool vanished entirely, taking aggregates with
+   it. `capability` became `capabilities`, satisfied by any member.
+3. **`TranslateBrowsePathsToNodeIds` cannot resolve a human-written path.** A
+   RelativePath element carries a *qualified* BrowseName, so `/Objects/Plant/Temp`
+   asks for those names in namespace 0 — and a plant's nodes are never in
+   namespace 0. Resolution matches browse names segment by segment instead.
+
+And one bug the new tests caught in code this plan wrote: an unresolvable `nsu=`
+allowlist entry first resolved to a placeholder string, so two *different* unknown
+URIs compared equal and one authorised the other.
 
 ## PR sequencing
 

@@ -6,7 +6,7 @@ dev = ["ruff>=0.14"]
 # Only needed to build the downloadable single-file executable
 # (packages/server-python/packaging/). Kept out of `dev` so the everyday
 # `uv sync` does not pull a build toolchain nobody running the tests needs.
-packaging = ["pyinstaller>=6.11"]
+packaging = ["pyinstaller>=6.22.3"]
 
 # --- Lint & format -----------------------------------------------------------
 # Ruff covers both, replacing a separate flake8/isort/black stack. Run:

@@ -47,13 +47,10 @@ NODE_BUILD = ROOT / "packages" / "server-node" / "build" / "index.js"
 TEMPERATURE = "ns=2;i=2"
 
 CORE_TOOLS = {
-    "read_opcua_node",
-    "write_opcua_node",
-    "browse_opcua_node_children",
-    "read_multiple_opcua_nodes",
-    "write_multiple_opcua_nodes",
+    "read_opcua_nodes",
+    "browse_opcua_nodes",
+    "write_opcua_nodes",
     "call_opcua_method",
-    "get_all_variables",
 }
 
 
@@ -139,7 +136,7 @@ async def _read_or_reason(impl, url, env, errlog) -> str:
     text = ""
     try:
         async with connect(params, errlog) as session:
-            result = await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+            result = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
             text = text_of(result)
     except Exception as error:  # the server refused to come up at all
         text = f"{type(error).__name__}: {error}"
@@ -157,15 +154,16 @@ async def test_reads_and_writes_over_a_secured_connection(
         assert tools >= CORE_TOOLS
 
         assert TEMPERATURE in text_of(
-            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         )
 
         written = await session.call_tool(
-            "write_opcua_node", {"node_id": TEMPERATURE, "value": "42.5"}
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": TEMPERATURE, "value": "42.5"}]},
         )
-        assert "Successfully wrote" in text_of(written)
+        assert '"status": "Good"' in text_of(written), text_of(written)
 
-        read_back = await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+        read_back = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         assert "42.5" in text_of(read_back)
 
     log = stderr_of(errlog)
@@ -179,7 +177,7 @@ async def test_the_password_never_reaches_the_logs(impl, secure_opcua_server, se
     """Everything an MCP client shows the user comes from this stream."""
     params = _server_params(impl, secure_opcua_server, secure_env)
     async with connect(params, errlog) as session:
-        await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+        await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
 
     assert SECURE_PASSWORD not in stderr_of(errlog)
 
@@ -189,7 +187,7 @@ async def test_default_mode_is_sign_and_encrypt(impl, secure_opcua_server, secur
     params = _server_params(impl, secure_opcua_server, secure_env)  # no OPCUA_SECURITY_MODE
     async with connect(params, errlog) as session:
         assert TEMPERATURE in text_of(
-            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         )
 
     assert "mode=SignAndEncrypt" in stderr_of(errlog)
@@ -208,8 +206,8 @@ async def test_the_application_uri_comes_from_the_certificate(
     env = {key: value for key, value in secure_env.items() if key != "OPCUA_APPLICATION_URI"}
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
-        assert "value: " in text_of(
-            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+        assert TEMPERATURE in text_of(
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         )
 
 
@@ -224,7 +222,7 @@ async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, secure_en
     reason = await _read_or_reason(
         impl, secure_opcua_server, {**secure_env, "OPCUA_PASSWORD": "wrong"}, errlog
     )
-    assert "value: 21.5" not in reason and "value: 42.5" not in reason
+    assert '"status": "Good"' not in reason
     assert "BadUserAccessDenied" in reason
 
 
@@ -248,7 +246,7 @@ async def test_credentials_without_a_policy_warn_about_clear_text(
 async def test_an_unsecured_client_cannot_use_the_secured_server(impl, secure_opcua_server, errlog):
     """With no security configured there is no endpoint to fall back to."""
     reason = await _read_or_reason(impl, secure_opcua_server, {}, errlog)
-    assert "value: 21.5" not in reason and "value: 42.5" not in reason
+    assert '"status": "Good"' not in reason
     # Both runtimes name the policy they could not match.
     assert "SecurityPolicy#None" in reason
     # The default connection is the one that warns.
@@ -271,7 +269,7 @@ async def test_a_pinned_server_certificate_still_connects(
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         assert TEMPERATURE in text_of(
-            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         )
 
     log = stderr_of(errlog)
@@ -300,7 +298,7 @@ async def test_a_wrong_server_certificate_is_refused(
 
     reason = await _read_or_reason(impl, secure_opcua_server, env, errlog)
 
-    assert "value: 21.5" not in reason and "value: 42.5" not in reason, (
+    assert '"status": "Good"' not in reason, (
         f"{impl}: connected to a server whose certificate was not the pinned one: {reason!r}"
     )
     # Deliberately no assertion on *which* status code comes back. Both runtimes
@@ -325,7 +323,7 @@ async def test_an_unverified_server_says_so_on_a_secured_connection(
     """
     params = _server_params(impl, secure_opcua_server, secure_env)  # no OPCUA_SERVER_CERT
     async with connect(params, errlog) as session:
-        await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+        await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
 
     log = stderr_of(errlog)
     assert "certificate is not being verified" in log
@@ -366,7 +364,7 @@ async def test_x509_user_authentication_gets_a_working_session(
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         assert TEMPERATURE in text_of(
-            await session.call_tool("read_opcua_node", {"node_id": TEMPERATURE})
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         )
 
     log = stderr_of(errlog)

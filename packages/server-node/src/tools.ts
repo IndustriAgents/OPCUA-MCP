@@ -1,15 +1,17 @@
 // The OPC UA tool implementations.
 //
 // Adding a tool touches this file and contract/tools.json, and nothing else:
-// `listTools` is generated from the contract, `callTool` dispatches by name.
+// `listTools` is generated from the contract, `callTool` dispatches by name, and
+// the policy layer authorises it from the `guard` the contract declares.
 import {
   AttributeIds,
   DataType,
   Variant,
+  VariantArrayType,
   DataValue,
   StatusCodes,
   CallMethodResult,
-  ReferenceDescription,
+  NodeClass,
   HistoryData,
   AggregateFunction,
   ClientSession,
@@ -18,7 +20,7 @@ import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { browseAllReferences } from "./browse.js";
 import { OpcuaConnection, notConnectedMessage } from "./connection.js";
-import { CONTRACT } from "./contract.js";
+import { CONTRACT, type ToolSpec } from "./contract.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
 import { toDate } from "./dates.js";
 import {
@@ -30,11 +32,143 @@ import {
   droppedEventsMessage,
   listActiveAlarms,
 } from "./events.js";
-import { toHistoryRecords } from "./records.js";
+import { canonicalNodeId } from "./node-ids.js";
+import { toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
-import { SubscriptionManager, SubscriptionRecord } from "./subscriptions.js";
+import {
+  SubscribeOptions,
+  SubscriptionManager,
+  SubscriptionRecord,
+  unknownSubscriptionsMessage,
+} from "./subscriptions.js";
 import { ToolPolicy, toolPolicy } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
+
+/** The standard Root and Objects folders, which a browse path is written from. */
+const ROOT_FOLDER = "ns=0;i=84";
+
+/** One node's reading (resultShapes.nodeValues). */
+interface NodeValueRecord {
+  node_id: string;
+  value: unknown;
+  data_type: string | null;
+  status: string;
+  source_timestamp: string | null;
+  server_timestamp: string | null;
+}
+
+/** One node found by a browse (resultShapes.nodeRefs.nodes). */
+interface NodeRefRecord {
+  node_id: string;
+  browse_name: string;
+  node_class: string;
+  parent_node_id: string;
+  data_type: string | null;
+  value: unknown;
+  description: string | null;
+}
+
+/** One attempted write (resultShapes.writeResults). */
+interface WriteResultRecord {
+  node_id: string;
+  status: string;
+  error: string | null;
+}
+
+/** One requested write, as `write_opcua_nodes` receives it. */
+interface WriteRequest {
+  node_id: string;
+  value: unknown;
+  data_type?: string;
+}
+
+/** An error's message, however it arrived. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function clampInt(value: number, low: number, high: number): number {
+  return Math.max(low, Math.min(Math.trunc(value), high));
+}
+
+/** The OPC UA name of a variant's data type: "Double", "Boolean", "Int32". */
+function dataTypeName(variant: Variant | null | undefined): string | null {
+  const dataType = variant?.dataType;
+  if (dataType === undefined || dataType === null || dataType === DataType.Null) return null;
+  return DataType[dataType] ?? null;
+}
+
+/** The OPC UA name behind a DataType *attribute*, which is a NodeId, not an enum. */
+function dataTypeNameFromNodeId(value: unknown): string | null {
+  const identifier = (value as { value?: unknown } | null)?.value;
+  if (typeof identifier !== "number") return null;
+  return DataType[identifier] ?? null;
+}
+
+/** A DataType named as the contract names it, or a readable refusal. */
+function namedDataType(name: string): DataType {
+  const dataType = DataType[name as keyof typeof DataType];
+  if (typeof dataType !== "number") {
+    throw new Error(`Unknown data_type "${name}"`);
+  }
+  return dataType;
+}
+
+/** Whether a browse-path segment names this BrowseName.
+ *
+ * `2:Sensors` matches only namespace 2; a bare `Sensors` matches the name in
+ * whatever namespace it is in. The bare form is what someone types when they
+ * know what a thing is called and not which namespace it was loaded into —
+ * which is the entire reason `browse_path` exists.
+ */
+function browseNameMatches(segment: string, namespaceIndex: number, name: string | null): boolean {
+  const separator = segment.indexOf(":");
+  if (separator > 0) {
+    const index = Number(segment.slice(0, separator));
+    if (Number.isInteger(index)) {
+      return index === namespaceIndex && segment.slice(separator + 1) === name;
+    }
+  }
+  return segment === name;
+}
+
+/** The pre-#10 argument heuristic, kept only for methods that declare no types.
+ *
+ * Parses float → int → string and forces Double or String. It is wrong for
+ * Boolean and every sized integer, which is what `inputArgumentTypes` exists to
+ * fix; this remains because a method that publishes no InputArguments leaves
+ * nothing better to go on.
+ */
+function guessVariant(arg: unknown): Variant {
+  if (typeof arg === "boolean") return new Variant({ dataType: DataType.Boolean, value: arg });
+  if (typeof arg === "number") return new Variant({ dataType: DataType.Double, value: arg });
+  const text = String(arg);
+  const asNumber = Number(text);
+  return Number.isFinite(asNumber) && text.trim() !== ""
+    ? new Variant({ dataType: DataType.Double, value: asNumber })
+    : new Variant({ dataType: DataType.String, value: text });
+}
+
+/** One node's reading as a canonical record (resultShapes.nodeValues).
+ *
+ * The value goes through the *shared* codec, so a Boolean is `true` on both
+ * runtimes rather than `true` here and `True` there, and an Int64 is a number
+ * or a numeric string rather than node-opcua's `[high, low]` pair. Reading used
+ * to stringify natively and so diverged by construction — the one thing
+ * `value-encoding.json` exists to prevent, just outside its reach.
+ */
+function toNodeValueRecord(nodeId: string, dataValue: DataValue | undefined): NodeValueRecord {
+  const good = dataValue?.statusCode === StatusCodes.Good;
+  return {
+    node_id: canonicalNodeId(nodeId),
+    value: good ? variantToJson(dataValue?.value) : null,
+    data_type: good ? dataTypeName(dataValue?.value) : null,
+    // An absent status code means Good in OPC UA, so name it rather than null.
+    status: dataValue?.statusCode?.name ?? "Good",
+    source_timestamp: toIsoUtc(dataValue?.sourceTimestamp),
+    server_timestamp: toIsoUtc(dataValue?.serverTimestamp),
+  };
+}
 
 /** A history/aggregate response: one text block per canonical record.
  *
@@ -57,16 +191,23 @@ function eventResult(records: EventRecord[]) {
   return recordBlocks(records);
 }
 
-/** The diagnostics report (resultShapes.serverStatus).
+/** A result that is one object rather than a list of records.
  *
- * One object rather than a list, so one text block and a `result` that is the
- * object itself — the Python server's `get_server_status` frames it identically.
+ * One text block and a `result` that is the object itself. Used by every shape
+ * where a list would be a lie about the answer's structure: a browse has one
+ * `truncated` flag for the whole walk, a method call has one result, and a
+ * status report is one report. The Python server frames these identically.
  */
-function statusResult(status: ServerStatusRecord) {
+function objectResult(record: unknown) {
   return {
-    content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
-    structuredContent: { result: status },
+    content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
+    structuredContent: { result: record },
   };
+}
+
+/** The diagnostics report (resultShapes.serverStatus). */
+function statusResult(status: ServerStatusRecord) {
+  return objectResult(status);
 }
 
 function recordBlocks(records: unknown[]) {
@@ -203,41 +344,54 @@ export class OpcuaTools {
     this.aggregateFunctions = probeable ? await this.serverCapabilitiesAggregateFunctions() : [];
     const aggregateOk = this.aggregateFunctions.length > 0;
 
+    // A tool gated on capabilities is offered when the server reports *any* of
+    // them. `read_opcua_history` lists both: a server with only aggregates can
+    // still answer an aggregate read, and gating it on `history` alone would
+    // hide the one thing such a server is good at.
+    const available = new Set<string>();
+    if (historyOk) available.add("history");
+    if (aggregateOk) available.add("aggregate");
+
     const tools = this.policy
       .visibleTools(CONTRACT.tools)
       .filter(
-        (t) =>
-          t.capability === null ||
-          (t.capability === "history" && historyOk) ||
-          (t.capability === "aggregate" && aggregateOk)
+        (tool) =>
+          tool.capabilities.length === 0 ||
+          tool.capabilities.some((capability) => available.has(capability))
       )
-      .map((t) => {
-        // Preserve the dynamic aggregate_function help text (lists the
-        // aggregate functions the server actually advertises).
-        if (t.name === "read_aggregate_opcua_node") {
-          const inputSchema = JSON.parse(JSON.stringify(t.inputSchema));
-          inputSchema.properties.aggregate_function.description =
-            t.inputSchema.properties.aggregate_function.description +
-            ", one of: " +
-            [...this.aggregateFunctions].join(", ");
-          return {
-            name: t.name,
-            description: t.description,
-            inputSchema,
-            annotations: t.annotations,
-            outputSchema: outputSchema(t.resultShape),
-          };
-        }
-        return {
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-          annotations: t.annotations,
-          outputSchema: outputSchema(t.resultShape),
-        };
-      }) satisfies Tool[];
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: this.advertisedSchema(tool, aggregateOk),
+        annotations: tool.annotations,
+        outputSchema: outputSchema(tool.resultShape),
+      })) satisfies Tool[];
 
     return tools;
+  }
+
+  /** A tool's input schema as advertised, with capability-gated properties removed.
+   *
+   * Capability gating moved down a level when the history and aggregate tools
+   * merged: `read_opcua_history` is advertised whenever the server reports
+   * HistoricalAccess, and its `aggregate_function` argument appears only if the
+   * server also advertises aggregates — with that server's *own* function list
+   * named in the description. An argument the server cannot honour is therefore
+   * not merely documented as unsupported; it is not offered, which is the same
+   * property tool-level gating had and strictly more informative, because the
+   * list is the live one.
+   */
+  private advertisedSchema(tool: ToolSpec, aggregateOk: boolean): Tool["inputSchema"] {
+    if (!tool.inputSchema?.properties?.aggregate_function) return tool.inputSchema;
+
+    const schema = JSON.parse(JSON.stringify(tool.inputSchema));
+    if (!aggregateOk) {
+      delete schema.properties.aggregate_function;
+      delete schema.properties.processing_interval;
+      return schema;
+    }
+    schema.properties.aggregate_function.description += `, one of: ${this.aggregateFunctions.join(", ")}`;
+    return schema;
   }
 
   /** The advertised resource list: taken straight from the contract. */
@@ -330,94 +484,77 @@ export class OpcuaTools {
   /** Run one tool. The caller has already authorized it and ensured a session. */
   private async dispatch(name: string, args: Record<string, unknown>) {
     switch (name) {
-      case "read_opcua_node":
-        return await this.readOpcuaNode(args?.node_id as string);
+      case "read_opcua_nodes":
+        return await this.readOpcuaNodes(args.node_ids as string[]);
 
-      case "read_history_opcua_node":
-        return await this.readHistoryOpcuaNode(
-          args?.node_id as string,
-          args?.start_time as string | undefined,
-          args?.end_time as string | undefined,
-          (args?.num_values as number) || 0
-        );
+      case "browse_opcua_nodes":
+        return await this.browseOpcuaNodes({
+          nodeId: args.node_id as string | undefined,
+          browsePath: args.browse_path as string | undefined,
+          depth: args.depth as number | undefined,
+          nodeClass: args.node_class as string | undefined,
+          nameFilter: args.name_filter as string | undefined,
+          includeValues: args.include_values as boolean | undefined,
+          maxNodes: args.max_nodes as number | undefined,
+        });
 
-      case "read_aggregate_opcua_node":
-        return await this.readAggregateOpcuaNode(
-          args?.node_id as string,
-          args?.start_time as string,
-          args?.end_time as string | undefined,
-          args?.aggregate_function as string,
-          (args?.processing_interval as number) || 0
-        );
+      case "read_opcua_history":
+        return await this.readOpcuaHistory({
+          nodeId: args.node_id as string,
+          start: args.start_time as string | undefined,
+          end: args.end_time as string | undefined,
+          numValues: (args.num_values as number) || 0,
+          aggregateFunction: args.aggregate_function as string | undefined,
+          processingInterval: (args.processing_interval as number) || 0,
+        });
 
-      case "write_opcua_node":
-        return await this.writeOpcuaNode(args?.node_id as string, args?.value);
-
-      case "browse_opcua_node_children":
-        return await this.browseOpcuaNodeChildren(args?.node_id as string);
-
-      case "read_multiple_opcua_nodes":
-        return await this.readMultipleOpcuaNodes(args?.node_ids as string[]);
-
-      case "write_multiple_opcua_nodes":
-        return await this.writeMultipleOpcuaNodes(
-          args?.nodes_to_write as Array<{ node_id: string; value: unknown }>
-        );
+      case "write_opcua_nodes":
+        return await this.writeOpcuaNodes(args.nodes as WriteRequest[]);
 
       case "call_opcua_method":
         return await this.callOpcuaMethod(
-          args?.object_node_id as string,
-          args?.method_node_id as string,
-          args?.arguments as string[]
+          args.object_node_id as string,
+          args.method_node_id as string,
+          args.arguments as unknown[] | undefined
         );
 
-      case "get_all_variables":
-        return await this.getAllVariables(
-          (args?.root_node_id as string | undefined) ?? "ns=0;i=85",
-          (args?.max_depth as number | undefined) ?? 8,
-          (args?.max_nodes as number | undefined) ?? 500,
-          (args?.include_values as boolean | undefined) ?? true
-        );
+      case "subscribe_opcua_nodes":
+        return await this.subscribeOpcuaNodes(args.node_ids as string[], {
+          publishingInterval: args.publishing_interval as number | undefined,
+          samplingInterval: args.sampling_interval as number | undefined,
+          bufferSize: args.buffer_size as number | undefined,
+        });
 
-      case "subscribe_opcua_node":
-        return subscriptionResult([
-          await this.subs.subscribe(this.requireSession(), args?.node_id as string, {
-            publishingInterval: args?.publishing_interval as number | undefined,
-            samplingInterval: args?.sampling_interval as number | undefined,
-            bufferSize: args?.buffer_size as number | undefined,
-          }),
-        ]);
+      case "unsubscribe_opcua_nodes":
+        return await this.unsubscribeOpcuaNodes(args.subscription_ids as string[]);
 
       case "list_subscriptions":
         return subscriptionResult(this.subs.list());
 
-      case "unsubscribe_opcua_node":
-        return await this.unsubscribeOpcuaNode(args?.subscription_id as string);
-
       case "subscribe_events":
         return await this.subscribeEvents(
-          (args?.node_id as string) || DEFAULT_NOTIFIER,
-          (args?.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
-          (args?.buffer_size as number) || EVENT_DEFAULTS.bufferSize
+          (args.node_id as string) || DEFAULT_NOTIFIER,
+          (args.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
+          (args.buffer_size as number) || EVENT_DEFAULTS.bufferSize
         );
 
       case "read_events":
         return this.readEvents(
-          (args?.node_id as string) || DEFAULT_NOTIFIER,
-          (args?.limit as number) || EVENT_DEFAULTS.readLimit
+          (args.node_id as string) || DEFAULT_NOTIFIER,
+          (args.limit as number) || EVENT_DEFAULTS.readLimit
         );
 
       case "list_active_alarms":
         return await this.listActiveAlarms(
-          (args?.node_id as string) || DEFAULT_NOTIFIER,
-          (args?.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
+          (args.node_id as string) || DEFAULT_NOTIFIER,
+          (args.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
         );
 
       case "acknowledge_alarm":
         return await this.acknowledgeAlarm(
-          args?.event_id as string,
-          (args?.comment as string) ?? "",
-          args?.condition_id as string | undefined
+          args.event_id as string,
+          (args.comment as string) ?? "",
+          args.condition_id as string | undefined
         );
 
       default:
@@ -443,11 +580,7 @@ export class OpcuaTools {
         readServerStatus(this.requireSession(), endpoint, security)
       );
     } catch (error) {
-      return disconnectedStatus(
-        endpoint,
-        security,
-        error instanceof Error ? error.message : String(error)
-      );
+      return disconnectedStatus(endpoint, security, describeError(error));
     }
   }
 
@@ -458,395 +591,531 @@ export class OpcuaTools {
     return this.session;
   }
 
-  private async unsubscribeOpcuaNode(subscriptionId: string) {
-    const record = await this.subs.unsubscribe(subscriptionId);
+  // --- reading -------------------------------------------------------------
+
+  /** `read_opcua_nodes`: the current value of one or more nodes, fully qualified.
+   *
+   * One `read` for the whole list, so fifty nodes cost one round trip. A node
+   * the server rejects is one record with a `Bad…` status among the others —
+   * promoting it to an error would discard every other node's value, which is
+   * the opposite of what asking for them together is for.
+   */
+  private async readOpcuaNodes(nodeIds: string[]) {
+    const session = this.requireSession();
+    if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+      throw new Error("read_opcua_nodes requires a non-empty node_ids array");
+    }
+
+    try {
+      const dataValues = await session.read(
+        nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value }))
+      );
+      return recordBlocks(
+        nodeIds.map((nodeId, index) => toNodeValueRecord(nodeId, dataValues[index]))
+      );
+    } catch (error) {
+      throw new Error(`Failed to read nodes: ${describeError(error)}`);
+    }
+  }
+
+  /** `read_opcua_history`: raw stored readings, or one aggregate per interval.
+   *
+   * The two used to be separate tools with separate implementations of the same
+   * framing. They differ in one request and share everything else, so they are
+   * one tool whose `aggregate_function` argument decides which request is sent.
+   */
+  private async readOpcuaHistory(request: {
+    nodeId: string;
+    start?: string;
+    end?: string;
+    numValues: number;
+    aggregateFunction?: string;
+    processingInterval: number;
+  }) {
+    const session = this.requireSession();
+    const { nodeId, aggregateFunction } = request;
+
+    try {
+      if (aggregateFunction === undefined) {
+        const historyValues = await session.readHistoryValue(
+          [nodeId],
+          toDate(request.start) as any,
+          toDate(request.end) as any,
+          { numValuesPerNode: request.numValues }
+        );
+        if (historyValues.length !== 1) throw new Error("Read history failed");
+        if (historyValues[0].statusCode !== StatusCodes.Good) {
+          throw new Error(`Read history failed with status: ${historyValues[0].statusCode.name}`);
+        }
+        return historyResult((historyValues[0].historyData as HistoryData).dataValues);
+      }
+
+      if (request.start === undefined) {
+        throw new Error("read_opcua_history requires start_time when aggregate_function is given");
+      }
+
+      // Don't depend on a prior tools/list having populated the cache: a client
+      // may call this tool directly after connecting. Recompute on demand.
+      if (this.aggregateFunctions.length === 0) {
+        this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions();
+      }
+      if (!this.aggregateFunctions.includes(aggregateFunction)) {
+        throw new Error(
+          this.aggregateFunctions.length === 0
+            ? "Server does not advertise any aggregate functions"
+            : `Invalid aggregate function. Supported: ${this.aggregateFunctions.join(", ")}`
+        );
+      }
+
+      const historyValues = await session.readAggregateValue(
+        { nodeId },
+        toDate(request.start) as any,
+        (toDate(request.end) ?? new Date()) as any,
+        AggregateFunction[aggregateFunction as keyof typeof AggregateFunction],
+        request.processingInterval
+      );
+      if (historyValues.statusCode !== StatusCodes.Good) {
+        throw new Error(`Read aggregate failed with status: ${historyValues.statusCode.name}`);
+      }
+      return historyResult((historyValues.historyData as HistoryData).dataValues);
+    } catch (error) {
+      throw new Error(`Failed to read history of node ${nodeId}: ${describeError(error)}`);
+    }
+  }
+
+  // --- browsing ------------------------------------------------------------
+
+  /** `browse_opcua_nodes`: list children, walk a subtree, resolve a path, search.
+   *
+   * One traversal serving what used to be `browse_opcua_node_children` and
+   * `get_all_variables` — and, with `browsePath` and `nameFilter`, what issue
+   * #11 asked two more tools for. They were two separate walks over the same
+   * address space, which is how the missing continuation-point drain (#75)
+   * reached both of them independently.
+   *
+   * Filtering never prunes the walk: an Object excluded by `nodeClass` is still
+   * descended into while `depth` allows, because the thing being looked for is
+   * usually *below* the structure, not in it.
+   */
+  private async browseOpcuaNodes(request: {
+    nodeId?: string;
+    browsePath?: string;
+    depth?: number;
+    nodeClass?: string;
+    nameFilter?: string;
+    includeValues?: boolean;
+    maxNodes?: number;
+  }) {
+    const session = this.requireSession();
+    const limits = CONTRACT.traversal;
+    const depth = clampInt(request.depth ?? limits.defaultDepth, 0, limits.maxDepth);
+    const maxNodes = clampInt(request.maxNodes ?? limits.defaultMaxNodes, 1, limits.maxNodes);
+    const includeValues = request.includeValues ?? false;
+    const wantedClass = request.nodeClass?.toLowerCase();
+    const nameFilter = request.nameFilter?.toLowerCase();
+
+    const root = request.browsePath
+      ? await this.resolveBrowsePath(request.nodeId ?? limits.rootNodeId, request.browsePath)
+      : canonicalNodeId(request.nodeId ?? limits.rootNodeId);
+
+    const keep = (record: NodeRefRecord) =>
+      (wantedClass === undefined || record.node_class.toLowerCase() === wantedClass) &&
+      (nameFilter === undefined || record.browse_name.toLowerCase().includes(nameFilter));
+
+    try {
+      const found: NodeRefRecord[] = [];
+      let inspected = 0;
+      let truncated = false;
+
+      // `depth: 0` is "tell me about this node and nothing else" — which is how
+      // a browse_path is turned into a node id without also listing everything
+      // under it.
+      const rootRecord = await this.describeNode(session, root, root);
+      if (depth === 0) {
+        inspected = 1;
+        if (keep(rootRecord)) found.push(rootRecord);
+      } else {
+        const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: root, depth: 0 }];
+        const visited = new Set<string>([root]);
+
+        while (queue.length > 0 && !truncated) {
+          const current = queue.shift()!;
+          let references;
+          try {
+            references = await browseAllReferences(session, current.nodeId);
+          } catch (error) {
+            // The root failing is the caller's problem; a node deeper in may
+            // simply be one this session cannot read, and stopping the whole
+            // walk for it would make a large browse hostage to its worst node.
+            if (current.nodeId === root) throw error;
+            continue;
+          }
+
+          for (const reference of references) {
+            const childId = canonicalNodeId(reference.nodeId.toString());
+            if (visited.has(childId)) continue;
+            visited.add(childId);
+            if (inspected >= maxNodes) {
+              truncated = true;
+              break;
+            }
+            inspected += 1;
+
+            const browseName = `${reference.browseName.namespaceIndex}:${reference.browseName.name}`;
+            // The built-in Server object is several hundred nodes of the server
+            // describing itself, identical everywhere, and get_server_status
+            // answers what anyone would browse it for.
+            if (reference.browseName.name === limits.skipBrowseName) continue;
+
+            const record: NodeRefRecord = {
+              node_id: childId,
+              browse_name: browseName,
+              node_class: NodeClass[reference.nodeClass] ?? "Unspecified",
+              parent_node_id: current.nodeId,
+              data_type: null,
+              value: null,
+              description: null,
+            };
+            if (keep(record)) found.push(record);
+
+            // Descend through structure regardless of the class filter: what is
+            // being looked for is usually below an Object, not the Object.
+            if (reference.nodeClass === NodeClass.Object && current.depth + 1 < depth) {
+              queue.push({ nodeId: childId, depth: current.depth + 1 });
+            }
+          }
+        }
+      }
+
+      if (includeValues) await this.fillVariableDetail(session, found);
+      return objectResult({ nodes: found, truncated, inspected });
+    } catch (error) {
+      throw new Error(`Failed to browse ${root}: ${describeError(error)}`);
+    }
+  }
+
+  /** The record for one node read directly, rather than off a browse reference. */
+  private async describeNode(
+    session: ClientSession,
+    nodeId: string,
+    parentNodeId: string
+  ): Promise<NodeRefRecord> {
+    const [browseName, nodeClass] = await session.read([
+      { nodeId, attributeId: AttributeIds.BrowseName },
+      { nodeId, attributeId: AttributeIds.NodeClass },
+    ]);
+    if (browseName.statusCode !== StatusCodes.Good) {
+      throw new Error(`Browse failed with status: ${browseName.statusCode.name}`);
+    }
+    const name = browseName.value?.value;
     return {
-      content: [
-        {
-          type: "text",
-          text:
-            `Unsubscribed ${record.subscription_id} from node ${record.node_id} ` +
-            `after ${record.change_count} value changes`,
-        },
-      ],
+      node_id: canonicalNodeId(nodeId),
+      browse_name: name ? `${name.namespaceIndex}:${name.name}` : "",
+      node_class: NodeClass[nodeClass.value?.value as number] ?? "Unspecified",
+      parent_node_id: canonicalNodeId(parentNodeId),
+      data_type: null,
+      value: null,
+      description: null,
     };
   }
 
-  private async readOpcuaNode(nodeId: string) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
+  /** Fill in value, data type and description for the Variables among `records`.
+   *
+   * One `read` for everything rather than three per node: a 500-node inventory
+   * is otherwise 1500 round trips, which is the difference between a tool that
+   * answers and one that times out on real equipment.
+   */
+  private async fillVariableDetail(
+    session: ClientSession,
+    records: NodeRefRecord[]
+  ): Promise<void> {
+    const variables = records.filter((record) => record.node_class === "Variable");
+    if (variables.length === 0) return;
 
+    const reads = variables.flatMap((record) => [
+      { nodeId: record.node_id, attributeId: AttributeIds.Value },
+      { nodeId: record.node_id, attributeId: AttributeIds.DataType },
+      { nodeId: record.node_id, attributeId: AttributeIds.Description },
+    ]);
+    let values;
     try {
-      const dataValue = await this.session.readVariableValue(nodeId);
-
-      if (dataValue.statusCode !== StatusCodes.Good) {
-        throw new Error(`Read failed with status: ${dataValue.statusCode.toString()}`);
-      }
-
-      const value = dataValue.value?.value;
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Node ${nodeId} value: ${value}`,
-          },
-        ],
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to read node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      values = await session.read(reads);
+    } catch {
+      // Best-effort enrichment: the nodes were found, and reporting them
+      // without their values beats failing a browse that succeeded.
+      return;
     }
+
+    variables.forEach((record, index) => {
+      const [value, dataType, description] = values.slice(index * 3, index * 3 + 3);
+      if (value?.statusCode === StatusCodes.Good) {
+        record.value = variantToJson(value.value);
+        record.data_type = dataTypeName(value.value);
+      }
+      if (record.data_type === null && dataType?.statusCode === StatusCodes.Good) {
+        record.data_type = dataTypeNameFromNodeId(dataType.value?.value);
+      }
+      const text = description?.value?.value?.text;
+      record.description = typeof text === "string" && text.length > 0 ? text : null;
+    });
   }
 
-  private async readHistoryOpcuaNode(
-    nodeId: string,
-    start: string | undefined,
-    end: string | undefined,
-    numValuesPerNode: number
-  ) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
+  /** Resolve a slash-separated browse path to a node id (issue #11).
+   *
+   * Matched segment by segment against the browse names of each node's children,
+   * rather than through TranslateBrowsePathsToNodeIds. Two reasons, and the
+   * first is the deciding one:
+   *
+   * A RelativePath element carries a *qualified* BrowseName, so translating
+   * `/Objects/Plant/Temperature` asks for those names in namespace 0 and a
+   * plant's own nodes are never in namespace 0 — the server answers BadNoMatch
+   * for a path that is plainly right. Someone who knows the namespace index can
+   * write `2:Plant`, but then they already know more than this argument exists
+   * to spare them. Matching here accepts either: a bare `Plant` matches
+   * whatever namespace it is in, and an explicit `2:Plant` is honoured as
+   * written.
+   *
+   * Second, browsing is universal where TranslateBrowsePaths is optional, so
+   * both runtimes and every server behave the same way. It costs one browse per
+   * segment, which for a path someone typed is a handful of round trips.
+   *
+   * A path that does not resolve is an error naming the segment that failed,
+   * never an empty result: "no such path" and "a path to nothing" are different
+   * answers, and only one of them is the caller's mistake.
+   */
+  private async resolveBrowsePath(startNodeId: string, browsePath: string): Promise<string> {
+    const session = this.requireSession();
+    const segments = browsePath.split("/").filter((segment) => segment.length > 0);
+    if (segments.length === 0) {
+      throw new Error(`browse_path "${browsePath}" names no elements`);
     }
 
-    try {
-      const historyValues = await this.session.readHistoryValue(
-        [nodeId],
-        toDate(start) as any,
-        toDate(end) as any,
-        {
-          numValuesPerNode,
-        }
+    // A leading "/" is written from the Root folder, which is how a person says
+    // it ("/Objects/..."); anything else is relative to node_id.
+    let current = browsePath.startsWith("/") ? ROOT_FOLDER : canonicalNodeId(startNodeId);
+
+    for (const segment of segments) {
+      const references = await browseAllReferences(session, current);
+      const match = references.find((reference) =>
+        browseNameMatches(segment, reference.browseName.namespaceIndex, reference.browseName.name)
       );
-      if (historyValues.length !== 1) {
-        throw new Error(`Read history failed`);
-      }
-      if (historyValues[0].statusCode !== StatusCodes.Good) {
+      if (!match) {
         throw new Error(
-          `Read history failed with status: ${historyValues[0].statusCode.toString()}`
+          `browse_path "${browsePath}" does not resolve: no child "${segment}" under ${current}`
         );
       }
-      const dataValues = (historyValues[0].historyData as HistoryData).dataValues;
-      return historyResult(dataValues);
-    } catch (error) {
-      throw new Error(
-        `Failed to read node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      current = canonicalNodeId(match.nodeId.toString());
     }
+    return current;
   }
 
-  private async readAggregateOpcuaNode(
-    nodeId: string,
-    start: string,
-    end: string | undefined,
-    aggregate_fn: string,
-    processing_interval: number
-  ) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
+  // --- writing -------------------------------------------------------------
 
-    // Don't depend on a prior tools/list having populated the cache: a client may
-    // call this tool directly after connecting. Recompute on demand if empty.
-    if (this.aggregateFunctions.length === 0) {
-      this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions();
-    }
-
-    if (!this.aggregateFunctions.includes(aggregate_fn)) {
-      throw new Error(
-        this.aggregateFunctions.length === 0
-          ? "Server does not advertise any aggregate functions"
-          : `Invalid aggregate function. Supported: ${this.aggregateFunctions.join(", ")}`
-      );
+  /** `write_opcua_nodes`: one or more writes, each reporting its own status.
+   *
+   * Nodes given an explicit `data_type` skip the read-first inference entirely,
+   * which is what makes a *write-only* node writable — reading it to learn its
+   * type is exactly what such a node refuses (issue #9). The rest are read
+   * first, in one batch, and converted to the type the server reports.
+   */
+  private async writeOpcuaNodes(nodes: WriteRequest[]) {
+    const session = this.requireSession();
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      throw new Error("write_opcua_nodes requires a non-empty nodes array");
     }
 
     try {
-      const aggregateFn = AggregateFunction[aggregate_fn as keyof typeof AggregateFunction];
-      const historyValues = await this.session.readAggregateValue(
-        { nodeId },
-        toDate(start) as any,
-        (toDate(end) ?? new Date()) as any,
-        aggregateFn,
-        processing_interval
-      );
-      if (historyValues.statusCode !== StatusCodes.Good) {
-        throw new Error(
-          `Read aggregate failed with status: ${historyValues.statusCode.toString()}`
-        );
-      }
-      const dataValues = (historyValues.historyData as HistoryData).dataValues;
-      return historyResult(dataValues);
-    } catch (error) {
-      throw new Error(
-        `Failed to read node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  private async writeOpcuaNode(nodeId: string, value: unknown) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
-    try {
-      // First read the current value to determine the data type
-      const currentDataValue = await this.session.readVariableValue(nodeId);
-
-      if (currentDataValue.statusCode !== StatusCodes.Good || !currentDataValue.value) {
-        throw new Error(`Cannot read target data type: ${currentDataValue.statusCode.toString()}`);
-      }
-      const target = currentDataValue.value;
-      const convertedValue = convertForVariant(value, target.dataType, target.arrayType);
-
-      const nodeToWrite = {
-        nodeId: nodeId,
-        attributeId: AttributeIds.Value,
-        value: new DataValue({
-          value: new Variant({
-            dataType: target.dataType,
-            arrayType: target.arrayType,
-            dimensions: target.dimensions,
-            value: convertedValue,
-          }),
-        }),
-      };
-
-      const statusCode = await this.session.write(nodeToWrite);
-
-      if (statusCode !== StatusCodes.Good) {
-        throw new Error(`Write failed with status: ${statusCode.toString()}`);
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Successfully wrote ${value} to node ${nodeId}`,
-          },
-        ],
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to write to node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  private async browseOpcuaNodeChildren(nodeId: string) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
-    try {
-      const references = await browseAllReferences(this.session, nodeId);
-
-      const childrenInfo = references.map((ref: ReferenceDescription) => ({
-        node_id: ref.nodeId.toString(),
-        browse_name: `${ref.browseName.namespaceIndex}:${ref.browseName.name}`,
+      const results: WriteResultRecord[] = nodes.map((node) => ({
+        node_id: canonicalNodeId(String(node?.node_id ?? "")),
+        status: "Good",
+        error: null,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Children of ${nodeId}: ${JSON.stringify(childrenInfo, null, 2)}`,
-          },
-        ],
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to browse children of node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
+      // Only the nodes without a declared type need reading, so a batch that
+      // declares every type costs no extra round trip at all.
+      const inferred = nodes
+        .map((node, index) => ({ node, index }))
+        .filter((entry) => !entry.node?.data_type);
+      const current =
+        inferred.length > 0
+          ? await session.read(
+              inferred.map((entry) => ({
+                nodeId: entry.node.node_id,
+                attributeId: AttributeIds.Value,
+              }))
+            )
+          : [];
+      const currentByIndex = new Map(
+        inferred.map((entry, position) => [entry.index, current[position]])
       );
-    }
-  }
 
-  private async readMultipleOpcuaNodes(nodeIds: string[]) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
-    try {
-      const nodesToRead = nodeIds.map((nodeId) => ({
-        nodeId: nodeId,
-        attributeId: AttributeIds.Value,
-      }));
-
-      const dataValues = await this.session.read(nodesToRead);
-
-      const results: { [key: string]: any } = {};
-
-      dataValues.forEach((dataValue, index) => {
-        const nodeId = nodeIds[index];
-        if (dataValue.statusCode === StatusCodes.Good) {
-          results[nodeId] = dataValue.value?.value;
-        } else {
-          results[nodeId] = `Error: ${dataValue.statusCode.toString()}`;
-        }
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(results, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to read multiple nodes: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  private async writeMultipleOpcuaNodes(nodesToWrite: Array<{ node_id: string; value: unknown }>) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
-    try {
-      // First, read current values to determine data types
-      const nodeIds = nodesToWrite.map((item) => item.node_id);
-      const nodesToRead = nodeIds.map((nodeId) => ({
-        nodeId: nodeId,
-        attributeId: AttributeIds.Value,
-      }));
-
-      const currentDataValues = await this.session.read(nodesToRead);
-
-      const results: Array<{ node_id: string; status: string } | undefined> = new Array(
-        nodesToWrite.length
-      );
-      const writeNodes: Array<{
-        nodeId: string;
-        attributeId: AttributeIds;
-        value: DataValue;
-      }> = [];
+      const writes: Array<{ nodeId: string; attributeId: AttributeIds; value: DataValue }> = [];
       const writeIndices: number[] = [];
 
-      nodesToWrite.forEach((item, index) => {
-        const currentDataValue = currentDataValues[index];
-        if (currentDataValue.statusCode !== StatusCodes.Good || !currentDataValue.value) {
-          results[index] = {
-            node_id: item.node_id,
-            status: `Error: ${currentDataValue.statusCode.toString()}`,
-          };
-          return;
-        }
-        const target = currentDataValue.value;
+      nodes.forEach((node, index) => {
         try {
-          const convertedValue = convertForVariant(item.value, target.dataType, target.arrayType);
-          writeNodes.push({
-            nodeId: item.node_id,
+          const declared = node?.data_type ? namedDataType(node.data_type) : undefined;
+          let dataType: DataType;
+          let arrayType = VariantArrayType.Scalar;
+          let dimensions: number[] | null = null;
+
+          if (declared !== undefined) {
+            dataType = declared;
+            if (Array.isArray(node.value)) arrayType = VariantArrayType.Array;
+          } else {
+            const dataValue = currentByIndex.get(index);
+            if (!dataValue || dataValue.statusCode !== StatusCodes.Good || !dataValue.value) {
+              results[index] = {
+                node_id: results[index].node_id,
+                status: dataValue?.statusCode?.name ?? "BadUnexpectedError",
+                error:
+                  "could not read the node's data type to convert the value; " +
+                  "give data_type to write without reading it first",
+              };
+              return;
+            }
+            dataType = dataValue.value.dataType;
+            arrayType = dataValue.value.arrayType;
+            dimensions = dataValue.value.dimensions;
+          }
+
+          const value = convertForVariant(node.value, dataType, arrayType);
+          writes.push({
+            nodeId: node.node_id,
             attributeId: AttributeIds.Value,
             value: new DataValue({
-              value: new Variant({
-                dataType: target.dataType,
-                arrayType: target.arrayType,
-                dimensions: target.dimensions,
-                value: convertedValue,
-              }),
+              value: new Variant({ dataType, arrayType, dimensions, value }),
             }),
           });
           writeIndices.push(index);
         } catch (error) {
           results[index] = {
-            node_id: item.node_id,
-            status: `Error: ${error instanceof Error ? error.message : String(error)}`,
+            node_id: results[index].node_id,
+            status: "BadTypeMismatch",
+            error: describeError(error),
           };
         }
       });
 
-      if (writeNodes.length > 0) {
-        const statusCodes = await this.session.write(writeNodes);
-        statusCodes.forEach((statusCode, resultIndex) => {
-          const inputIndex = writeIndices[resultIndex];
-          results[inputIndex] = {
-            node_id: nodesToWrite[inputIndex].node_id,
-            status: statusCode === StatusCodes.Good ? "Success" : `Error: ${statusCode.toString()}`,
-          };
+      if (writes.length > 0) {
+        const statuses = await session.write(writes);
+        statuses.forEach((statusCode, position) => {
+          results[writeIndices[position]].status = statusCode.name;
         });
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Write operation results:\n${JSON.stringify(results, null, 2)}`,
-          },
-        ],
-      };
+      return recordBlocks(results);
+    } catch (error) {
+      throw new Error(`Failed to write nodes: ${describeError(error)}`);
+    }
+  }
+
+  /** `call_opcua_method`: run a method with arguments of the types it declares.
+   *
+   * The declared types come from the method's own InputArguments definition
+   * (issue #10). Without it this parsed every argument float → int → string and
+   * then forced `Double` or `String`, so a method expecting a Boolean or an
+   * Int32 was called with the wrong type and either failed or — worse — did
+   * something with a coerced value. The old heuristic survives only as the
+   * fallback for a method that publishes no argument metadata.
+   */
+  private async callOpcuaMethod(
+    objectNodeId: string,
+    methodNodeId: string,
+    methodArgs?: unknown[]
+  ) {
+    const session = this.requireSession();
+    const args = methodArgs ?? [];
+
+    try {
+      const declared = await this.inputArgumentTypes(session, methodNodeId);
+      const inputArguments = args.map((arg, index) => {
+        const declaredType = declared[index];
+        if (declaredType === undefined) return guessVariant(arg);
+        return new Variant({
+          dataType: declaredType.dataType,
+          arrayType: declaredType.arrayType,
+          value: convertForVariant(arg, declaredType.dataType, declaredType.arrayType),
+        });
+      });
+
+      const callResult: CallMethodResult = await session.call({
+        objectId: objectNodeId,
+        methodId: methodNodeId,
+        inputArguments,
+      });
+      if (callResult.statusCode !== StatusCodes.Good) {
+        throw new Error(`Method call failed with status: ${callResult.statusCode.name}`);
+      }
+
+      return objectResult({
+        object_node_id: canonicalNodeId(objectNodeId),
+        method_node_id: canonicalNodeId(methodNodeId),
+        status: callResult.statusCode.name,
+        outputs: (callResult.outputArguments ?? []).map((variant) => variantToJson(variant)),
+      });
     } catch (error) {
       throw new Error(
-        `Failed to write multiple nodes: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to call method ${methodNodeId} on object ${objectNodeId}: ${describeError(error)}`
       );
     }
   }
 
-  private async callOpcuaMethod(objectNodeId: string, methodNodeId: string, methodArgs?: string[]) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
+  /** The declared type of each input argument, or [] when the method publishes none. */
+  private async inputArgumentTypes(
+    session: ClientSession,
+    methodNodeId: string
+  ): Promise<Array<{ dataType: DataType; arrayType: VariantArrayType }>> {
     try {
-      // Convert string arguments to appropriate types
-      const convertedArgs: Variant[] = [];
-
-      if (methodArgs) {
-        for (const arg of methodArgs) {
-          // Try to convert to appropriate type
-          let convertedValue: any;
-
-          // Try float first
-          const floatValue = parseFloat(arg);
-          if (!isNaN(floatValue)) {
-            convertedValue = floatValue;
-          } else {
-            // Try int
-            const intValue = parseInt(arg);
-            if (!isNaN(intValue)) {
-              convertedValue = intValue;
-            } else {
-              // Keep as string
-              convertedValue = arg;
-            }
-          }
-
-          convertedArgs.push(
-            new Variant({
-              dataType: typeof convertedValue === "number" ? DataType.Double : DataType.String,
-              value: convertedValue,
-            })
-          );
-        }
-      }
-
-      const methodToCall = {
-        objectId: objectNodeId,
-        methodId: methodNodeId,
-        inputArguments: convertedArgs,
-      };
-
-      const callResult: CallMethodResult = await this.session.call(methodToCall);
-
-      if (callResult.statusCode !== StatusCodes.Good) {
-        throw new Error(`Method call failed with status: ${callResult.statusCode.toString()}`);
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Method call successful. Object: ${objectNodeId}, Method: ${methodNodeId}, Result: ${JSON.stringify(callResult.outputArguments)}`,
-          },
-        ],
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to call method ${methodNodeId} on object ${objectNodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      const definition = await session.getArgumentDefinition(methodNodeId);
+      return (definition.inputArguments ?? []).map((argument) => ({
+        // Built-in types are numbered identically in the DataType enum and in
+        // namespace 0, which is what makes this a lookup rather than a table.
+        dataType: Number(argument.dataType.value) as DataType,
+        arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
+      }));
+    } catch {
+      // Not every method publishes InputArguments, and a method with no
+      // arguments has nothing to publish. Fall back rather than refuse.
+      return [];
     }
+  }
+
+  // --- data-change subscriptions -------------------------------------------
+
+  private async subscribeOpcuaNodes(nodeIds: string[], options: SubscribeOptions) {
+    if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+      throw new Error("subscribe_opcua_nodes requires a non-empty node_ids array");
+    }
+    const session = this.requireSession();
+    const records: SubscriptionRecord[] = [];
+    for (const nodeId of nodeIds) {
+      records.push(await this.subs.subscribe(session, nodeId, options));
+    }
+    return subscriptionResult(records);
+  }
+
+  /** Cancel subscriptions, reporting each as it was at the moment it went.
+   *
+   * Every id is checked before any is cancelled: a list with one bad id would
+   * otherwise leave the caller unable to tell which of the others had already
+   * gone, and their buffered changes would be lost to a typo.
+   */
+  private async unsubscribeOpcuaNodes(subscriptionIds: string[]) {
+    if (!Array.isArray(subscriptionIds) || subscriptionIds.length === 0) {
+      throw new Error("unsubscribe_opcua_nodes requires a non-empty subscription_ids array");
+    }
+    const active = new Set(this.subs.list().map((record) => record.subscription_id));
+    const unknown = subscriptionIds.filter((id) => !active.has(id));
+    if (unknown.length > 0) {
+      throw new Error(unknownSubscriptionsMessage(unknown));
+    }
+
+    const records: SubscriptionRecord[] = [];
+    for (const id of subscriptionIds) {
+      records.push(await this.subs.unsubscribe(id));
+    }
+    return subscriptionResult(records);
   }
 
   // --- events and Alarms & Conditions ------------------------------------------
@@ -855,24 +1124,24 @@ export class OpcuaTools {
   // other's the same way. See packages/server-python/.../server.py.
 
   private async subscribeEvents(nodeId: string, severityMin: number, bufferSize: number) {
+    let replaced: boolean;
     try {
-      await this.events.subscribe(this.requireSession(), nodeId, severityMin, bufferSize);
+      ({ replaced } = await this.events.subscribe(
+        this.requireSession(),
+        nodeId,
+        severityMin,
+        bufferSize
+      ));
     } catch (error) {
-      throw new Error(
-        `Failed to subscribe to events from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      throw new Error(`Failed to subscribe to events from node ${nodeId}: ${describeError(error)}`);
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            `Subscribed to events from node ${nodeId}, buffering up to ${bufferSize} ` +
-            `events of severity ${severityMin} or above. Read them with read_events.`,
-        },
-      ],
-    };
+    return objectResult({
+      node_id: canonicalNodeId(nodeId),
+      severity_min: severityMin,
+      buffer_size: bufferSize,
+      replaced,
+    });
   }
 
   private readEvents(nodeId: string, limit: number) {
@@ -897,9 +1166,7 @@ export class OpcuaTools {
     try {
       alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
     } catch (error) {
-      throw new Error(
-        `Failed to list active alarms from node ${nodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      throw new Error(`Failed to list active alarms from node ${nodeId}: ${describeError(error)}`);
     }
 
     this.events.remember(alarms);
@@ -919,190 +1186,16 @@ export class OpcuaTools {
     try {
       statusCode = await acknowledgeAlarm(this.requireSession(), condition, eventId, comment);
     } catch (error) {
-      throw new Error(
-        `Failed to acknowledge alarm ${condition}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      throw new Error(`Failed to acknowledge alarm ${condition}: ${describeError(error)}`);
     }
     if (statusCode !== StatusCodes.Good) {
-      throw new Error(`Failed to acknowledge alarm ${condition}: ${statusCode.toString()}`);
+      throw new Error(`Failed to acknowledge alarm ${condition}: ${statusCode.name}`);
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Acknowledged alarm ${condition} (event ${eventId})`,
-        },
-      ],
-    };
-  }
-
-  private async getAllVariables(
-    rootNodeId = "ns=0;i=85",
-    requestedMaxDepth = 8,
-    requestedMaxNodes = 500,
-    includeValues = true
-  ) {
-    if (!this.session) {
-      throw new Error("No OPC UA session available");
-    }
-
-    try {
-      const variablesInfo: Array<{
-        name: string;
-        nodeid: string;
-        object_id: string;
-        value: any;
-        data_type: string;
-        description: string;
-      }> = [];
-
-      const maxDepth = Math.max(0, Math.min(Math.trunc(requestedMaxDepth), 64));
-      const maxNodes = Math.max(1, Math.min(Math.trunc(requestedMaxNodes), 5000));
-      const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: rootNodeId, depth: 0 }];
-      const visited = new Set<string>([rootNodeId]);
-      let inspected = 0;
-      let truncated = false;
-
-      while (queue.length > 0 && !truncated) {
-        const { nodeId, depth } = queue.shift()!;
-        try {
-          // Same drain as `browse_opcua_node_children`, and deliberately the
-          // same helper: a traversal that browses short is the bug this tool
-          // would hide best, because nobody counts a plant's variables by hand.
-          const references = await browseAllReferences(this.session!, nodeId);
-
-          for (const ref of references) {
-            try {
-              const childNodeId = ref.nodeId.toString();
-              if (visited.has(childNodeId)) {
-                continue;
-              }
-              visited.add(childNodeId);
-              if (inspected >= maxNodes) {
-                truncated = true;
-                break;
-              }
-              inspected += 1;
-              const browseName = ref.browseName.name;
-
-              // Skip the entire "Server" subtree
-              if (browseName === "Server") {
-                continue;
-              }
-
-              // Read the node class to determine if it's a variable or object
-              const nodeClassResults = await this.session!.read({
-                nodeId: childNodeId,
-                attributeId: AttributeIds.NodeClass,
-              });
-
-              const nodeClass = nodeClassResults.value?.value;
-
-              if (nodeClass === 2) {
-                // NodeClass.Variable = 2
-                // This is a variable node
-                let value: any;
-                let dataType = "";
-                let description = "";
-                const objectId = nodeId;
-
-                if (includeValues) {
-                  try {
-                    const valueResult = await this.session!.readVariableValue(childNodeId);
-                    value = valueResult.value?.value;
-                  } catch {
-                    value = null;
-                  }
-                } else {
-                  value = null;
-                }
-
-                try {
-                  const dataTypeResults = await this.session!.read({
-                    nodeId: childNodeId,
-                    attributeId: AttributeIds.DataType,
-                  });
-                  dataType = dataTypeResults.value?.value?.toString() || "";
-                } catch {
-                  dataType = "";
-                }
-
-                try {
-                  const descResults = await this.session!.read({
-                    nodeId: childNodeId,
-                    attributeId: AttributeIds.Description,
-                  });
-                  description = descResults.value?.value?.text || "";
-                } catch {
-                  description = "";
-                }
-
-                variablesInfo.push({
-                  name: browseName || "",
-                  nodeid: childNodeId,
-                  object_id: objectId,
-                  value: value,
-                  data_type: dataType,
-                  description: description,
-                });
-              } else if (nodeClass === 1 && depth < maxDepth) {
-                // NodeClass.Object = 1
-                queue.push({ nodeId: childNodeId, depth: depth + 1 });
-              }
-            } catch (error) {
-              // Continue with next reference if this one fails
-              console.error(`Error processing reference: ${error}`);
-            }
-          }
-        } catch (error) {
-          if (nodeId === rootNodeId) throw error;
-          // Continue if browse fails for this node
-          console.error(`Error browsing node ${nodeId}: ${error}`);
-        }
-      }
-
-      if (variablesInfo.length > 0) {
-        let result = `Found ${variablesInfo.length} variables after inspecting ${inspected} nodes`;
-        if (truncated) {
-          result += ` (truncated at max_nodes=${maxNodes})`;
-        }
-        result += ":\n";
-        for (const variable of variablesInfo) {
-          result += `\n- Name: ${variable.name}\n`;
-          result += `  NodeID: ${variable.nodeid}\n`;
-          result += `  Object ID: ${variable.object_id}\n`;
-          result += `  Value: ${variable.value}\n`;
-          result += `  Data Type: ${variable.data_type}\n`;
-          result += `  Description: ${variable.description}\n`;
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: result,
-            },
-          ],
-        };
-      } else {
-        let result = `No variables found after inspecting ${inspected} nodes`;
-        if (truncated) {
-          result += ` (truncated at max_nodes=${maxNodes})`;
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${result}.`,
-            },
-          ],
-        };
-      }
-    } catch (error) {
-      throw new Error(
-        `Failed to discover variables below ${rootNodeId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    return objectResult({
+      event_id: eventId,
+      condition_id: canonicalNodeId(condition),
+      status: statusCode.name,
+    });
   }
 }

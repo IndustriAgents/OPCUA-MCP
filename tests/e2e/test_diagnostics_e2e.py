@@ -224,7 +224,7 @@ async def test_other_tools_say_what_to_call_when_disconnected():
             }
         )
         async with connect(params) as session:
-            result = await session.call_tool("read_opcua_node", {"node_id": "ns=2;i=3"})
+            result = await session.call_tool("read_opcua_nodes", {"node_ids": ["ns=2;i=3"]})
 
         assert result.is_error, f"{impl}: a read against a dead server reported success"
         text = text_of(result)

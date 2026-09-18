@@ -190,9 +190,15 @@ class EventSubscriptions:
         with self._lock:
             return self._condition_of_event.get(event_id)
 
-    def subscribe(self, client, node_id: str, severity_min: int, buffer_size: int) -> None:
-        """Start (or restart) buffering events from ``node_id``."""
-        self.drop(node_id)
+    def subscribe(self, client, node_id: str, severity_min: int, buffer_size: int) -> bool:
+        """Start (or restart) buffering events from ``node_id``.
+
+        Returns whether an existing subscription was replaced. Reported back to
+        the caller: re-subscribing silently discards whatever the previous one
+        had buffered, and an agent that cannot tell that happened reads the
+        missing events as quiet.
+        """
+        replaced = self.drop(node_id)
         handler = _BufferingHandler(severity_min, buffer_size)
         subscription = client.create_subscription(_PUBLISHING_INTERVAL_MS, handler)
         # Never leave the OPC UA server holding a subscription this process has
@@ -209,6 +215,7 @@ class EventSubscriptions:
             raise
         with self._lock:
             self._subscriptions[node_id] = (subscription, handler)
+        return replaced
 
     def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int, int] | None:
         """Take up to ``limit`` buffered events, or None when not subscribed."""
@@ -233,12 +240,12 @@ class EventSubscriptions:
         for node_id in node_ids:
             self.drop(node_id)
 
-    def drop(self, node_id: str) -> None:
-        """Tear down the subscription for ``node_id``, if there is one."""
+    def drop(self, node_id: str) -> bool:
+        """Tear down the subscription for ``node_id``. True when there was one."""
         with self._lock:
             entry = self._subscriptions.pop(node_id, None)
         if entry is None:
-            return
+            return False
         try:
             entry[0].delete()
         except Exception as error:  # pragma: no cover - server-side teardown race
@@ -249,6 +256,7 @@ class EventSubscriptions:
                 f"Could not delete the event subscription for {node_id}: {error}",
                 file=sys.stderr,
             )
+        return True
 
 
 class _RefreshHandler:

@@ -2,6 +2,186 @@
   "$comment": "Single source of truth for the OPC UA MCP tool and resource surface shared by both servers. The Node server builds its tools/list response directly from this file (copied into build/ at build time). The Python (FastMCP) server reads tool descriptions and the capability node IDs from it; its signature-derived input schemas are checked against this file by tests/test_contract_parity.py. To add or change a tool: edit this file, then update each server's per-tool logic (Node: a case in the CallTool switch; Python: the @mcp.tool function), and add an E2E test. A tool whose output is more than free text also names a shape from \"resultShapes\"; tests/e2e/test_contract_parity.py checks both servers' actual output against it. The \"resources\" key does the same for MCP resources: both servers build their resources/list from it, and the parity test reads each resource and checks its document against the shape its \"body\" names.",
   "resultShapes": {
     "$comment": "Canonical response shapes, referenced by a tool's \"resultShape\". Both servers must produce the referenced shape verbatim: a client (or a model) that learns one server's output must be able to read the other's. See issue #23.",
+    "nodeValues": {
+      "$comment": "Returned as one MCP text content block per record. The reading of one node, fully qualified: a value on its own drops the quality and the age that decide whether it can be trusted. Closes issue #8. Every field is always present.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The node this record is for, echoed back as asked for. Example: 'ns=2;i=2'."
+          },
+          "value": {
+            "description": "The current value, encoded per its OPC UA data type exactly as resultShapes.historyRecords.value is — the same shared codec, pinned by tests/fixtures/value-encoding.json. null when the server returned no value, which a bad 'status' explains."
+          },
+          "data_type": {
+            "type": ["string", "null"],
+            "description": "The OPC UA data type of the value, named as OPC UA names it: 'Double', 'Boolean', 'Int32', 'String', 'DateTime'. null when the server returned no value to have a type."
+          },
+          "status": {
+            "type": "string",
+            "description": "OPC UA status code name for this node's read. 'Good' when the value is trustworthy; a 'Bad…' name says why it is not. A rejected node is one record among the others, never a failure of the whole call."
+          },
+          "source_timestamp": {
+            "type": ["string", "null"],
+            "description": "When the source (the device) says the value was produced, ISO-8601 UTC with a trailing 'Z'. This is the one that says how stale a reading is. null when the server supplied none."
+          },
+          "server_timestamp": {
+            "type": ["string", "null"],
+            "description": "When the OPC UA server received or produced the value, ISO-8601 UTC. Differs from source_timestamp on a value that sat in a device before the server saw it. null when the server supplied none."
+          }
+        },
+        "required": ["node_id", "value", "data_type", "status", "source_timestamp", "server_timestamp"],
+        "additionalProperties": false
+      }
+    },
+    "nodeRefs": {
+      "$comment": "One object, not a list, and returned as a single MCP text content block — because a browse that was cut short has to say so in the same breath as its results. A bare array could only report truncation by leaving it out, which is exactly how a short child list passes for a complete one.",
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "description": "The nodes found, in the order the traversal reached them.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "description": "Canonical node id, namespace always spelled out. Example: 'ns=2;i=3'."
+              },
+              "browse_name": {
+                "type": "string",
+                "description": "The node's BrowseName as '<namespaceIndex>:<name>'. Example: '2:Temperature'."
+              },
+              "node_class": {
+                "type": "string",
+                "description": "OPC UA NodeClass name: 'Object', 'Variable', 'Method', 'ObjectType', 'VariableType', 'ReferenceType', 'DataType', 'View' or 'Unspecified'."
+              },
+              "parent_node_id": {
+                "type": "string",
+                "description": "The node this one was reached from — the browse root for a depth-1 result."
+              },
+              "data_type": {
+                "type": ["string", "null"],
+                "description": "OPC UA data type name for a Variable. null for anything that is not a Variable, and for a Variable whose type could not be read."
+              },
+              "value": {
+                "description": "The Variable's current value, encoded as resultShapes.nodeValues.value is. null unless include_values was asked for, and null for a node that is not a Variable or could not be read."
+              },
+              "description": {
+                "type": ["string", "null"],
+                "description": "The node's Description attribute, or null when it has none."
+              }
+            },
+            "required": ["node_id", "browse_name", "node_class", "parent_node_id", "data_type", "value", "description"],
+            "additionalProperties": false
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when the traversal hit max_nodes and stopped with more of the address space unvisited, so 'nodes' is a prefix rather than the whole answer. Raise max_nodes, or browse a narrower root, to see the rest."
+        },
+        "inspected": {
+          "type": "integer",
+          "description": "How many nodes the traversal looked at, which is at least as many as it returned: a filtered-out node was still visited and still cost a round trip."
+        }
+      },
+      "required": ["nodes", "truncated", "inspected"],
+      "additionalProperties": false
+    },
+    "writeResults": {
+      "$comment": "Returned as one MCP text content block per record, one per node asked for, in the order asked. A node the server rejects is one 'status' among them — promoting it to an error result would discard what every other node in the batch did, including writes that already reached the machine.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The node this record is for, echoed back as asked for."
+          },
+          "status": {
+            "type": "string",
+            "description": "OPC UA status code name for this write. 'Good' means the server accepted it; a 'Bad…' name is the server's refusal."
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "Why this server never sent the write, for a failure that happened before the wire — a value that cannot be converted to the node's data type, or a node whose type could not be read. null when the write was attempted, which is when 'status' is the answer."
+          }
+        },
+        "required": ["node_id", "status", "error"],
+        "additionalProperties": false
+      }
+    },
+    "methodResult": {
+      "$comment": "One object, returned as a single MCP text content block. A method call has one result, not a list of them.",
+      "type": "object",
+      "properties": {
+        "object_node_id": {
+          "type": "string",
+          "description": "The object the method was called on, echoed back."
+        },
+        "method_node_id": {
+          "type": "string",
+          "description": "The method that was called, echoed back."
+        },
+        "status": {
+          "type": "string",
+          "description": "OPC UA status code name for the call itself. 'Good' when the server ran the method."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The method's output arguments in declaration order, each encoded as resultShapes.nodeValues.value is. Empty for a method that returns nothing.",
+          "items": {}
+        }
+      },
+      "required": ["object_node_id", "method_node_id", "status", "outputs"],
+      "additionalProperties": false
+    },
+    "eventSubscription": {
+      "$comment": "One object, returned as a single MCP text content block: what subscribe_events set up, so a caller can see the clamped values rather than the ones it asked for.",
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": "The notifier node events are collected from."
+        },
+        "severity_min": {
+          "type": "integer",
+          "description": "Minimum severity being collected; events below it are discarded by the server."
+        },
+        "buffer_size": {
+          "type": "integer",
+          "description": "How many events this MCP server will hold before dropping the oldest, after clamping."
+        },
+        "replaced": {
+          "type": "boolean",
+          "description": "True when this call replaced an existing subscription on the same notifier, discarding whatever it had buffered."
+        }
+      },
+      "required": ["node_id", "severity_min", "buffer_size", "replaced"],
+      "additionalProperties": false
+    },
+    "acknowledgement": {
+      "$comment": "One object, returned as a single MCP text content block.",
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "The event_id that identified the condition, echoed back."
+        },
+        "condition_id": {
+          "type": ["string", "null"],
+          "description": "The condition instance acknowledged, canonically spelled. null when the caller supplied none and none could be recovered from the buffered event."
+        },
+        "status": {
+          "type": "string",
+          "description": "OPC UA status code name the server answered the Acknowledge call with. 'Good' means it accepted the acknowledgement."
+        }
+      },
+      "required": ["event_id", "condition_id", "status"],
+      "additionalProperties": false
+    },
     "historyRecords": {
       "$comment": "Returned as one MCP text content block per record for compatibility. The canonical structured result is {\"result\": [records...]}, and tools/list advertises that wrapper as outputSchema.",
       "type": "array",
@@ -229,6 +409,16 @@
       { "key": "retain", "path": "Retain" }
     ]
   },
+  "traversal": {
+    "$comment": "Bounds and defaults for browse_opcua_nodes, here rather than written out in each runtime — they were duplicated as literals in tools.ts and server.py, which is how two servers come to disagree about how deep 'deep' is. The caps are not tuning knobs but refusals: an unbounded walk of a plant address space is a request that never returns.",
+    "rootNodeId": "ns=0;i=85",
+    "defaultDepth": 1,
+    "maxDepth": 64,
+    "defaultMaxNodes": 500,
+    "maxNodes": 5000,
+    "skipBrowseName": "Server",
+    "$skipComment": "The built-in Server object is skipped by every traversal: it is several hundred nodes of the server describing itself, it is the same on every server, and get_server_status answers what anyone would browse it for."
+  },
   "diagnostics": {
     "$comment": "The standard nodes `get_server_status` reads. Both are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. Kept here rather than in either server so the two ask the same questions.",
     "serverStatusNodeId": "ns=0;i=2256",
@@ -262,110 +452,181 @@
   ],
   "tools": [
     {
-      "name": "read_opcua_node",
+      "name": "read_opcua_nodes",
       "accessClass": "read",
       "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "capability": null,
-      "description": "Read the value of a specific OPC UA node",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=2'."
-          }
-        },
-        "required": ["node_id"]
-      }
-    },
-    {
-      "name": "write_opcua_node",
-      "accessClass": "control",
-      "guard": {
-        "$comment": "Every node id reached by nodeIdPaths must be in the operator profile's writable-node allowlist. The policy layer walks this declaration; it does not know this tool's name. A control tool with no `guard` is denied, so a new one cannot become callable by being added to the contract alone.",
-        "nodeIdPaths": ["node_id"]
-      },
-      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
-      "capability": null,
-      "description": "Write a value to a specific OPC UA node",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=3'."
-          },
-          "value": {
-            "description": "JSON scalar or array to write. It is converted and range-checked using the target node's OPC UA Variant data type; ByteString uses base64 and DateTime uses ISO 8601."
-          }
-        },
-        "required": ["node_id", "value"]
-      }
-    },
-    {
-      "name": "browse_opcua_node_children",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "capability": null,
-      "description": "Browse the children of a specific OPC UA node",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID to browse (e.g., 'ns=0;i=85' for Objects folder)."
-          }
-        },
-        "required": ["node_id"]
-      }
-    },
-    {
-      "name": "read_multiple_opcua_nodes",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "capability": null,
-      "description": "Read the values of multiple OPC UA nodes in a single request",
+      "capabilities": [],
+      "resultShape": "nodeValues",
+      "description": "Read the current value of one or more OPC UA nodes in a single request. Pass every node you need in one call: the OPC UA server answers them together, so reading fifty nodes costs one round trip rather than fifty. Each node comes back as its own record with the value, its data type, the OPC UA status code, and the source and server timestamps — the quality and the age are what decide whether a value can be acted on, and a bare number carries neither. A node the server rejects is one 'Bad…' status among the results, not a failure of the call.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "node_ids": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "A list of OPC UA node IDs to read (e.g., ['ns=2;i=2', 'ns=2;i=3'])."
+            "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list."
           }
         },
         "required": ["node_ids"]
       }
     },
     {
-      "name": "write_multiple_opcua_nodes",
-      "accessClass": "control",
-      "guard": {
-        "$comment": "`[]` means every element of that array. One forbidden target rejects the whole batch before a single write is sent, so a batch can never end up partially authorised.",
-        "nodeIdPaths": ["nodes_to_write[].node_id"]
-      },
-      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
-      "capability": null,
-      "description": "Write values to multiple OPC UA nodes in a single request",
+      "name": "browse_opcua_nodes",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "capabilities": [],
+      "resultShape": "nodeRefs",
+      "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "nodes_to_write": {
+          "node_id": {
+            "type": "string",
+            "description": "Where to start, as a node ID. Defaults to the Objects folder 'ns=0;i=85', the root of the plant's own address space. Ignored when `browse_path` is given."
+          },
+          "browse_path": {
+            "type": "string",
+            "description": "Where to start, as a slash-separated browse path resolved through the server ('/Objects/Reactor/Temperature', or 'Reactor/Temperature' relative to `node_id`). Use this when you know what a thing is called but not its node ID. A path the server cannot resolve is an error, not an empty result."
+          },
+          "depth": {
+            "type": "integer",
+            "description": "How many levels below the starting node to walk. 1 (the default) lists its immediate children; 0 returns only the starting node itself, which is how to resolve a `browse_path` to a node ID. Clamped to 64."
+          },
+          "node_class": {
+            "type": "string",
+            "description": "Keep only nodes of this OPC UA NodeClass: 'Variable' for readable tags, 'Object' for structure, 'Method' for callable operations. Every class is returned when unset. Filtering does not prune the walk — an Object is still descended into when `depth` allows."
+          },
+          "name_filter": {
+            "type": "string",
+            "description": "Keep only nodes whose browse name contains this text, case-insensitively. Searching for 'temp' below the Objects folder is how to find a tag whose exact name you do not know."
+          },
+          "include_values": {
+            "type": "boolean",
+            "description": "Read each Variable's current value as it is found (default false). Costs one extra read per variable, so leave it off when mapping a large address space and read what you need with read_opcua_nodes afterwards."
+          },
+          "max_nodes": {
+            "type": "integer",
+            "description": "Stop after inspecting this many nodes (default 500, clamped to 5000). A traversal that stops early sets 'truncated' in the result."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "read_opcua_history",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "capabilities": ["history", "aggregate"],
+      "resultShape": "historyRecords",
+      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. The `aggregate_function` argument is only advertised when the connected server reports aggregate support, and its description then lists the functions that server actually offers. This tool is advertised when the server supports historical access *or* aggregates — either capability makes some form of it usable, and a raw read against an aggregate-only server is refused by that server rather than hidden here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The OPC UA node ID to read history for. Example: 'ns=2;i=2'."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the time range, ISO-8601 ('2026-09-09T12:00:00Z'). A naive timestamp is read as UTC. Required when `aggregate_function` is given; for a raw read, defaults to one hour before `end_time`."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the time range, ISO-8601. Defaults to now (UTC)."
+          },
+          "num_values": {
+            "type": "integer",
+            "description": "Maximum number of raw readings to return. 0 (the default) means every reading in the range. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
+          },
+          "aggregate_function": {
+            "type": "string",
+            "description": "Summarise each interval with this OPC UA aggregate instead of returning raw readings"
+          },
+          "processing_interval": {
+            "type": "number",
+            "description": "Width in milliseconds of each interval the aggregate is computed over. 0 (the default) makes the whole range a single interval, giving one result. Only meaningful with `aggregate_function`."
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "get_server_status",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "capabilities": [],
+      "resultShape": "serverStatus",
+      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server.",
+      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "list_subscriptions",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "capabilities": [],
+      "resultShape": "subscriptionRecords",
+      "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. This is how to collect what subscribe_opcua_nodes has been watching; the same document is also readable as the 'opcua://subscriptions' resource.",
+      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+    },
+    {
+      "name": "list_active_alarms",
+      "accessClass": "read",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
+      "capabilities": [],
+      "resultShape": "eventRecords",
+      "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the current state of the plant rather than whatever this MCP server happened to be listening for. Use this to answer 'what is wrong right now'; use read_events to see what has happened since you last looked.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The notifier node whose conditions to list. Defaults to the Server object 'ns=0;i=2253'."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "write_opcua_nodes",
+      "accessClass": "control",
+      "guard": {
+        "$comment": "Every node id reached by nodeIdPaths must be in the operator profile's writable-node allowlist. `[]` means every element of that array. One forbidden target rejects the whole batch before a single write is sent, so a batch can never end up partially authorised. The policy layer walks this declaration; it does not know this tool's name. A control tool with no `guard` is denied, so a new one cannot become callable by being added to the contract alone.",
+        "nodeIdPaths": ["nodes[].node_id"]
+      },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
+      "capabilities": [],
+      "resultShape": "writeResults",
+      "description": "Write a value to one or more OPC UA nodes. THIS CHANGES PHYSICAL EQUIPMENT: a setpoint written here moves a real machine. Each node comes back with the OPC UA status the server answered, in the order asked, so a batch where one node was rejected still reports what the others did. Without `data_type` this server reads each node first to learn its type and converts the value to match, which costs a round trip and cannot work for a write-only node; give `data_type` to skip that and to be explicit about what is being written. Under the 'operator' profile only nodes on the configured allowlist may be written, and one forbidden target rejects the whole batch before anything is sent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "nodes": {
             "type": "array",
+            "description": "The writes to perform. A single write is a one-element list.",
             "items": {
               "type": "object",
               "properties": {
-                "node_id": { "type": "string" },
+                "node_id": {
+                  "type": "string",
+                  "description": "The OPC UA node ID to write to. Example: 'ns=2;i=2'."
+                },
                 "value": {
-                  "description": "JSON scalar or array converted using this node's OPC UA Variant data type."
+                  "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work."
+                },
+                "data_type": {
+                  "type": "string",
+                  "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
                 }
               },
               "required": ["node_id", "value"]
-            },
-            "description": "A list of objects containing 'node_id' and 'value'. Example: [{'node_id': 'ns=2;i=2', 'value': '10.5'}, {'node_id': 'ns=2;i=3', 'value': 'active'}]"
+            }
           }
         },
-        "required": ["nodes_to_write"]
+        "required": ["nodes"]
       }
     },
     {
@@ -376,87 +637,43 @@
         "methodPaths": [{ "objectPath": "object_node_id", "methodPath": "method_node_id" }]
       },
       "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
-      "capability": null,
-      "description": "Call a method on a specific OPC UA object node",
+      "capabilities": [],
+      "resultShape": "methodResult",
+      "description": "Call a method on an OPC UA object. THIS CHANGES PHYSICAL EQUIPMENT: a method here starts, stops or reconfigures a real process, and unlike a write it cannot be assumed safe to repeat. Arguments are converted to the types the method declares — this server reads the method's InputArguments definition, so a Boolean argument is sent as a Boolean and an Int32 as an Int32 rather than everything becoming a Double or a String. The method's output arguments come back in `outputs`. Under the 'operator' profile only the (object, method) pairs on the configured allowlist may be called.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "object_node_id": {
             "type": "string",
-            "description": "The OPC UA node ID of the object that contains the method. Example: 'ns=2;i=1' for the Methods folder."
+            "description": "The OPC UA node ID of the object that owns the method. Example: 'ns=2;i=1'."
           },
           "method_node_id": {
             "type": "string",
-            "description": "The OPC UA node ID of the method to call. Example: 'ns=2;i=2' for StartProduction method."
+            "description": "The OPC UA node ID of the method to call. Example: 'ns=2;i=2'."
           },
           "arguments": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "List of arguments to pass to the method. Arguments will be converted to appropriate OPC UA variants."
+            "description": "Arguments in the order the method declares them. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean.",
+            "items": {}
           }
         },
         "required": ["object_node_id", "method_node_id"]
       }
     },
     {
-      "name": "get_all_variables",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "capability": null,
-      "description": "Discover OPC UA variables with explicit traversal limits, excluding those under the built-in 'Server' object",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "root_node_id": {
-            "type": "string",
-            "description": "Node at which discovery starts. Defaults to the Objects folder (ns=0;i=85)."
-          },
-          "max_depth": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 64,
-            "description": "Maximum object depth to browse below the root. Defaults to 8; capped at 64."
-          },
-          "max_nodes": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5000,
-            "description": "Maximum referenced nodes to inspect before returning a truncated result. Defaults to 500; capped at 5000."
-          },
-          "include_values": {
-            "type": "boolean",
-            "description": "Read each variable's current value. Defaults to true; set false for a cheaper address-space inventory."
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "name": "get_server_status",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "resultShape": "serverStatus",
-      "capability": null,
-      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its namespace array (namespace index -> URI). Answers 'are we connected, to what, and is it healthy?' in one call, and is the first thing to try when another tool fails. Never fails for being disconnected: it reports that instead, with the reason",
-      "inputSchema": {
-        "type": "object",
-        "properties": {},
-        "required": []
-      }
-    },
-    {
-      "name": "subscribe_opcua_node",
+      "name": "subscribe_opcua_nodes",
       "accessClass": "monitor",
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+      "capabilities": [],
       "resultShape": "subscriptionRecords",
-      "capability": null,
-      "description": "Subscribe to data changes on a specific OPC UA node. The OPC UA server pushes each new value into a buffer this MCP server keeps; re-read it with `list_subscriptions` or the `opcua://subscriptions` resource instead of polling `read_opcua_node`",
+      "description": "Watch one or more OPC UA nodes for value changes instead of polling them. The OPC UA server pushes each new value into a buffer this MCP server keeps; collect them with list_subscriptions or the 'opcua://subscriptions' resource. This is the right way to answer 'tell me when this changes' or 'what has this been doing' over a short window — repeatedly calling read_opcua_nodes both misses changes between calls and costs a round trip each time. Each node gets its own subscription record and its own ID; cancel them with unsubscribe_opcua_nodes. Subscriptions are re-established automatically if the connection drops.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID to monitor, in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=3'."
+          "node_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The OPC UA node IDs to monitor. Example: ['ns=2;i=3']. A single node is a one-element list."
           },
           "publishing_interval": {
             "type": "number",
@@ -464,52 +681,42 @@
           },
           "sampling_interval": {
             "type": "number",
-            "description": "How often (ms) the OPC UA server samples the node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
+            "description": "How often (ms) the OPC UA server samples each node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
           },
           "buffer_size": {
             "type": "integer",
-            "description": "How many of the most recent changes to retain for this subscription; older ones are discarded. Default 20, clamped to 1..1000."
+            "description": "How many of the most recent changes to retain per subscription; older ones are discarded. Default 20, clamped to 1..1000."
           }
         },
-        "required": ["node_id"]
+        "required": ["node_ids"]
       }
     },
     {
-      "name": "list_subscriptions",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "resultShape": "subscriptionRecords",
-      "capability": null,
-      "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created",
-      "inputSchema": {
-        "type": "object",
-        "properties": {},
-        "required": []
-      }
-    },
-    {
-      "name": "unsubscribe_opcua_node",
+      "name": "unsubscribe_opcua_nodes",
       "accessClass": "monitor",
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
-      "capability": null,
-      "description": "Cancel an active OPC UA data-change subscription and discard its buffered changes",
+      "capabilities": [],
+      "resultShape": "subscriptionRecords",
+      "description": "Cancel one or more active data-change subscriptions and discard what they had buffered. Returns the subscriptions as they were at the moment they were cancelled, so anything still buffered can be read one last time. An ID that is not active is an error naming it, and no subscription is cancelled.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "subscription_id": {
-            "type": "string",
-            "description": "The subscription ID returned by `subscribe_opcua_node`, as listed by `list_subscriptions`. Example: 'sub-1'."
+          "subscription_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The subscription IDs returned by subscribe_opcua_nodes, as listed by list_subscriptions. Example: ['sub-1']."
           }
         },
-        "required": ["subscription_id"]
+        "required": ["subscription_ids"]
       }
     },
     {
       "name": "subscribe_events",
       "accessClass": "monitor",
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
-      "capability": null,
-      "description": "Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. Returns at once; the events themselves are collected in the background and read with read_events. Calling this again for the same node restarts the subscription with the new settings",
+      "capabilities": [],
+      "resultShape": "eventSubscription",
+      "description": "Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. Returns at once; the events themselves are collected in the background and read with read_events. Calling it again for the same node replaces the subscription and discards what it had buffered. Use this to watch for things happening; use list_active_alarms for what is wrong right now.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -533,9 +740,9 @@
       "name": "read_events",
       "accessClass": "monitor",
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+      "capabilities": [],
       "resultShape": "eventRecords",
-      "capability": null,
-      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, a note saying how many events were lost follows them",
+      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, the result says how many were dropped rather than quietly skipping them.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -552,28 +759,6 @@
       }
     },
     {
-      "name": "list_active_alarms",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "resultShape": "eventRecords",
-      "capability": null,
-      "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the server's own current set and needs no prior subscription. Fails rather than answering with a partial list if the server does not finish within timeout_seconds",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The notifier node whose conditions to list. Defaults to the Server object 'ns=0;i=2253'."
-          },
-          "timeout_seconds": {
-            "type": "number",
-            "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
-          }
-        },
-        "required": []
-      }
-    },
-    {
       "name": "acknowledge_alarm",
       "accessClass": "alarm-action",
       "guard": {
@@ -581,8 +766,9 @@
         "flag": "acknowledgeAlarms"
       },
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
-      "capability": null,
-      "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition",
+      "capabilities": [],
+      "resultShape": "acknowledgement",
+      "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition, and it is visible to every other client. Disabled unless the deployment policy explicitly allows it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -600,70 +786,6 @@
           }
         },
         "required": ["event_id"]
-      }
-    },
-    {
-      "name": "read_history_opcua_node",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "resultShape": "historyRecords",
-      "capability": "history",
-      "description": "Read the historical values of a specific OPC UA node",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=2'."
-          },
-          "start_time": {
-            "type": "string",
-            "description": "Beginning of the retrieval"
-          },
-          "end_time": {
-            "type": "string",
-            "description": "End of the retrieval"
-          },
-          "num_values": {
-            "type": "integer",
-            "description": "Number of values to read (default: unlimited)"
-          }
-        },
-        "required": ["node_id"]
-      }
-    },
-    {
-      "name": "read_aggregate_opcua_node",
-      "accessClass": "read",
-      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
-      "resultShape": "historyRecords",
-      "capability": "aggregate",
-      "description": "Calculate the historical aggregates over a defined time range, divided into smaller chunks defined by the `processing_interval` (in milliseconds). The server divides the [`start_time`, `end_time`] domain into these intervals, returning one aggregated value per interval",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "description": "The OPC UA node ID in the format 'ns=<namespace>;i=<identifier>'. Example: 'ns=2;i=2'."
-          },
-          "start_time": {
-            "type": "string",
-            "description": "Beginning of the retrieval"
-          },
-          "end_time": {
-            "type": "string",
-            "description": "End of the retrieval (defaults to 'now')"
-          },
-          "aggregate_function": {
-            "type": "string",
-            "description": "The specific formula"
-          },
-          "processing_interval": {
-            "type": "number",
-            "description": "The duration (ms) for each computed value. If set to 0, the server calculates a single aggregate value for the entire range."
-          }
-        },
-        "required": ["node_id", "start_time", "aggregate_function"]
       }
     }
   ]

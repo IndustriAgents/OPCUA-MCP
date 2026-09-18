@@ -9,7 +9,7 @@ from opcua_mcp_server.contract import CONTRACT
 from opcua_mcp_server.policy import ToolPolicy, describe_policy, parse_policy_config
 
 TOOLS = {tool["name"]: tool for tool in CONTRACT["tools"]}
-CONTROL = {"write_opcua_node", "write_multiple_opcua_nodes", "call_opcua_method"}
+CONTROL = {"write_opcua_nodes", "call_opcua_method"}
 ALARM_ACTIONS = {"acknowledge_alarm"}
 
 
@@ -48,13 +48,13 @@ def test_operator_only_exposes_configured_control_targets():
         }
     )
     assert visible(p) >= CONTROL | ALARM_ACTIONS
-    p.authorize("write_opcua_node", {"node_id": "ns=2;i=13", "value": "1"})
+    p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "1"}]})
     p.authorize(
         "call_opcua_method",
         {"object_node_id": "ns=2;i=27", "method_node_id": "ns=2;i=28"},
     )
     with pytest.raises(PermissionError, match="not writable"):
-        p.authorize("write_opcua_node", {"node_id": "ns=2;i=14", "value": "1"})
+        p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=14", "value": "1"}]})
     with pytest.raises(PermissionError, match="not allowed"):
         p.authorize(
             "call_opcua_method",
@@ -66,8 +66,7 @@ def test_operator_catalog_hides_control_families_without_targets():
     base = {"OPCUA_PROFILE": "operator", "OPCUA_SECURITY_POLICY": "Basic256Sha256"}
     write_only = policy({**base, "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=13"})
     assert visible(write_only) & CONTROL == {
-        "write_opcua_node",
-        "write_multiple_opcua_nodes",
+        "write_opcua_nodes",
     }
     method_only = policy({**base, "OPCUA_ALLOWED_METHODS": "ns=2;i=27|ns=2;i=28"})
     assert visible(method_only) & CONTROL == {"call_opcua_method"}
@@ -83,9 +82,9 @@ def test_batch_write_is_rejected_before_any_item_can_run():
     )
     with pytest.raises(PermissionError, match="ns=2;i=14"):
         p.authorize(
-            "write_multiple_opcua_nodes",
+            "write_opcua_nodes",
             {
-                "nodes_to_write": [
+                "nodes": [
                     {"node_id": "ns=2;i=13", "value": "1"},
                     {"node_id": "ns=2;i=14", "value": "2"},
                 ]
@@ -98,10 +97,10 @@ def test_allowed_tools_can_only_narrow_a_profile():
         {
             "OPCUA_PROFILE": "full",
             "OPCUA_ALLOW_INSECURE_CONTROL": "true",
-            "OPCUA_ALLOWED_TOOLS": "read_opcua_node,write_opcua_node",
+            "OPCUA_ALLOWED_TOOLS": "read_opcua_nodes,write_opcua_nodes",
         }
     )
-    assert visible(p) == {"read_opcua_node", "write_opcua_node"}
+    assert visible(p) == {"read_opcua_nodes", "write_opcua_nodes"}
 
 
 def test_unknown_profile_and_tool_fail_at_configuration_time():
@@ -214,10 +213,10 @@ def test_an_unknown_access_class_is_denied():
 def test_a_guard_path_that_selects_nothing_denies():
     """A write whose target cannot be located is a write whose target cannot be checked."""
     p = operator()
-    with pytest.raises(PermissionError, match="requires node_id"):
-        p.authorize("write_opcua_node", {"value": 1})
-    with pytest.raises(PermissionError, match=r"requires nodes_to_write\.node_id"):
-        p.authorize("write_multiple_opcua_nodes", {"nodes_to_write": [{"value": 1}]})
+    with pytest.raises(PermissionError, match=r"requires nodes\.node_id"):
+        p.authorize("write_opcua_nodes", {"nodes": [{"value": 1}]})
+    with pytest.raises(PermissionError, match=r"requires nodes\.node_id"):
+        p.authorize("write_opcua_nodes", {})
 
 
 def test_one_forbidden_target_rejects_the_whole_batch():
@@ -225,8 +224,8 @@ def test_one_forbidden_target_rejects_the_whole_batch():
     p = operator()
     with pytest.raises(PermissionError, match="ns=2;i=99 is not writable"):
         p.authorize(
-            "write_multiple_opcua_nodes",
-            {"nodes_to_write": [{"node_id": "ns=2;i=13"}, {"node_id": "ns=2;i=99"}]},
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": "ns=2;i=13"}, {"node_id": "ns=2;i=99"}]},
         )
 
 
@@ -250,7 +249,7 @@ def test_the_allowlist_matches_the_same_node_spelled_either_way(allowed, request
     — a denial, which is safe, but indistinguishable from a policy mistake.
     """
     p = operator(OPCUA_ALLOWED_WRITE_NODES=allowed)
-    p.authorize("write_opcua_node", {"node_id": requested, "value": 1})
+    p.authorize("write_opcua_nodes", {"nodes": [{"node_id": requested, "value": 1}]})
 
 
 def test_a_method_pair_is_canonicalised_on_both_sides():
@@ -275,7 +274,7 @@ def test_a_namespace_uri_entry_authorises_the_node_at_that_uris_index():
     """The point of the `nsu=` form: the URI is stable, the index is not."""
     p = operator(OPCUA_ALLOWED_WRITE_NODES="nsu=urn:plant:line-a;i=5")
     p.bind_namespaces(NAMESPACES)
-    p.authorize("write_opcua_node", {"node_id": "ns=1;i=5", "value": 1})
+    p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=1;i=5", "value": 1}]})
 
 
 def test_the_same_entry_follows_a_reordered_namespace_array():
@@ -287,12 +286,12 @@ def test_the_same_entry_follows_a_reordered_namespace_array():
     """
     p = operator(OPCUA_ALLOWED_WRITE_NODES="nsu=urn:plant:line-a;i=5")
     p.bind_namespaces(NAMESPACES)
-    p.authorize("write_opcua_node", {"node_id": "ns=1;i=5", "value": 1})
+    p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=1;i=5", "value": 1}]})
 
     p.bind_namespaces(["http://opcfoundation.org/UA/", "urn:other", "urn:plant:line-a"])
-    p.authorize("write_opcua_node", {"node_id": "ns=2;i=5", "value": 1})
+    p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=5", "value": 1}]})
     with pytest.raises(PermissionError, match="not writable"):
-        p.authorize("write_opcua_node", {"node_id": "ns=1;i=5", "value": 1})
+        p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=1;i=5", "value": 1}]})
 
 
 def test_a_namespace_uri_the_server_does_not_publish_authorises_nothing():
@@ -300,14 +299,14 @@ def test_a_namespace_uri_the_server_does_not_publish_authorises_nothing():
     p.bind_namespaces(NAMESPACES)
     for candidate in ("ns=0;i=5", "ns=1;i=5", "nsu=urn:not:here;i=5"):
         with pytest.raises(PermissionError, match="not writable"):
-            p.authorize("write_opcua_node", {"node_id": candidate, "value": 1})
+            p.authorize("write_opcua_nodes", {"nodes": [{"node_id": candidate, "value": 1}]})
 
 
 def test_a_namespace_uri_entry_denies_until_the_namespaces_are_known():
     """Unknown is not empty. Resolving optimistically would authorise the wrong node."""
     p = operator(OPCUA_ALLOWED_WRITE_NODES="nsu=urn:plant:line-a;i=5")
     with pytest.raises(PermissionError, match="not writable"):
-        p.authorize("write_opcua_node", {"node_id": "ns=1;i=5", "value": 1})
+        p.authorize("write_opcua_nodes", {"nodes": [{"node_id": "ns=1;i=5", "value": 1}]})
 
 
 def test_binding_namespaces_warns_about_an_entry_that_can_never_match(capsys):

@@ -120,7 +120,7 @@ describe("the diagnostics tool", () => {
     const tool = CONTRACT.tools.find((candidate) => candidate.name === "get_server_status");
     assert.ok(tool, "get_server_status is missing from the contract");
     assert.equal(tool.accessClass, "read");
-    assert.equal(tool.capability, null);
+    assert.deepEqual(tool.capabilities, []);
     assert.equal(tool.annotations.readOnlyHint, true);
     assert.equal(tool.resultShape, "serverStatus");
   });

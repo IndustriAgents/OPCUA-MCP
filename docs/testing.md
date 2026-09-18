@@ -77,7 +77,7 @@ It prints a `http://localhost:6274/?...` URL. In the browser:
 
 1. Click **Connect** (status should turn green).
 2. Open the **Tools** tab → **List Tools**.
-   - Seeing **`read_history_opcua_node`** confirms the server detected history
+   - Seeing **`read_opcua_history`** confirms the server detected history
      support on the mock and exposed the tool.
 3. Select a tool, fill the form, click **Run Tool**, read the result pane.
 
@@ -85,20 +85,20 @@ Things to try:
 
 | Tool | Arguments | Expected |
 |------|-----------|----------|
-| `read_opcua_node` | `node_id` = `ns=2;i=3` | `Node ns=2;i=3 value: 26.x` |
-| `get_all_variables` | *(none)* | `Found 22 variables: …` |
-| `read_history_opcua_node` | `node_id` = `ns=2;i=3`, `num_values` = `5` | 5 records of `{ value, timestamp, status }`, status `Good`, ISO-8601 UTC timestamps — identical on both servers |
-| `read_history_opcua_node` | `node_id` = `ns=2;i=3`, `start_time` = `2026-01-01T00:00:00Z` | records within the window |
-| `read_history_opcua_node` | `node_id` = `ns=2;i=3`, `start_time` = `nope` | clear error: *Use ISO 8601…* |
-| `write_opcua_node` | `node_id` = `ns=2;i=13`, `value` = `80` | `Successfully wrote 80…` |
+| `read_opcua_nodes` | `node_id` = `ns=2;i=3` | `Node ns=2;i=3 value: 26.x` |
+| `browse_opcua_nodes` | *(none)* | `Found 22 variables: …` |
+| `read_opcua_history` | `node_id` = `ns=2;i=3`, `num_values` = `5` | 5 records of `{ value, timestamp, status }`, status `Good`, ISO-8601 UTC timestamps — identical on both servers |
+| `read_opcua_history` | `node_id` = `ns=2;i=3`, `start_time` = `2026-01-01T00:00:00Z` | records within the window |
+| `read_opcua_history` | `node_id` = `ns=2;i=3`, `start_time` = `nope` | clear error: *Use ISO 8601…* |
+| `write_opcua_nodes` | `node_id` = `ns=2;i=13`, `value` = `80` | `Successfully wrote 80…` |
 | `call_opcua_method` | `object_node_id` = `ns=2;i=27`, `method_node_id` = `ns=2;i=28`, `arguments` = `["60"]` | `…Result: true` (SystemMode → AUTO within ~1s) |
-| `subscribe_opcua_node` | `node_id` = `ns=2;i=3`, `publishing_interval` = `500` | one record, `change_count` 0 or 1 |
+| `subscribe_opcua_nodes` | `node_id` = `ns=2;i=3`, `publishing_interval` = `500` | one record, `change_count` 0 or 1 |
 | `list_subscriptions` | *(none)* | a few seconds later, the same record with `change_count` climbing and `changes` filling |
-| `unsubscribe_opcua_node` | `subscription_id` = `sub-1` | `Unsubscribed sub-1 from node ns=2;i=3 after N value changes` |
+| `unsubscribe_opcua_nodes` | `subscription_id` = `sub-1` | `Unsubscribed sub-1 from node ns=2;i=3 after N value changes` |
 | `subscribe_events` | *(none)* | `Subscribed to events from node ns=0;i=2253…` |
-| `write_opcua_node` | `node_id` = `ns=2;i=25`, `value` = `true` | emergency stop — the mock raises an alarm event |
+| `write_opcua_nodes` | `node_id` = `ns=2;i=25`, `value` = `true` | emergency stop — the mock raises an alarm event |
 | `read_events` | *(none)* | one record, `message` = `Alarm active: emergency stop`, `severity` 700 |
-| `write_opcua_node` | `node_id` = `ns=2;i=26`, `value` = `true` | reset — the next `read_events` shows `Alarm cleared` |
+| `write_opcua_nodes` | `node_id` = `ns=2;i=26`, `value` = `true` | reset — the next `read_events` shows `Alarm cleared` |
 | `list_active_alarms` | *(none)* | a clear *ConditionRefresh failed…* error: python-opcua has no condition model. Point at the alarms mock below for the working path |
 
 The **Resources** tab lists one resource, `opcua://subscriptions`. Read it while
@@ -119,7 +119,7 @@ $BIN --method resources/list
 $BIN --method resources/read --uri opcua://subscriptions
 
 # read history (note: quote node IDs because ';' is a shell separator)
-$BIN --method tools/call --tool-name read_history_opcua_node \
+$BIN --method tools/call --tool-name read_opcua_history \
      --tool-arg 'node_id=ns=2;i=3' --tool-arg 'num_values=5'
 
 # call a method
@@ -151,7 +151,7 @@ it again on the same endpoint. Neither MCP server needs restarting:
 
 Other tools report `Not connected to the OPC UA server at …: … Call
 get_server_status for details.` while it is down, and start working again by
-themselves. A `subscribe_opcua_node` made before the outage keeps its ID and
+themselves. A `subscribe_opcua_nodes` made before the outage keeps its ID and
 resumes delivering. Tune how hard and how long the retrying goes with
 `OPCUA_RECONNECT_MAX_RETRY`, `OPCUA_RECONNECT_INITIAL_DELAY_MS`,
 `OPCUA_RECONNECT_MAX_DELAY_MS` and `OPCUA_SESSION_TIMEOUT_MS`; the servers print
@@ -181,8 +181,8 @@ its `HighTemperatureAlarm` already active and unacknowledged:
 |------|-----------|----------|
 | `list_active_alarms` | *(none)* | one record, `condition_name` = `HighTemperatureAlarm`, `acked` = `false` |
 | `acknowledge_alarm` | `event_id` = *(the `event_id` above)*, `comment` = `on it` | `Acknowledged alarm ns=1;i=1002 …`, and `acked` is `true` next time you list |
-| `write_opcua_node` | `node_id` = `ns=1;i=1001`, `value` = `20` | below the limit: the alarm goes inactive |
-| `write_opcua_node` | `node_id` = `ns=1;i=1001`, `value` = `100` | above it again: a fresh, unacknowledged alarm |
+| `write_opcua_nodes` | `node_id` = `ns=1;i=1001`, `value` = `20` | below the limit: the alarm goes inactive |
+| `write_opcua_nodes` | `node_id` = `ns=1;i=1001`, `value` = `100` | above it again: a fresh, unacknowledged alarm |
 
 ---
 
@@ -211,9 +211,9 @@ Then, in a **new** Claude Code session started in this directory:
 3. Ask away — example prompts:
    - *"List the OPC UA tools you have available."*
    - *"Read the current temperature from the OPC UA server."*
-   - *"Show me the last 5 temperature history readings."* → `read_history_opcua_node`
+   - *"Show me the last 5 temperature history readings."* → `read_opcua_history`
    - *"Give me a full inventory of all variables on the server."*
-   - *"Watch the tank level for the next 30 seconds and tell me what it did."* → `subscribe_opcua_node` / `list_subscriptions`
+   - *"Watch the tank level for the next 30 seconds and tell me what it did."* → `subscribe_opcua_nodes` / `list_subscriptions`
    - *"Start production at 60 units/hour, check the system mode, then stop it."*
    - *"Watch for events, trigger the emergency stop, then tell me what came in."*
    - *"What alarms are active, and can you acknowledge the temperature one?"*
@@ -314,8 +314,8 @@ itself, are in [certificates.md](certificates.md).
 | Symptom | Cause / fix |
 |---------|-------------|
 | **List Tools is empty or errors** | Mock server not running → `uv run --no-sync opcua-mock-server` |
-| **`read_history_opcua_node` not listed** | Connected to a server without history, or wrong `OPCUA_SERVER_URL` |
-| **`read_aggregate_opcua_node` not listed** | Expected — the bundled mock advertises no aggregate functions, so the tool is correctly hidden |
+| **`read_opcua_history` not listed** | Connected to a server without history, or wrong `OPCUA_SERVER_URL` |
+| **`read_opcua_history` not listed** | Expected — the bundled mock advertises no aggregate functions, so the tool is correctly hidden |
 | **`read_events` returns nothing** | Nothing has been raised since the last read. The bundled mock only raises an event when its alarm state *changes* — write `true` to `ns=2;i=25`, then to `ns=2;i=26` |
 | **`list_active_alarms` reports `ConditionRefresh failed`** | The server implements no Alarms & Conditions. Expected against the bundled mock; use `packages/mock-server-alarms` |
 | **`Address already in use` on :4840** | Another mock is on the default port; stop it (`lsof -tiTCP:4840 -sTCP:LISTEN \| xargs kill`) or pass `--endpoint`. The test suite is unaffected — it picks its own port. |

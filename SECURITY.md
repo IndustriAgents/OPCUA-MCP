@@ -17,9 +17,25 @@ variables on both runtimes, documented in the
 OPCUA_SECURITY_POLICY=Basic256Sha256   # implies SignAndEncrypt
 OPCUA_CLIENT_CERT=/etc/opcua/client.pem
 OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
+OPCUA_SERVER_CERT=/etc/opcua/server.pem  # pin the server; see below
 OPCUA_USERNAME=mcp-operator
 OPCUA_PASSWORD=…
 ```
+
+**Set `OPCUA_SERVER_CERT`.** Without it the server's certificate is whatever the
+endpoint presented, so the channel is encrypted *to whoever answered* — DNS, ARP,
+a compromised switch or a mistyped endpoint all reach that. Both servers say so
+on stderr when it is unset, on an otherwise fully secured connection, because
+`policy=Basic256Sha256 mode=SignAndEncrypt` reads like the connection is safe and
+the one thing it does not establish is who is on the other end.
+
+For X.509 *user* authentication, set `OPCUA_USER_CERT` and `OPCUA_USER_KEY`
+instead of `OPCUA_USERNAME`/`OPCUA_PASSWORD`. That is a **different key pair**
+from `OPCUA_CLIENT_CERT`: the client certificate is the application's identity
+and secures the channel, the user certificate is the user's and is what the
+server checks against its user list. Configuring both a user certificate and a
+username is refused at startup — a session carries one identity, and silently
+picking one would leave the operator believing the other was in force.
 
 The ApplicationUri the session announces is taken from the `subjectAltName` of
 the client certificate, which is what servers check it against;
@@ -33,11 +49,13 @@ exist — is rejected at startup rather than at the first tool call.
 
 What this does **not** do, and you should still plan for:
 
-- **Server certificate verification.** The server's certificate is taken from
-  its endpoint description during the handshake; neither runtime pins it or
-  validates it against a trust list, so encryption here protects against passive
-  eavesdropping, not against an attacker who can impersonate the endpoint. The
-  other direction is checked by the server: it decides whether to trust the
+- **Trust-list validation of the server certificate.** `OPCUA_SERVER_CERT` pins
+  one expected certificate, which is the strongest option here and the one to
+  use; what is *not* implemented is a CA trust store with revocation checking,
+  so a deployment rotating server certificates has to update the pinned file.
+  Leaving `OPCUA_SERVER_CERT` unset falls back to the old behaviour — the
+  certificate is taken from the endpoint description and not verified at all.
+  The other direction is checked by the server: it decides whether to trust the
   client certificate you configure.
 - **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
   `OPCUA_PASSWORD` without a security policy is authentication, not
@@ -45,8 +63,6 @@ What this does **not** do, and you should still plan for:
   the server's user-token policy specifies no security policy of its own. Both
   servers warn about this on stderr; set `OPCUA_SECURITY_POLICY` rather than
   relying on the server to encrypt the token.
-- **Certificate-based *user* authentication** (`X509IdentityToken`). User
-  identity is anonymous or username/password only.
 - **Input validation on node IDs and written values**, beyond what the OPC UA
   server itself enforces.
 - **Secret handling.** `OPCUA_PASSWORD` is read from the environment, so it is

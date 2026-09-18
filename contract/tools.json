@@ -281,6 +281,10 @@
     {
       "name": "write_opcua_node",
       "accessClass": "control",
+      "guard": {
+        "$comment": "Every node id reached by nodeIdPaths must be in the operator profile's writable-node allowlist. The policy layer walks this declaration; it does not know this tool's name. A control tool with no `guard` is denied, so a new one cannot become callable by being added to the contract alone.",
+        "nodeIdPaths": ["node_id"]
+      },
       "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
       "capability": null,
       "description": "Write a value to a specific OPC UA node",
@@ -336,6 +340,10 @@
     {
       "name": "write_multiple_opcua_nodes",
       "accessClass": "control",
+      "guard": {
+        "$comment": "`[]` means every element of that array. One forbidden target rejects the whole batch before a single write is sent, so a batch can never end up partially authorised.",
+        "nodeIdPaths": ["nodes_to_write[].node_id"]
+      },
       "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
       "capability": null,
       "description": "Write values to multiple OPC UA nodes in a single request",
@@ -363,6 +371,10 @@
     {
       "name": "call_opcua_method",
       "accessClass": "control",
+      "guard": {
+        "$comment": "A method is allowlisted as the pair it is called as: the same method node under a different object is a different operation, and allowing one must not allow the other.",
+        "methodPaths": [{ "objectPath": "object_node_id", "methodPath": "method_node_id" }]
+      },
       "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
       "capability": null,
       "description": "Call a method on a specific OPC UA object node",
@@ -564,6 +576,10 @@
     {
       "name": "acknowledge_alarm",
       "accessClass": "alarm-action",
+      "guard": {
+        "$comment": "No per-argument allowlist: acknowledging is gated as a whole by the acknowledge_alarms flag, because a condition id is discovered at runtime from list_active_alarms and cannot be enumerated in a policy file ahead of time. Declared explicitly rather than left out — silence must never be mistaken for permission.",
+        "flag": "acknowledgeAlarms"
+      },
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "capability": null,
       "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition",

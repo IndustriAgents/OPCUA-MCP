@@ -92,7 +92,19 @@ def main() -> None:
             ua.SecurityPolicyType.Basic256Sha256_Sign,
         ]
     )
-    server.set_security_IDs(["Username"])
+    # "Username" and "Basic256Sha256" — python-opcua spells the *certificate*
+    # user-token policy with the name of a security policy, which is confusing
+    # but is what its client looks for (`certificate_basic256sha256`). Anonymous
+    # stays out: a client with no identity at all still has no way in.
+    #
+    # Note what this does *not* prove. python-opcua's server validates only
+    # `UserNameIdentityToken`; an `X509IdentityToken` is accepted without
+    # checking the signature or consulting any user list. So the X.509 test
+    # below shows that both runtimes present a certificate identity and get a
+    # working session — the wiring — not that a *wrong* certificate would be
+    # refused. No mock here can show that, the same limitation the module
+    # docstring records for client-certificate trust lists.
+    server.set_security_IDs(["Username", "Basic256Sha256"])
 
     def authenticate(isession, username: str, password: str) -> bool:
         isession.user = UserManager.User

@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Server-certificate verification** (#45). `OPCUA_SERVER_CERT` pins the
+  certificate the OPC UA server must present. Without it — the behaviour up to
+  now — the certificate is taken from the endpoint description and used to
+  encrypt to, which protects against passive eavesdropping but not against
+  whoever managed to answer: DNS, ARP, a compromised switch or a mistyped
+  endpoint all reach that. Both runtimes now say so on stderr on an otherwise
+  fully secured connection, because `policy=Basic256Sha256 mode=SignAndEncrypt`
+  reads like the connection is safe and the one thing it does not establish is
+  who is on the other end. Pinning silences the warning and adds
+  `server-cert=pinned` to the startup summary.
+
+  Pinning it on an unsecured channel is refused rather than ignored: with
+  `policy=None` the server presents no certificate at all, so the setting would
+  verify nothing while reading, in a config file, exactly like protection.
+
+  The test that matters is the negative one — a valid, well-formed impostor
+  certificate carrying the right ApplicationUri is refused by both runtimes,
+  with the positive case as its control. On the Node side this promotes
+  `node-opcua-crypto` from a transitive to a direct dependency.
+- **X.509 certificate-based user authentication** (#7). `OPCUA_USER_CERT` and
+  `OPCUA_USER_KEY` authenticate the *user* by certificate instead of
+  username/password. Deliberately named apart from `OPCUA_CLIENT_CERT`: that one
+  is the application's identity and secures the channel, this one is the user's
+  and is what the server checks against its user list — a different key pair,
+  and conflating the two is the obvious way to get this wrong. Configuring both
+  a user certificate and a username is refused at startup, because a session
+  carries one identity and silently picking one would leave the operator
+  believing the other was in force. The Node runtime signs the challenge through
+  `keyOperations`, so the private key never becomes a string in the process.
+
 - **Connection resilience: auto-reconnect, keep-alive and backoff** (#18). Neither
   server needs restarting when the OPC UA server does. A dropped or refused
   connection is retried with exponential backoff, configurable through four
@@ -212,6 +242,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   condition instance rather than against our own idea of one.
 
 ### Changed
+
+- **The tool policy authorises from the contract instead of a list of tool
+  names.** Each `control` and `alarm-action` tool now declares a `guard` in
+  `contract/tools.json` saying where its sensitive identifiers live —
+  `nodeIdPaths`, `methodPaths`, or a `flag` — and the policy walks that
+  declaration. **A control tool that declares no guard is denied**, and an
+  `accessClass` the contract spelled wrong is denied too, including under the
+  `full` profile.
+
+  This closes a fail-open. Argument validation was an if/else chain keyed on
+  three hardcoded tool names, and visibility ended in
+  `return writableNodes.size > 0` — so a *new* control tool added to the
+  contract became visible as soon as one node was writable and was then called
+  with **no argument validation at all**. In a repository whose thesis is
+  "derive from the contract, never hand-maintain a tool list", it was the one
+  place that hand-maintained one. A contract test now also fails if a control
+  tool is added without a guard, so the gap is reported when the contract is
+  edited rather than discovered later.
+
+  `monitor` tools remain outside the secure-channel gate, now with the reasoning
+  written down: that gate exists to stop *control* over a channel anyone can
+  read or forge, and a subscription changes nothing in the plant.
+- **Node-ID allowlists are canonicalised, and can be pinned by namespace URI.**
+  `i=2253` and `ns=0;i=2253` are the same node; matching was raw set membership
+  on untrimmed strings, so an entry written one way silently never matched a
+  request written the other. Both runtimes now share one canonicaliser — the
+  Python one existed in `records.py` and the policy layer did not use it, so
+  records agreed on a spelling while the allowlist did not — pinned from both
+  sides by `tests/fixtures/node-id-forms.json`.
+
+  More importantly, `OPCUA_ALLOWED_WRITE_NODES` and `OPCUA_ALLOWED_METHODS` now
+  accept `nsu=<namespace-uri>;i=5`. A namespace *index* is that node's position
+  in the server's NamespaceArray for the current session, so a firmware update
+  or a reordered namespace load can move it — and an allowlist written
+  `ns=2;i=5` then authorises writes to a **different physical node** with nothing
+  reporting anything wrong. Both servers read the NamespaceArray on every
+  connect and resolve URI-pinned entries against it. An entry naming a URI the
+  server does not publish matches nothing and is reported on stderr.
+- **The startup summary distinguishes a secured deployment from a lab override.**
+  `describePolicy` printed `insecure-control=enabled` for both, which made the
+  override the opposite of conspicuous. It now prints `control=secured`,
+  `control=INSECURE-OVERRIDE` or `control=blocked`.
+
 - The README badge and the contribution guide said **Node 18+**; the package has
   required Node 22.13+ since 0.3.0. Both now say so.
 - **The Python server now targets the `mcp` 2.x API.** 0.3.0 pinned `mcp[cli]<2`

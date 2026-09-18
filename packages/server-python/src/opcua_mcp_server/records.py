@@ -25,6 +25,7 @@ from math import isfinite
 from typing import Any
 
 from .datetimes import format_iso_utc
+from .node_ids import canonical_node_id
 
 #: An absent StatusCode means Good in OPC UA, so name it rather than return None.
 _DEFAULT_STATUS = "Good"
@@ -74,11 +75,14 @@ def _node_id_to_json(value: Any) -> str:
     an event's EventType and SourceNode are almost always in namespace 0, and the
     two servers would otherwise report ``"i=2253"`` and ``"ns=0;i=2253"`` for the
     same node.
+
+    The restoring itself is :func:`canonical_node_id`, shared with the policy
+    layer. It used to be written out here, which meant the *records* agreed on a
+    spelling while the allowlist compared raw strings and did not — so the same
+    node could be reported one way and authorised another.
     """
     text = value.to_string() if hasattr(value, "to_string") else str(value)
-    # Only the plain identifier forms; an ExpandedNodeId carrying a server index
-    # or a namespace URI ("svr=1;nsu=…") has no zero namespace to restore.
-    return f"ns=0;{text}" if text[:2] in ("i=", "s=", "g=", "b=") else text
+    return canonical_node_id(text)
 
 
 def scalar_to_json(value: Any, type_name: str = "") -> Any:

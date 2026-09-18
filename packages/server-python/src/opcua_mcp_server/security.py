@@ -59,6 +59,20 @@ class SecurityConfig:
     username: str | None = None
     #: Password for ``username``. May be empty, so ``None`` — not ``""`` — means unset.
     password: str | None = None
+    #: The OPC UA *server* certificate this client expects, pinned. Unset, both
+    #: client libraries take whatever certificate the endpoint presents and
+    #: encrypt to it — protection against passive eavesdropping, but not against
+    #: whoever managed to answer. Set, a server presenting anything else cannot
+    #: complete the handshake.
+    server_cert: str | None = None
+    #: Certificate identifying the *user*, for X.509 authentication. Deliberately
+    #: not ``client_cert``: that one secures the channel and is the application's
+    #: identity, this one is the user's, is a different key pair, and is what the
+    #: server checks against its user list. Conflating the two is the obvious way
+    #: to get this wrong, so they are named apart and validated apart.
+    user_cert: str | None = None
+    #: Private key for ``user_cert``. Signs the server's challenge; never sent.
+    user_key: str | None = None
 
 
 def _read(env: Mapping[str, str], name: str) -> str | None:
@@ -141,7 +155,50 @@ def parse_security_config(
 
     application_uri = _read(env, "OPCUA_APPLICATION_URI")
 
+    # --- server certificate verification ---------------------------------------
+    server_cert = _read(env, "OPCUA_SERVER_CERT")
+    if server_cert is not None and policy == "None":
+        # Refused rather than ignored. With no channel security the server's
+        # certificate is never exchanged, so pinning it would verify nothing
+        # while reading, in a config file, exactly like protection. A security
+        # control that silently does nothing is worse than its absence.
+        raise ValueError(
+            "OPCUA_SERVER_CERT requires OPCUA_SECURITY_POLICY to be set to a policy other "
+            "than None; with no channel security the server presents no certificate to verify"
+        )
+
+    # --- X.509 user authentication ----------------------------------------------
+    user_cert = _read(env, "OPCUA_USER_CERT")
+    user_key = _read(env, "OPCUA_USER_KEY")
+    if (user_cert is None) != (user_key is None):
+        raise ValueError(
+            "OPCUA_USER_CERT and OPCUA_USER_KEY must be set together (the user's certificate "
+            "and the private key that signs the server's challenge)"
+        )
+    if user_cert is not None and policy == "None":
+        raise ValueError(
+            "OPCUA_USER_CERT requires OPCUA_SECURITY_POLICY to be set to a policy other than "
+            "None; the certificate challenge is signed over the server certificate, which an "
+            "unsecured channel does not carry"
+        )
+
+    for name, path in (
+        ("OPCUA_SERVER_CERT", server_cert),
+        ("OPCUA_USER_CERT", user_cert),
+        ("OPCUA_USER_KEY", user_key),
+    ):
+        if path and not exists(path):
+            raise ValueError(f"{name} does not exist: {path}")
+
     username = _read(env, "OPCUA_USERNAME")
+    if user_cert is not None and username is not None:
+        # One session carries one user identity token. Accepting both would mean
+        # choosing one silently, and the one not chosen is the one the operator
+        # thinks is in force.
+        raise ValueError(
+            "OPCUA_USER_CERT cannot be combined with OPCUA_USERNAME; a session has one user "
+            "identity, so use either certificate or username authentication"
+        )
     # Not `_read`: an empty password is a real (if unwise) credential, so only an
     # absent variable counts as unset — except when there is no username to pair
     # it with, where a blank value can only mean "not configured". MCP client
@@ -164,6 +221,9 @@ def parse_security_config(
         application_uri=application_uri,
         username=username,
         password=password,
+        server_cert=server_cert,
+        user_cert=user_cert,
+        user_key=user_key,
     )
 
 
@@ -175,8 +235,18 @@ def security_config() -> SecurityConfig:
 
 def describe_security(config: SecurityConfig) -> str:
     """One-line, secret-free summary for the startup log."""
-    user = "anonymous" if config.username is None else f'"{config.username}"'
-    return f"policy={config.policy} mode={config.mode} user={user}"
+    if config.user_cert is not None:
+        user = "certificate"
+    elif config.username is None:
+        user = "anonymous"
+    else:
+        user = f'"{config.username}"'
+    # ``server-cert=`` only when pinning is on: a line that said ``pinned`` vs
+    # ``unpinned`` on every startup would train the reader to skip it, and this
+    # is the one word that distinguishes "encrypted" from "encrypted to whoever
+    # answered".
+    pinned = "" if config.server_cert is None else " server-cert=pinned"
+    return f"policy={config.policy} mode={config.mode} user={user}{pinned}"
 
 
 def security_warnings(config: SecurityConfig) -> list[str]:
@@ -190,6 +260,17 @@ def security_warnings(config: SecurityConfig) -> list[str]:
     of its own (python-opcua logs "Sending plain-text password" when it does).
     """
     if config.policy != "None":
+        # Encryption without a pinned server certificate is encryption to
+        # whoever answered — DNS, ARP, a compromised switch or a mistyped
+        # endpoint all reach it. Said once, on a secured connection, because
+        # this is the gap a reader of ``policy=Basic256Sha256`` is least likely
+        # to suspect.
+        if config.server_cert is None:
+            return [
+                "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT "
+                "to pin it. Encryption without it protects against passive eavesdropping, not "
+                "against an attacker who can impersonate the endpoint."
+            ]
         return []
 
     warnings = [
@@ -277,10 +358,20 @@ def create_client(url: str) -> Client:
             policy,
             config.client_cert,
             config.client_key,
+            # Pinning, and an optimisation for free: given the certificate,
+            # python-opcua skips the extra endpoint round-trip it otherwise makes
+            # to fetch one. Left None, it takes whatever the endpoint presents.
+            server_certificate_path=config.server_cert,
             mode=_MESSAGE_SECURITY_MODES[config.mode],
         )
 
-    if config.username is not None:
+    if config.user_cert is not None and config.user_key is not None:
+        # X.509 user identity: python-opcua signs the server's challenge with
+        # this key in `activate_session` and sends only the certificate. A
+        # different key pair from `client_cert`, which secures the channel.
+        client.load_client_certificate(config.user_cert)
+        client.load_private_key(config.user_key)
+    elif config.username is not None:
         client.set_user(config.username)
         client.set_password(config.password or "")
 

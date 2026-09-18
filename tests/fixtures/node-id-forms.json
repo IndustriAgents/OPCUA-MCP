@@ -1,0 +1,108 @@
+{
+  "$comment": "The canonical spelling of an OPC UA node id, and how a namespace-URI form resolves against a server's NamespaceArray. Both runtimes must agree case for case, because both read the *same* policy file: a form one canonicalises and the other does not is an allowlist that authorises different writes depending on which server the operator happened to start. tests/unit/test_node_ids.py and the \"node id forms\" suite in packages/server-node/test/unit.test.mjs each read this file and may skip no case, so adding one here forces both runtimes to handle it.",
+
+  "namespaces": [
+    "http://opcfoundation.org/UA/",
+    "urn:plant:line-a",
+    "http://vendor.example/plc"
+  ],
+
+  "canonical": [
+    {
+      "name": "zero namespace restored",
+      "given": "i=2253",
+      "expected": "ns=0;i=2253",
+      "note": "python-opcua omits ns=0 from to_string() while node-opcua writes it, so the same node arrives spelled two ways. Compared raw, an allowlist entry in one form silently never matches the other."
+    },
+    {
+      "name": "zero namespace already present",
+      "given": "ns=0;i=2253",
+      "expected": "ns=0;i=2253"
+    },
+    {
+      "name": "string identifier in namespace zero",
+      "given": "s=Server",
+      "expected": "ns=0;s=Server"
+    },
+    {
+      "name": "guid identifier in namespace zero",
+      "given": "g=09087e75-8e5e-499b-954f-f2a9603db28a",
+      "expected": "ns=0;g=09087e75-8e5e-499b-954f-f2a9603db28a"
+    },
+    {
+      "name": "bytestring identifier in namespace zero",
+      "given": "b=M/RbKBsRVkePCePcx24oRA==",
+      "expected": "ns=0;b=M/RbKBsRVkePCePcx24oRA=="
+    },
+    {
+      "name": "non-zero namespace untouched",
+      "given": "ns=2;i=5",
+      "expected": "ns=2;i=5"
+    },
+    {
+      "name": "surrounding whitespace trimmed",
+      "given": "  ns=2;i=5  ",
+      "expected": "ns=2;i=5",
+      "note": "A CSV allowlist written `ns=2;i=5, ns=2;i=6` has a leading space on every entry after the first."
+    },
+    {
+      "name": "whitespace around a zero-namespace form",
+      "given": " i=2253 ",
+      "expected": "ns=0;i=2253"
+    },
+    {
+      "name": "namespace-URI form left for resolution",
+      "given": "nsu=urn:plant:line-a;i=5",
+      "expected": "nsu=urn:plant:line-a;i=5",
+      "note": "Canonicalisation does not resolve; that needs the server's NamespaceArray and happens separately."
+    },
+    {
+      "name": "expanded node id with a server index untouched",
+      "given": "svr=1;nsu=urn:plant:line-a;i=5",
+      "expected": "svr=1;nsu=urn:plant:line-a;i=5",
+      "note": "No implicit zero namespace to restore, and rewriting what is already explicit risks changing its meaning."
+    }
+  ],
+
+  "resolved": [
+    {
+      "name": "index form passes through canonicalised",
+      "given": "i=2253",
+      "expected": "ns=0;i=2253"
+    },
+    {
+      "name": "index form in a non-zero namespace",
+      "given": "ns=2;i=5",
+      "expected": "ns=2;i=5"
+    },
+    {
+      "name": "namespace URI resolved to its index",
+      "given": "nsu=urn:plant:line-a;i=5",
+      "expected": "ns=1;i=5",
+      "note": "The stable name resolved to this session's index. This is the whole point of the form: a firmware update that reorders the NamespaceArray moves the index, and the allowlist follows it."
+    },
+    {
+      "name": "namespace URI for the third namespace",
+      "given": "nsu=http://vendor.example/plc;s=Line1.Temp",
+      "expected": "ns=2;s=Line1.Temp",
+      "note": "An `s=` identifier may itself contain no ';' here, but the split is on the first ';' only so that identifiers which do are not truncated."
+    },
+    {
+      "name": "namespace zero by URI",
+      "given": "nsu=http://opcfoundation.org/UA/;i=2253",
+      "expected": "ns=0;i=2253"
+    },
+    {
+      "name": "unknown namespace URI resolves to nothing",
+      "given": "nsu=urn:not:on:this:server;i=5",
+      "expected": null,
+      "note": "A real answer, not a failure to compute one: the entry names a namespace this server does not publish, so nothing can match it and the policy must deny rather than fall back to something that looks close."
+    },
+    {
+      "name": "malformed namespace-URI form with no identifier",
+      "given": "nsu=urn:plant:line-a",
+      "expected": "nsu=urn:plant:line-a",
+      "note": "Not the nsu= form at all without a ';', so it is left alone and will simply match nothing."
+    }
+  ]
+}

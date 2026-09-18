@@ -232,12 +232,15 @@ Both runtimes read the same environment variables:
 | `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
 | `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
 | `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
+| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint. Requires a policy other than `None` |
 | `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
 | `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
+| `OPCUA_USER_CERT` | — | Certificate identifying the **user**, for X.509 authentication. A different key pair from `OPCUA_CLIENT_CERT`, which secures the channel. Cannot be combined with `OPCUA_USERNAME` |
+| `OPCUA_USER_KEY` | — | Private key for `OPCUA_USER_CERT`. Signs the server's challenge; never sent |
 | `OPCUA_PROFILE` | `observe` | `observe`, `operator`, or `full` tool profile (`read-only` is an alias for `observe`) |
 | `OPCUA_POLICY_FILE` | — | Optional version-1 JSON policy file; environment variables override it |
 | `OPCUA_ALLOWED_TOOLS` | — | Comma-separated allowlist that can only narrow the selected profile |
-| `OPCUA_ALLOWED_WRITE_NODES` | — | Exact comma-separated node IDs writable by the `operator` profile |
+| `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated node IDs writable by the `operator` profile. `ns=2;i=5` or, preferably, `nsu=<namespace-uri>;i=5` — see [Writing an allowlist that stays correct](#writing-an-allowlist-that-stays-correct) |
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id|method_node_id` pairs callable by `operator` |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
@@ -245,6 +248,30 @@ Both runtimes read the same environment variables:
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
 | `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
+
+### Writing an allowlist that stays correct
+
+`OPCUA_ALLOWED_WRITE_NODES` and `OPCUA_ALLOWED_METHODS` accept two forms:
+
+```
+ns=2;i=5                       # namespace index — resolved per session
+nsu=urn:plant:line-a;i=5       # namespace URI — stable across sessions
+```
+
+**Prefer the second.** A namespace *index* is not a property of a node; it is
+that node's position in the server's NamespaceArray for the current session. A
+firmware update, an added namespace or a reordered load can move it — and an
+allowlist written `ns=2;i=5` then authorises writes to a **different physical
+node**, with nothing anywhere reporting that anything changed.
+
+The namespace URI is the stable name. Both servers read the NamespaceArray on
+every connect and resolve URI-pinned entries against it, so the allowlist follows
+the node rather than the index. An entry naming a URI the server does not
+publish matches nothing and is reported on stderr at connect time.
+
+Spelling no longer matters: `i=2253` and `ns=0;i=2253` are the same node, entries
+are trimmed, and both runtimes canonicalise identically (pinned by
+`tests/fixtures/node-id-forms.json`).
 
 ### Staying connected
 

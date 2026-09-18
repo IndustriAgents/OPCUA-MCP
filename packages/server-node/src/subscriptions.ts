@@ -2,7 +2,7 @@
 //
 // An MCP tool call is request/response, so a subscription cannot answer the
 // caller directly: the notifications arrive whenever the OPC UA server decides
-// to publish, long after `subscribe_opcua_node` has returned. What this manager
+// to publish, long after `subscribe_opcua_nodes` has returned. What this manager
 // does instead is own the OPC UA subscription and *buffer* what it delivers, so
 // the agent can read the accumulated changes back at its own pace — through
 // `list_subscriptions` or the `opcua://subscriptions` resource.
@@ -20,14 +20,20 @@ import {
   TimestampsToReturn,
 } from "node-opcua-client";
 
+import { CONTRACT } from "./contract.js";
 import { HistoryRecord, toHistoryRecord } from "./records.js";
 
-/** Defaults and bounds, shared verbatim with the Python server. */
-export const DEFAULT_PUBLISHING_INTERVAL = 1000;
-export const MIN_PUBLISHING_INTERVAL = 50;
-export const DEFAULT_BUFFER_SIZE = 20;
-export const MIN_BUFFER_SIZE = 1;
-export const MAX_BUFFER_SIZE = 1000;
+// Defaults and bounds, read from the contract rather than written here. They
+// were five constants declared identically in this file and in
+// `subscriptions.py` — two copies of the same promise, which the tool
+// descriptions also quote, so a change had to be made in three places to be
+// true. Now it is made in one.
+const LIMITS = CONTRACT.subscriptions;
+export const DEFAULT_PUBLISHING_INTERVAL = LIMITS.defaultPublishingIntervalMs;
+export const MIN_PUBLISHING_INTERVAL = LIMITS.minPublishingIntervalMs;
+export const DEFAULT_BUFFER_SIZE = LIMITS.defaultBufferSize;
+export const MIN_BUFFER_SIZE = LIMITS.minBufferSize;
+export const MAX_BUFFER_SIZE = LIMITS.maxBufferSize;
 
 /** One subscription as the contract describes it (`subscriptionRecords`). */
 export interface SubscriptionRecord {

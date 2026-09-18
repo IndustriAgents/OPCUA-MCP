@@ -195,7 +195,7 @@ function classVisible(config: PolicyConfig, tool: ToolSpec): boolean {
  * argument the guard expected and did not find means the call does not look
  * like what the contract declared.
  */
-function valuesAt(args: Record<string, unknown>, path: string): string[] {
+export function valuesAt(args: Record<string, unknown>, path: string): string[] {
   const [head, ...rest] = path.split(".");
   if (head.endsWith("[]")) {
     const items = args[head.slice(0, -2)];

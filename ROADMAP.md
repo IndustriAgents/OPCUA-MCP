@@ -3,7 +3,7 @@
 What exists, what is being worked on next, and what is only an idea. This is an
 order of work, not a schedule: nothing here carries a release date.
 
-The manifests are at **0.3.0**. [CHANGELOG.md](CHANGELOG.md) records what has
+The manifests are at **0.4.0**. [CHANGELOG.md](CHANGELOG.md) records what has
 actually shipped — including entries under `[Unreleased]`, which are merged but
 not yet published to npm or PyPI. The
 [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is the phased plan currently
@@ -14,18 +14,26 @@ the feature epic this page summarises.
 ## In the codebase today
 
 - Python and Node implementations of one shared tool contract
-  ([`contract/tools.json`](contract/tools.json)), kept in step by parity tests.
-- Reads, batch reads, writes, browsing, method calls and address-space
-  inventory, with typed writes and bounded discovery.
-- History and server-side aggregates, offered only when the connected server
-  advertises the capability.
+  ([`contract/tools.json`](contract/tools.json)), kept in step by parity tests —
+  every tool declares a result shape, each runtime's actual output is checked
+  against it, and a differential suite then diffs the two runtimes against each
+  other.
+- Thirteen tools. Reads, writes, browsing, path resolution, name search, method
+  calls and address-space inventory, each with fully qualified records: a value
+  arrives with its data type, OPC UA status and timestamps.
+- History and server-side aggregates in one tool, offered when the connected
+  server advertises either capability.
 - Data-change subscriptions with buffered records, plus event collection and
   Alarms & Conditions listing and acknowledgement.
 - Configurable OPC UA channel security: policy, mode, client certificate and
-  key, and username identity, validated at startup.
+  key, username or X.509 user identity, and a pinned server certificate, all
+  validated at startup.
 - An observe-only default tool profile, with `operator` node and method
   allowlists, a versioned JSON policy file, and control tools blocked on an
-  unsecured channel unless a lab override is explicit.
+  unsecured channel unless a lab override is explicit. Authorisation is derived
+  from a `guard` each control tool declares in the contract, so a tool that
+  declares none is denied rather than waved through, and allowlists can be
+  pinned by namespace URI rather than by an index the server may renumber.
 - Automatic reconnection with keep-alive and exponential backoff, re-creating
   data-change subscriptions on the new session, so neither server needs
   restarting when the OPC UA server does.
@@ -39,31 +47,29 @@ the feature epic this page summarises.
 
 ## Next
 
-Phases 1–8 of the [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md), which closes
-the correctness and consistency findings from the 0.3.0 architecture review and
-consolidates the tool surface from 17 tools to 13. In merge order:
+The [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is **complete** — all eight
+phases shipped, closing #7, #8, #9, #10, #11, #45, #75 and #76. What remains
+needs no code:
 
 | # | Work | Done when |
 |---|---|---|
 | 1 | [MCP Registry listing](docs/mcp-registry.md) | A published package carries `mcpName`, and the entry resolves in the registry |
 | 2 | Results from third-party OPC UA servers ([#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
-| 3 | Two correctness fixes (plan phases 1–2) | A failed batch read is an error on both runtimes, and Node drains browse continuation points instead of silently returning a short list |
-| 4 | Server-certificate verification ([#45](https://github.com/midhunxavier/OPCUA-MCP/issues/45)) and X.509 user authentication ([#7](https://github.com/midhunxavier/OPCUA-MCP/issues/7)) (phase 3) | Pinning or trust-list validation closes the gap named in [SECURITY.md](SECURITY.md), and a *wrong* server certificate is refused by a test |
-| 5 | Contract-derived policy guards and node-ID canonicalisation (phase 4) | A control tool with no declared guard is denied, and allowlists key off namespace URIs rather than session-assigned indexes |
-| 6 | Tool consolidation and a declared result shape for every tool (phase 5) | 13 tools, all with a `resultShape`, and a test that diffs the two runtimes' output against each other rather than only against the contract. Closes [#8](https://github.com/midhunxavier/OPCUA-MCP/issues/8) and [#9](https://github.com/midhunxavier/OPCUA-MCP/issues/9) |
 
-Items 1 and 2 need no code, only a release and reports from people with real
-equipment. Everything else is code and tests.
+Both need a release and reports from people with real equipment rather than
+changes to this repository.
 
 ## Later, not started
 
-Tracked as issues, in no committed order: node search and browse-path
-resolution ([#11](https://github.com/midhunxavier/OPCUA-MCP/issues/11)), typed
-method arguments from `InputArguments` metadata
-([#10](https://github.com/midhunxavier/OPCUA-MCP/issues/10)), full node
-attribute reads ([#8](https://github.com/midhunxavier/OPCUA-MCP/issues/8)), and
-X.509 user authentication
-([#7](https://github.com/midhunxavier/OPCUA-MCP/issues/7)).
+Nothing is queued. Everything that was here at 0.3.0 — node search and
+browse-path resolution, typed method arguments, full node attribute reads, X.509
+user authentication — shipped in 0.4.0.
+
+The next thing worth doing is decided by what
+[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) turns up: a result
+from a real vendor server is the one input this repository cannot generate for
+itself, and it is more likely to set priorities usefully than anything that could
+be written down now.
 
 ## Considered and set aside
 
@@ -77,12 +83,37 @@ condition below is met.
 | Multiple or file-configured endpoints ([#15](https://github.com/midhunxavier/OPCUA-MCP/issues/15)) | A per-tool endpoint argument would make `writable_nodes` mean different physical nodes per server, on keys that are already session-scoped. One process per endpoint costs nothing today and keeps a misconfigured policy to one PLC | Node-ID canonicalisation and URI-based allowlists have landed |
 | Docker images ([#16](https://github.com/midhunxavier/OPCUA-MCP/issues/16)) | Four distribution channels already ship, and a container adds little for a stdio server that runs beside its client | A remote transport lands, or a deployment requires an image |
 
-One thing deliberately has no plan yet: an audit trail that records control
-decisions without leaking credentials or process values. It needs a design that
-holds for the Python and Node runtimes and the shared contract before any code
-is written. Per-client approval semantics for control tools are now the stated
-prerequisite for [#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14) and
-are tracked there.
+### The control audit trail, as it actually stands
+
+This page used to say an audit trail had no plan yet. It ships, and has since
+the policy layer landed — so here is what it does and does not do, which is more
+useful than either claim.
+
+Every `control` and `alarm-action` call writes one JSON line to **stderr**:
+
+```json
+{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","profile":"operator",
+ "tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+```
+
+`decision` is one of `allowed`, `denied`, `completed` or `failed` — the outcome
+as well as the verdict, because "permitted" and "happened" are different facts
+and the gap between them is where a control call that reached the plant and then
+failed lives. The targets come from the same `guard` declaration in
+`contract/tools.json` that the policy authorises from, so the two cannot disagree
+about which arguments matter. Reads are never audited; a trail that recorded
+every read would bury the lines anyone is looking for. Neither credentials nor
+written values appear, and a test asserts it.
+
+**What it is not** is durable. stderr is what an MCP client shows the user and
+what a log collector picks up, and nothing here writes a file, rotates one, or
+survives the process. For a deployment that needs a retained record, collect the
+server's stderr — the format is stable and line-oriented for exactly that. A
+built-in persistent sink still has no plan, and needs one that holds for both
+runtimes before any code is written.
+
+Per-client approval semantics for control tools are the stated prerequisite for
+[#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14) and are tracked there.
 
 ## Helping
 

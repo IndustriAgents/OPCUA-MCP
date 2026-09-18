@@ -409,6 +409,14 @@
       { "key": "retain", "path": "Retain" }
     ]
   },
+  "subscriptions": {
+    "$comment": "Bounds and defaults for subscribe_opcua_nodes, here rather than written out in each runtime — they were five named constants duplicated in subscriptions.ts and subscriptions.py, which is how two servers come to clamp the same request differently. The tool descriptions quote these numbers, so a change here changes what is promised and what is enforced together.",
+    "defaultPublishingIntervalMs": 1000,
+    "minPublishingIntervalMs": 50,
+    "defaultBufferSize": 20,
+    "minBufferSize": 1,
+    "maxBufferSize": 1000
+  },
   "traversal": {
     "$comment": "Bounds and defaults for browse_opcua_nodes, here rather than written out in each runtime — they were duplicated as literals in tools.ts and server.py, which is how two servers come to disagree about how deep 'deep' is. The caps are not tuning knobs but refusals: an unbounded walk of a plant address space is a request that never returns.",
     "rootNodeId": "ns=0;i=85",
@@ -762,8 +770,9 @@
       "name": "acknowledge_alarm",
       "accessClass": "alarm-action",
       "guard": {
-        "$comment": "No per-argument allowlist: acknowledging is gated as a whole by the acknowledge_alarms flag, because a condition id is discovered at runtime from list_active_alarms and cannot be enumerated in a policy file ahead of time. Declared explicitly rather than left out — silence must never be mistaken for permission.",
-        "flag": "acknowledgeAlarms"
+        "$comment": "No per-argument allowlist: acknowledging is gated as a whole by the acknowledge_alarms flag, because a condition id is discovered at runtime from list_active_alarms and cannot be enumerated in a policy file ahead of time. Declared explicitly rather than left out — silence must never be mistaken for permission. `auditPaths` names what the audit record should carry for a tool whose targets are not node ids.",
+        "flag": "acknowledgeAlarms",
+        "auditPaths": ["condition_id", "event_id"]
       },
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "capabilities": [],

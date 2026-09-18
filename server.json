@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/midhunxavier/OPCUA-MCP#readme",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "opcua-mcp-server",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

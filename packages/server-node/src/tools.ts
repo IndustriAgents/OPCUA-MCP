@@ -41,7 +41,7 @@ import {
   SubscriptionRecord,
   unknownSubscriptionsMessage,
 } from "./subscriptions.js";
-import { ToolPolicy, toolPolicy } from "./policy.js";
+import { ToolPolicy, toolPolicy, valuesAt } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
@@ -244,28 +244,53 @@ function retryIsSafe(name: string): boolean {
   return tool?.annotations.idempotentHint === true;
 }
 
-function auditTargets(name: string, args: Record<string, unknown>): Record<string, unknown> {
-  if (name === "write_opcua_node") return { node_ids: [args.node_id] };
-  if (name === "write_multiple_opcua_nodes") {
-    const items = Array.isArray(args.nodes_to_write) ? args.nodes_to_write : [];
-    return {
-      node_ids: items.map((item) => (item as Record<string, unknown>).node_id),
-    };
+/** What a control call was aimed at, for the audit record.
+ *
+ * Derived from the tool's own `guard`, not from a chain on tool *names*. That
+ * chain was the last one left after the policy layer stopped keying off names,
+ * and it broke silently the moment the tools were renamed: every write logged
+ * `decision: "allowed"` with no targets at all, which is an audit trail that
+ * records that *something* was permitted without recording what. Reading the
+ * same declaration the policy authorises from means the two can no longer
+ * disagree about which arguments matter.
+ */
+function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<string, unknown> {
+  const guard = tool.guard;
+  if (!guard) return {};
+  const record: Record<string, unknown> = {};
+
+  const nodeIds = (guard.nodeIdPaths ?? []).flatMap((path) => valuesAt(args, path));
+  if (nodeIds.length > 0) record.node_ids = nodeIds;
+
+  const methods = (guard.methodPaths ?? []).map(({ objectPath, methodPath }) => ({
+    object_node_id: valuesAt(args, objectPath)[0] ?? null,
+    method_node_id: valuesAt(args, methodPath)[0] ?? null,
+  }));
+  if (methods.length > 0) Object.assign(record, methods[0]);
+
+  for (const path of guard.auditPaths ?? []) {
+    // Only what is present: an absent optional argument is not a target, and
+    // recording it as null would make every acknowledgement look half-specified.
+    const [value] = valuesAt(args, path);
+    if (value !== undefined) record[path] = value;
   }
-  if (name === "call_opcua_method") {
-    return { object_node_id: args.object_node_id, method_node_id: args.method_node_id };
-  }
-  if (name === "acknowledge_alarm") {
-    return { condition_id: args.condition_id, event_id: args.event_id };
-  }
-  return {};
+  return record;
 }
 
+/** Write one line of the control audit trail to stderr.
+ *
+ * Only `control` and `alarm-action` tools: an audit trail that also recorded
+ * every read would bury the four lines anyone is looking for.
+ *
+ * Never the *values* being written, only the targets. A setpoint is process
+ * data, and this stream is the one an MCP client shows the user and a log
+ * collector ships off the machine.
+ */
 function auditDecision(
   policy: ToolPolicy,
   name: string,
   args: Record<string, unknown>,
-  decision: "allowed" | "denied",
+  decision: "allowed" | "denied" | "failed" | "completed",
   reason?: string
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
@@ -277,7 +302,7 @@ function auditDecision(
       profile: policy.config.profile,
       tool: name,
       decision,
-      ...auditTargets(name, args),
+      ...auditTargets(tool, args),
       ...(reason ? { reason } : {}),
     })
   );
@@ -294,7 +319,7 @@ export class OpcuaTools {
   ) {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
-    // every `subscribe_opcua_node` handle the agent holds silently dead.
+    // every `subscribe_opcua_nodes` handle the agent holds silently dead.
     this.conn.onSessionReplaced = (session) => this.subs.reattach(session);
   }
 
@@ -429,6 +454,7 @@ export class OpcuaTools {
   /** Serve a tools/call request: authorize it, then run it on a live session. */
   async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
     const { name, arguments: args } = request.params;
+    let authorized = false;
 
     try {
       // This is the security boundary. Filtering tools/list improves the model's
@@ -436,6 +462,7 @@ export class OpcuaTools {
       // tool directly, so authorize again before touching the OPC UA network.
       try {
         this.policy.authorize(name, args ?? {});
+        authorized = true;
         auditDecision(this.policy, name, args ?? {}, "allowed");
       } catch (error) {
         auditDecision(
@@ -467,15 +494,23 @@ export class OpcuaTools {
         );
       }
 
-      return await this.conn.withRetry(() => this.dispatch(name, args ?? {}), retryIsSafe(name));
+      const result = await this.conn.withRetry(
+        () => this.dispatch(name, args ?? {}),
+        retryIsSafe(name)
+      );
+      // The outcome, not only the decision. "Permitted" and "happened" are
+      // different facts, and the gap between them is where a control call that
+      // reached the plant and then failed lives — which is the one an operator
+      // most needs to find afterwards.
+      auditDecision(this.policy, name, args ?? {}, "completed");
+      return result;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Only for a call that got past authorization: a denial has already been
+      // recorded as one, and logging it twice would double-count refusals.
+      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", message);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
+        content: [{ type: "text", text: `Error: ${message}` }],
         isError: true,
       };
     }

@@ -24,6 +24,9 @@ export interface ToolGuard {
   methodPaths?: Array<{ objectPath: string; methodPath: string }>;
   /** A policy flag that must be true; the whole tool is gated on it. */
   flag?: "acknowledgeAlarms";
+  /** Extra argument paths the audit record should carry, for a tool whose
+   *  targets are not node ids. */
+  auditPaths?: string[];
 }
 
 export interface ToolSpec {
@@ -46,6 +49,13 @@ export const CONTRACT: {
   resultShapes: Record<string, any>;
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
   diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
+  subscriptions: {
+    defaultPublishingIntervalMs: number;
+    minPublishingIntervalMs: number;
+    defaultBufferSize: number;
+    minBufferSize: number;
+    maxBufferSize: number;
+  };
   traversal: {
     rootNodeId: string;
     defaultDepth: number;

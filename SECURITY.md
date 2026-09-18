@@ -72,6 +72,77 @@ Treat the MCP servers as having the same privileges as the OPC UA account they
 connect with: anyone able to talk to the MCP server can read and write any node
 that account can.
 
+## Tool profiles and control policy
+
+Connection security decides who can talk to the OPC UA server. This decides what
+the *agent* may do once connected, and the two are independent: an encrypted,
+authenticated session to an account with write permission is still a session an
+agent can write through.
+
+The default profile is `observe` — read, browse, history and monitoring, with no
+writes and no method calls. That is the right default because an MCP server is
+driven by a model, and "it should not have been able to do that" is a much worse
+outcome than "it could not do that".
+
+`operator` adds control, but only to targets named in advance:
+
+```json
+{
+  "version": 1,
+  "profile": "operator",
+  "allowed_tools": ["read_opcua_nodes", "write_opcua_nodes", "call_opcua_method"],
+  "control": {
+    "writable_nodes": ["nsu=urn:plant:line-a;s=Line1.SpeedSetpoint"],
+    "callable_methods": [
+      { "object_id": "nsu=urn:plant:line-a;s=Line1", "method_id": "nsu=urn:plant:line-a;s=Line1.Reset" }
+    ],
+    "acknowledge_alarms": false
+  }
+}
+```
+
+Point `OPCUA_POLICY_FILE` at it. Environment variables override the file, so a
+deployment can ship one policy and narrow it per host.
+
+**Write the allowlist with `nsu=<namespace-uri>;…`, not `ns=<index>;…`.** A
+namespace *index* is that node's position in the server's NamespaceArray for the
+current session — a firmware update or a reordered namespace load can move it,
+and an allowlist written `ns=2;i=5` then authorises writes to a **different
+physical node** with nothing reporting that anything changed. Both servers read
+the NamespaceArray on every connect and resolve URI-pinned entries against it. An
+entry naming a URI the server does not publish matches nothing and is reported on
+stderr.
+
+Three properties worth knowing:
+
+- **Enforced on every call**, not only when tools are listed. An MCP client may
+  hold a stale catalogue, so hiding a tool is a usability feature and the
+  authorisation check is the boundary.
+- **A batch is all-or-nothing.** One forbidden target rejects the whole write
+  before any of it is sent, so a batch can never end up partially applied.
+- **Control needs a secured channel.** `operator` and `full` refuse to offer
+  control tools over an unencrypted connection unless
+  `OPCUA_ALLOW_INSECURE_CONTROL=true` is set explicitly, and the startup line
+  then reads `control=INSECURE-OVERRIDE` rather than blending in.
+
+### What is audited
+
+Every `control` and `alarm-action` call writes one JSON line to **stderr**:
+
+```json
+{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","profile":"operator",
+ "tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+```
+
+`decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
+as the verdict, because a call that was permitted and a call that reached the
+plant are different facts. Reads are never audited. Neither credentials nor the
+values being written appear in a record, and a test asserts it.
+
+It is **not durable**: nothing here writes a file or survives the process. For a
+retained record, collect the server's stderr — the format is stable and
+line-oriented for exactly that.
+
 ## Supported versions
 
 This project is pre-1.0. Security fixes land on `main` and the latest published

@@ -63,11 +63,39 @@
           "isSecret": true
         },
         {
+          "name": "OPCUA_RECONNECT_INITIAL_DELAY_MS",
+          "description": "First wait before retrying a dropped or refused connection, in ms. Each further attempt doubles it.",
+          "format": "number",
+          "default": "1000"
+        },
+        {
+          "name": "OPCUA_RECONNECT_MAX_DELAY_MS",
+          "description": "Ceiling for the doubling backoff, in ms.",
+          "format": "number",
+          "default": "8000"
+        },
+        {
+          "name": "OPCUA_RECONNECT_MAX_RETRY",
+          "description": "Retries after the first attempt. 0 disables retrying; -1 retries forever.",
+          "format": "number",
+          "default": "3"
+        },
+        {
+          "name": "OPCUA_SESSION_TIMEOUT_MS",
+          "description": "Session timeout asked of the OPC UA server, in ms. It also sets the keep-alive period.",
+          "format": "number",
+          "default": "60000"
+        },
+        {
           "name": "OPCUA_PROFILE",
           "description": "Tool profile. observe (default) advertises read, browse, history and monitoring tools only; operator adds explicitly allowlisted writes and methods; full exposes every tool.",
           "format": "string",
           "default": "observe",
-          "choices": ["observe", "operator", "full"]
+          "choices": [
+            "observe",
+            "operator",
+            "full"
+          ]
         },
         {
           "name": "OPCUA_POLICY_FILE",

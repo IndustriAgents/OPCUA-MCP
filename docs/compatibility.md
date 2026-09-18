@@ -71,6 +71,21 @@ runtimes under the default `observe` profile and under `operator` with explicit
 allowlists, and checks that a hidden control tool is still refused when called
 directly. Policy is enforced per call, not only at tool-listing time.
 
+## Resilience and diagnostics coverage
+
+[`tests/e2e/test_resilience_e2e.py`](../tests/e2e/test_resilience_e2e.py) drops a
+mock server under both runtimes and asserts the session recovers, including the
+data-change subscriptions held across the outage, and that a server unreachable
+at startup does not stop either server from starting.
+[`test_diagnostics_e2e.py`](../tests/e2e/test_diagnostics_e2e.py) checks that
+`get_server_status` answers while disconnected and that both runtimes return the
+same fields. The backoff arithmetic itself is pinned in
+[`tests/unit/test_reconnect.py`](../tests/unit/test_reconnect.py).
+
+This is coverage against the local mocks. How a given third-party server behaves
+across a real network outage — session lifetimes, certificate rotation on
+restart, subscription re-establishment — is **Unverified**.
+
 ## Evidence
 
 | Area | Tests |
@@ -80,6 +95,8 @@ directly. Policy is enforced per call, not only at tool-listing time.
 | Aggregates | [`test_aggregate_e2e.py`](../tests/e2e/test_aggregate_e2e.py) |
 | Events and Alarms & Conditions | [`test_events_e2e.py`](../tests/e2e/test_events_e2e.py) |
 | Tool policy | [`test_policy_e2e.py`](../tests/e2e/test_policy_e2e.py) |
+| Reconnection and resilience | [`test_resilience_e2e.py`](../tests/e2e/test_resilience_e2e.py), [`test_reconnect.py`](../tests/unit/test_reconnect.py) |
+| Health and diagnostics | [`test_diagnostics_e2e.py`](../tests/e2e/test_diagnostics_e2e.py) |
 | Channel security | [`test_secure_connection_e2e.py`](../tests/e2e/test_secure_connection_e2e.py), [`test_security_startup.py`](../tests/e2e/test_security_startup.py) |
 | Published artifacts | [`tests/smoke/`](../tests/smoke) |
 | Fixtures and ports | [`tests/conftest.py`](../tests/conftest.py) |

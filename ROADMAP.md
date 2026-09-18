@@ -25,6 +25,12 @@ feature epic this page summarises.
 - An observe-only default tool profile, with `operator` node and method
   allowlists, a versioned JSON policy file, and control tools blocked on an
   unsecured channel unless a lab override is explicit.
+- Automatic reconnection with keep-alive and exponential backoff, re-creating
+  data-change subscriptions on the new session, so neither server needs
+  restarting when the OPC UA server does.
+- A `get_server_status` tool reporting connection state, endpoint and security,
+  the server's own `ServerStatus` and its namespace array — the one tool that
+  answers while disconnected.
 - Distribution as an npm package, a PyPI package, a Claude Desktop `.mcpb`
   bundle and single-file executables, each covered by artifact smoke tests.
 - Three local mock OPC UA servers and an end-to-end suite that runs both
@@ -36,12 +42,10 @@ feature epic this page summarises.
 |---|---|---|
 | 1 | [MCP Registry listing](docs/mcp-registry.md) | A published package carries `mcpName`, and the entry resolves in the registry |
 | 2 | Results from third-party OPC UA servers ([#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
-| 3 | Connection resilience — reconnect, keep-alive, backoff ([#18](https://github.com/midhunxavier/OPCUA-MCP/issues/18)) | A dropped session recovers without restarting the MCP process, proven by a test |
-| 4 | Health and diagnostics tool ([#13](https://github.com/midhunxavier/OPCUA-MCP/issues/13)) | One tool reports connection state, endpoint, namespaces and active policy |
-| 5 | Server-certificate verification ([#45](https://github.com/midhunxavier/OPCUA-MCP/issues/45)) | Trust-list validation or explicit pinning, closing the gap named in [SECURITY.md](SECURITY.md) |
+| 3 | Server-certificate verification ([#45](https://github.com/midhunxavier/OPCUA-MCP/issues/45)) | Trust-list validation or explicit pinning, closing the gap named in [SECURITY.md](SECURITY.md) |
 
-Items 3 and 4 have work in progress; 1 and 2 need no code, only a release and
-reports from people with real equipment.
+Items 1 and 2 need no code, only a release and reports from people with real
+equipment.
 
 ## Later, not started
 

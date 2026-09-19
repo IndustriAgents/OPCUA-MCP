@@ -40,6 +40,7 @@ import {
   securityWarnings,
   userIdentity,
 } from "./security.js";
+import { message } from "./errors.js";
 
 // Happy Eyeballs: try IPv4 and IPv6 rather than only the first address DNS
 // returns. Every Node this package now supports defaults to this, so the call is
@@ -111,7 +112,7 @@ export function isConnectionError(error: unknown): boolean {
  * answers while the connection is down.
  */
 export function notConnectedMessage(url: string, reason: string): string {
-  return `Not connected to the OPC UA server at ${url}: ${reason}. Call get_server_status for details.`;
+  return message("notConnected", { url, reason });
 }
 
 export class OpcuaConnection {

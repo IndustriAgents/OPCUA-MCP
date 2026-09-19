@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Python server advertised schemas that were not the contract's** (#81).
+  Its `tools/list` carried the schema `MCPServer` derives from each function
+  signature, which has no per-argument descriptions and no nested structure:
+  `write_opcua_nodes` offered `nodes` as "an array of object" against a contract
+  naming `node_id`, `value` and the fifteen legal `data_type` spellings. Tool
+  descriptions matched between the runtimes; the parameter documentation a model
+  needs in order to call the tool did not. Both servers now advertise the
+  contract's own schema, and the parity test compares the whole thing instead of
+  top-level property names.
+- **The Node server validated nothing** (#82). The low-level MCP `Server` does
+  not check `arguments` against the advertised `inputSchema`, and the dispatcher
+  cast straight off the wire, so a malformed call reached node-opcua as whatever
+  the client sent. Both runtimes now check the contract's schema before the
+  policy layer sees the call, through one shared table of cases
+  (`tests/fixtures/argument-validation.json`) that both unit suites run.
+- **The same failure was worded three ways** (#86). The Node server prefixed
+  every message with `Error: `; the Python SDK prefixes a `ToolError` raised
+  inside a tool body with `Error executing tool <name>: `; neither was tested,
+  because the differential suite compared substrings. Every message now comes
+  from `contract/tools.json` -> `errors`, neither runtime adds a frame, and a
+  table of failing calls is driven through both with the full text compared.
+- **The Node server never re-checked capability gating at invocation time.** A
+  client holding a `tools/list` from when the server still reported
+  HistoricalAccess could call `read_opcua_history` against one that does not, and
+  reach node-opcua instead of the refusal the Python runtime gives. Found by the
+  new failure table.
+- **`read_opcua_history` reported a missing `start_time` as a failed read** on
+  the Node runtime — wrapped as "Failed to read history of node …" for a request
+  that never reached the OPC UA server.
+
+### Changed
+- Behavioural parity is now driven by shared tables rather than by hand-mirrored
+  code (#90), extending the pattern `tests/fixtures/value-encoding.json`
+  established: one table for argument validation, one for failure wording.
+
 ## [0.4.1] — 2026-09-18
 
 0.4.0 was tagged but never reached npm or PyPI: its publish workflow failed the

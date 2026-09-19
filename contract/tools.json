@@ -444,6 +444,34 @@
       "check": "browseNonEmpty"
     }
   },
+  "errors": {
+    "$comment": "Every message a tool call can fail with, in one place, because the two runtimes must word a failure identically and nothing else made them. They were hand-mirrored literals in tools.ts and server.py, and the framing had already diverged unnoticed: the Node server prefixed every failure with 'Error: ' and the Python server did not, so one failure read two ways and no test compared them. A tool failure is returned with isError set, which already says it is an error, so neither runtime prefixes it now. Placeholders are {name}, substituted by errors.ts / errors.py; tests/e2e/test_runtime_differential.py drives a table of failing calls through both servers and asserts the text is byte-identical.",
+    "emptyArray": "{tool} requires a non-empty {argument} array",
+    "missingArgument": "{tool} requires {argument}",
+    "wrongType": "{tool} argument {argument} must be {expected}",
+    "unknownTool": "Unknown tool: {tool}",
+    "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
+    "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
+    "nodeNotWritable": "Node {node_id} is not writable under the operator policy",
+    "methodNotAllowed": "Method {object_node_id}|{method_node_id} is not allowed by the operator policy",
+    "guardMissing": "Tool \"{tool}\" declares no policy guard, so it cannot be authorized",
+    "notConnected": "Not connected to the OPC UA server at {url}: {reason}. Call get_server_status for details.",
+    "readFailed": "Failed to read nodes: {reason}",
+    "writeFailed": "Failed to write nodes: {reason}",
+    "browseFailed": "Failed to browse {node_id}: {reason}",
+    "historyFailed": "Failed to read history of node {node_id}: {reason}",
+    "methodFailed": "Failed to call method {method_node_id} on object {object_node_id}: {reason}",
+    "subscribeFailed": "Failed to subscribe to node {node_id}: {reason}",
+    "eventSubscribeFailed": "Failed to subscribe to events from node {node_id}: {reason}",
+    "alarmsFailed": "Failed to list active alarms from node {node_id}: {reason}",
+    "acknowledgeFailed": "Failed to acknowledge alarm {condition_id}: {reason}",
+    "aggregateNeedsStart": "read_opcua_history requires start_time when aggregate_function is given",
+    "notSubscribedToEvents": "Not subscribed to events from node {node_id}. Call subscribe_events first.",
+    "unknownEventId": "Unknown event_id \"{event_id}\". Call list_active_alarms first, or pass the condition_id of the alarm to acknowledge.",
+    "unknownSubscription": "No such subscription: {subscription_id}",
+    "unknownSubscriptions": "No such subscriptions: {subscription_ids}. Nothing was cancelled.",
+    "subscriptionDeleteFailed": "Cancelled {subscription_id} here, but the OPC UA server did not accept the delete: {reason}. It may keep publishing until the subscription's lifetime expires."
+  },
   "resources": [
     {
       "$comment": "MCP resources both servers expose. A resource is re-readable state rather than an action, which is what makes it the right home for live subscription data: an agent can refresh it without spending a tool call. Change *notifications* are deliberately not sent — see docs/architecture.md.",
@@ -471,6 +499,7 @@
         "properties": {
           "node_ids": {
             "type": "array",
+            "minItems": 1,
             "items": { "type": "string" },
             "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list."
           }
@@ -614,6 +643,7 @@
         "properties": {
           "nodes": {
             "type": "array",
+            "minItems": 1,
             "description": "The writes to perform. A single write is a one-element list.",
             "items": {
               "type": "object",
@@ -680,6 +710,7 @@
         "properties": {
           "node_ids": {
             "type": "array",
+            "minItems": 1,
             "items": { "type": "string" },
             "description": "The OPC UA node IDs to monitor. Example: ['ns=2;i=3']. A single node is a one-element list."
           },
@@ -711,6 +742,7 @@
         "properties": {
           "subscription_ids": {
             "type": "array",
+            "minItems": 1,
             "items": { "type": "string" },
             "description": "The subscription IDs returned by subscribe_opcua_nodes, as listed by list_subscriptions. Example: ['sub-1']."
           }

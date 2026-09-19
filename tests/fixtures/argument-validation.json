@@ -1,0 +1,194 @@
+{
+  "$comment": "One table of malformed and well-formed calls, driven through BOTH validators: tests/unit/test_validation.py and packages/server-node/test/validation.test.mjs read this file and assert the same verdict and the same sentence. The same pattern as value-encoding.json, and for the same reason — two hand-written copies of a rule are two rules. `error` is the exact message the call must be refused with, sourced from contract/tools.json -> errors; `error: null` means the call must be accepted. Nothing here touches an OPC UA server: these are checks on the request, made before a session is reached.",
+  "cases": [
+    {
+      "name": "a required array argument that is absent",
+      "tool": "read_opcua_nodes",
+      "arguments": {},
+      "error": "read_opcua_nodes requires node_ids"
+    },
+    {
+      "name": "a required array argument that is empty",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": [] },
+      "error": "read_opcua_nodes requires a non-empty node_ids array"
+    },
+    {
+      "name": "one node id passed bare instead of as a list",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": "ns=2;i=2" },
+      "error": "read_opcua_nodes argument node_ids must be an array of strings"
+    },
+    {
+      "name": "a node id that is not a string names the element that is wrong",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=2", 3] },
+      "error": "read_opcua_nodes argument node_ids[1] must be a string"
+    },
+    {
+      "name": "a well-formed read",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=2", "ns=2;i=3"] },
+      "error": null
+    },
+    {
+      "name": "a write entry missing its node id",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "value": 21.5 }] },
+      "error": "write_opcua_nodes requires nodes[0].node_id"
+    },
+    {
+      "name": "a write entry missing its value",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=13" }] },
+      "error": "write_opcua_nodes requires nodes[0].value"
+    },
+    {
+      "name": "the second write entry is the broken one",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          { "node_id": "ns=2;i=13", "value": 1 },
+          { "node_id": "ns=2;i=14" }
+        ]
+      },
+      "error": "write_opcua_nodes requires nodes[1].value"
+    },
+    {
+      "name": "a data_type given as a number rather than an OPC UA type name",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=13", "value": 1, "data_type": 11 }] },
+      "error": "write_opcua_nodes argument nodes[0].data_type must be a string"
+    },
+    {
+      "name": "one write passed as an object rather than a one-element list",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": { "node_id": "ns=2;i=13", "value": 1 } },
+      "error": "write_opcua_nodes argument nodes must be an array of objects"
+    },
+    {
+      "name": "a write of false is a value, not an absent one",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=13", "value": false }] },
+      "error": null
+    },
+    {
+      "name": "a write of zero is a value, not an absent one",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=13", "value": 0 }] },
+      "error": null
+    },
+    {
+      "name": "a write with an explicit data_type",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [{ "node_id": "ns=2;i=13", "value": "42.5", "data_type": "Double" }]
+      },
+      "error": null
+    },
+    {
+      "name": "a tool with no required arguments accepts an empty call",
+      "tool": "browse_opcua_nodes",
+      "arguments": {},
+      "error": null
+    },
+    {
+      "name": "a depth passed as a string",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": "2" },
+      "error": "browse_opcua_nodes argument depth must be an integer"
+    },
+    {
+      "name": "a whole-valued float is an integer, because JSON has one number type",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": 2.0 },
+      "error": null
+    },
+    {
+      "name": "a fractional depth is not",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": 2.5 },
+      "error": "browse_opcua_nodes argument depth must be an integer"
+    },
+    {
+      "name": "true is not an integer, in JSON or here",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": true },
+      "error": "browse_opcua_nodes argument depth must be an integer"
+    },
+    {
+      "name": "a flag passed as a word",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "include_values": "yes" },
+      "error": "browse_opcua_nodes argument include_values must be a boolean"
+    },
+    {
+      "name": "the second of two required arguments is absent",
+      "tool": "call_opcua_method",
+      "arguments": { "object_node_id": "ns=2;i=1" },
+      "error": "call_opcua_method requires method_node_id"
+    },
+    {
+      "name": "method arguments passed as a bare value",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=1",
+        "method_node_id": "ns=2;i=2",
+        "arguments": "start"
+      },
+      "error": "call_opcua_method argument arguments must be an array"
+    },
+    {
+      "name": "method arguments are untyped, so anything in the list is accepted",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=1",
+        "method_node_id": "ns=2;i=2",
+        "arguments": [true, 3, "on", null]
+      },
+      "error": null
+    },
+    {
+      "name": "a publishing interval passed as a word",
+      "tool": "subscribe_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=3"], "publishing_interval": "fast" },
+      "error": "subscribe_opcua_nodes argument publishing_interval must be a number"
+    },
+    {
+      "name": "an integer is a number",
+      "tool": "subscribe_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=3"], "publishing_interval": 500 },
+      "error": null
+    },
+    {
+      "name": "an empty subscription cancel",
+      "tool": "unsubscribe_opcua_nodes",
+      "arguments": { "subscription_ids": [] },
+      "error": "unsubscribe_opcua_nodes requires a non-empty subscription_ids array"
+    },
+    {
+      "name": "a history node id passed as a number",
+      "tool": "read_opcua_history",
+      "arguments": { "node_id": 2 },
+      "error": "read_opcua_history argument node_id must be a string"
+    },
+    {
+      "name": "a fractional read limit",
+      "tool": "read_events",
+      "arguments": { "limit": 1.5 },
+      "error": "read_events argument limit must be an integer"
+    },
+    {
+      "name": "an alarm acknowledgement with no event id",
+      "tool": "acknowledge_alarm",
+      "arguments": { "comment": "seen" },
+      "error": "acknowledge_alarm requires event_id"
+    },
+    {
+      "name": "an alarm acknowledgement with only the event id",
+      "tool": "acknowledge_alarm",
+      "arguments": { "event_id": "abc123" },
+      "error": null
+    }
+  ]
+}

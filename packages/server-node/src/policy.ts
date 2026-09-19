@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { ACCESS_CLASSES } from "./access-classes.js";
 import { CONTRACT, type ToolGuard, type ToolSpec } from "./contract.js";
 import { namespaceUriForm, resolveNodeId } from "./node-ids.js";
+import { message } from "./errors.js";
 
 export type ToolProfile = "observe" | "operator" | "full";
 
@@ -267,9 +268,9 @@ export class ToolPolicy {
    */
   authorize(name: string, args: Record<string, unknown> = {}): void {
     const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
-    if (!tool) throw new Error(`Unknown tool: ${name}`);
+    if (!tool) throw new Error(message("unknownTool", { tool: name }));
     if (!this.isVisible(tool)) {
-      throw new Error(`Tool "${name}" is disabled by OPCUA_PROFILE=${this.config.profile}`);
+      throw new Error(message("toolDisabled", { tool: name, profile: this.config.profile }));
     }
     if (this.config.profile !== "operator") return;
 
@@ -279,7 +280,7 @@ export class ToolPolicy {
     const guard = tool.guard;
     if (!guard) {
       if (tool.accessClass === "read" || tool.accessClass === "monitor") return;
-      throw new Error(`Tool "${name}" declares no policy guard, so it cannot be authorized`);
+      throw new Error(message("guardMissing", { tool: name }));
     }
 
     this.authorizeNodes(name, guard, args);
@@ -324,7 +325,9 @@ export class ToolPolicy {
         wantedMethod === null ||
         !allowed.has(`${wantedObject}|${wantedMethod}`)
       ) {
-        throw new Error(`Method ${object}|${method} is not allowed by the operator policy`);
+        throw new Error(
+          message("methodNotAllowed", { object_node_id: object, method_node_id: method })
+        );
       }
     }
   }
@@ -359,7 +362,7 @@ export class ToolPolicy {
   private requireWritableNode(nodeId: string): void {
     const wanted = this.resolve(nodeId);
     if (wanted === null || !this.resolvedSet(this.config.writableNodes).has(wanted)) {
-      throw new Error(`Node ${nodeId} is not writable under the operator policy`);
+      throw new Error(message("nodeNotWritable", { node_id: nodeId }));
     }
   }
 }

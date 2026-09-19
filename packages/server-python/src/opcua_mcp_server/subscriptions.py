@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .contract import CONTRACT
+from .errors import message
 from .records import history_record
 
 # Defaults and bounds, read from the contract rather than written here. They were
@@ -74,7 +75,7 @@ def _number(value: Any, fallback: float) -> float:
 
 def unknown_subscription_message(subscription_id: str) -> str:
     """The message both runtimes give for an ID that is not (or no longer) active."""
-    return f"No such subscription: {subscription_id}"
+    return message("unknownSubscription", subscription_id=subscription_id)
 
 
 def unknown_subscriptions_message(subscription_ids: list[str]) -> str:
@@ -87,7 +88,7 @@ def unknown_subscriptions_message(subscription_ids: list[str]) -> str:
     """
     if len(subscription_ids) == 1:
         return unknown_subscription_message(subscription_ids[0])
-    return f"No such subscriptions: {', '.join(subscription_ids)}. Nothing was cancelled."
+    return message("unknownSubscriptions", subscription_ids=", ".join(subscription_ids))
 
 
 def delete_failed_message(subscription_id: str, reason: str) -> str:
@@ -98,11 +99,7 @@ def delete_failed_message(subscription_id: str, reason: str) -> str:
     may still be publishing into the void. Only the explicit path reports this —
     on shutdown a refused delete is the normal case, not news.
     """
-    return (
-        f"Cancelled {subscription_id} here, but the OPC UA server did not accept "
-        f"the delete: {reason}. It may keep publishing until the subscription's "
-        f"lifetime expires."
-    )
+    return message("subscriptionDeleteFailed", subscription_id=subscription_id, reason=reason)
 
 
 @dataclass

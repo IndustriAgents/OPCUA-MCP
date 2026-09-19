@@ -21,6 +21,8 @@ import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { browseAllReferences } from "./browse.js";
 import { OpcuaConnection, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
+import { message } from "./errors.js";
+import { validateArguments } from "./validation.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
 import { toDate } from "./dates.js";
 import {
@@ -310,6 +312,10 @@ function auditDecision(
 
 export class OpcuaTools {
   private aggregateFunctions: string[] = [];
+  /** What the connected server reports it can do; null until first probed.
+   *  Dropped on every session change — a restarted server may answer
+   *  differently, and a stale yes is a tool that fails instead of being hidden. */
+  private capabilities: Set<string> | null = null;
   private readonly subs = new SubscriptionManager();
   private readonly events = new EventSubscriptions();
 
@@ -320,7 +326,10 @@ export class OpcuaTools {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
     // every `subscribe_opcua_nodes` handle the agent holds silently dead.
-    this.conn.onSessionReplaced = (session) => this.subs.reattach(session);
+    this.conn.onSessionReplaced = (session) => {
+      this.capabilities = null;
+      return this.subs.reattach(session);
+    };
   }
 
   /** Tear down every OPC UA subscription this server created.
@@ -353,21 +362,19 @@ export class OpcuaTools {
     return this.conn.accessHistoryDataCapability();
   }
 
-  /** The advertised tool list: the contract, gated by runtime capabilities. */
-  async listTools(): Promise<Tool[]> {
-    // Build the advertised tools from the shared contract, gated by the
-    // server's runtime capabilities (history / aggregate).
-    //
-    // One connection attempt for both probes, not one each: against a server
-    // that is down, each probe would otherwise sit through the whole configured
-    // backoff on its own and double what a tools/list costs. A failure here is
-    // not fatal — the core tools are advertised regardless, and the optional
-    // ones reappear on the next tools/list once the server is back.
+  /** Re-probe what the connected OPC UA server can do, best-effort.
+   *
+   * One connection attempt for both probes, not one each: against a server that
+   * is down, each probe would otherwise sit through the whole configured backoff
+   * on its own and double what a tools/list costs. A failure is not fatal — the
+   * core tools are offered regardless, and the optional ones reappear once the
+   * server is back.
+   */
+  private async refreshCapabilities(): Promise<Set<string>> {
     await this.conn.ensureConnection().catch(() => undefined);
     const probeable = this.conn.connected;
     const historyOk = probeable && (await this.accessHistoryDataCapability());
     this.aggregateFunctions = probeable ? await this.serverCapabilitiesAggregateFunctions() : [];
-    const aggregateOk = this.aggregateFunctions.length > 0;
 
     // A tool gated on capabilities is offered when the server reports *any* of
     // them. `read_opcua_history` lists both: a server with only aggregates can
@@ -375,7 +382,28 @@ export class OpcuaTools {
     // hide the one thing such a server is good at.
     const available = new Set<string>();
     if (historyOk) available.add("history");
-    if (aggregateOk) available.add("aggregate");
+    if (this.aggregateFunctions.length > 0) available.add("aggregate");
+    this.capabilities = available;
+    return available;
+  }
+
+  /** Whether a tool's capability gate is satisfied, probing once if need be.
+   *
+   * Called from `callTool` as well as from `listTools`, because catalog
+   * filtering is not enforcement: a client may hold a tools/list from when the
+   * server still reported HistoricalAccess, and this runtime used to let that
+   * call straight through to node-opcua while the Python one refused it by name.
+   */
+  private async capabilitiesMet(tool: ToolSpec): Promise<boolean> {
+    if (tool.capabilities.length === 0) return true;
+    const available = this.capabilities ?? (await this.refreshCapabilities());
+    return tool.capabilities.some((capability) => available.has(capability));
+  }
+
+  /** The advertised tool list: the contract, gated by runtime capabilities. */
+  async listTools(): Promise<Tool[]> {
+    const available = await this.refreshCapabilities();
+    const aggregateOk = available.has("aggregate");
 
     const tools = this.policy
       .visibleTools(CONTRACT.tools)
@@ -457,6 +485,19 @@ export class OpcuaTools {
     let authorized = false;
 
     try {
+      // Shape before permission: a call that does not match the contract is not a
+      // call this server can reason about, and the policy layer reads the very
+      // arguments checked here to decide what a write is aimed at. There was no
+      // check at all on this runtime — the low-level MCP `Server` does not
+      // validate against the advertised `inputSchema`, and `dispatch` cast
+      // straight off the wire — so a malformed call reached node-opcua as
+      // whatever the client sent.
+      const spec = CONTRACT.tools.find((candidate) => candidate.name === name);
+      if (!spec) {
+        throw new Error(message("unknownTool", { tool: name }));
+      }
+      validateArguments(name, spec.inputSchema, args ?? {});
+
       // This is the security boundary. Filtering tools/list improves the model's
       // choices, but clients cache catalogs and may call a previously visible
       // tool directly, so authorize again before touching the OPC UA network.
@@ -478,6 +519,12 @@ export class OpcuaTools {
       // say so. Everything below needs a session first.
       if (name === "get_server_status") {
         return statusResult(await this.getServerStatus());
+      }
+
+      if (!(await this.capabilitiesMet(spec))) {
+        throw new Error(
+          message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
+        );
       }
 
       // Connecting is attempted before dispatching, so that a server that is
@@ -505,12 +552,15 @@ export class OpcuaTools {
       auditDecision(this.policy, name, args ?? {}, "completed");
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const reason = error instanceof Error ? error.message : String(error);
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
-      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", message);
+      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", reason);
+      // No "Error: " prefix. `isError` already says it is one, and the Python
+      // runtime returns the bare message — so prefixing here made every failure
+      // read two ways depending on which runtime a client had started.
       return {
-        content: [{ type: "text", text: `Error: ${message}` }],
+        content: [{ type: "text", text: reason }],
         isError: true,
       };
     }
@@ -593,7 +643,7 @@ export class OpcuaTools {
         );
 
       default:
-        throw new Error(`Unknown tool: ${name}`);
+        throw new Error(message("unknownTool", { tool: name }));
     }
   }
 
@@ -638,7 +688,7 @@ export class OpcuaTools {
   private async readOpcuaNodes(nodeIds: string[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new Error("read_opcua_nodes requires a non-empty node_ids array");
+      throw new Error(message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" }));
     }
 
     try {
@@ -649,7 +699,7 @@ export class OpcuaTools {
         nodeIds.map((nodeId, index) => toNodeValueRecord(nodeId, dataValues[index]))
       );
     } catch (error) {
-      throw new Error(`Failed to read nodes: ${describeError(error)}`);
+      throw new Error(message("readFailed", { reason: describeError(error) }));
     }
   }
 
@@ -670,6 +720,14 @@ export class OpcuaTools {
     const session = this.requireSession();
     const { nodeId, aggregateFunction } = request;
 
+    // Outside the try, as the Python runtime has it. Inside, this refusal came
+    // back wrapped as "Failed to read history of node ns=2;i=3: ..." on this
+    // runtime and bare on the other — the request never reached the OPC UA
+    // server, so nothing failed to be read.
+    if (aggregateFunction !== undefined && request.start === undefined) {
+      throw new Error(message("aggregateNeedsStart"));
+    }
+
     try {
       if (aggregateFunction === undefined) {
         const historyValues = await session.readHistoryValue(
@@ -683,10 +741,6 @@ export class OpcuaTools {
           throw new Error(`Read history failed with status: ${historyValues[0].statusCode.name}`);
         }
         return historyResult((historyValues[0].historyData as HistoryData).dataValues);
-      }
-
-      if (request.start === undefined) {
-        throw new Error("read_opcua_history requires start_time when aggregate_function is given");
       }
 
       // Don't depend on a prior tools/list having populated the cache: a client
@@ -714,7 +768,7 @@ export class OpcuaTools {
       }
       return historyResult((historyValues.historyData as HistoryData).dataValues);
     } catch (error) {
-      throw new Error(`Failed to read history of node ${nodeId}: ${describeError(error)}`);
+      throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }));
     }
   }
 
@@ -825,7 +879,7 @@ export class OpcuaTools {
       if (includeValues) await this.fillVariableDetail(session, found);
       return objectResult({ nodes: found, truncated, inspected });
     } catch (error) {
-      throw new Error(`Failed to browse ${root}: ${describeError(error)}`);
+      throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }));
     }
   }
 
@@ -956,7 +1010,7 @@ export class OpcuaTools {
   private async writeOpcuaNodes(nodes: WriteRequest[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodes) || nodes.length === 0) {
-      throw new Error("write_opcua_nodes requires a non-empty nodes array");
+      throw new Error(message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" }));
     }
 
     try {
@@ -1041,7 +1095,7 @@ export class OpcuaTools {
 
       return recordBlocks(results);
     } catch (error) {
-      throw new Error(`Failed to write nodes: ${describeError(error)}`);
+      throw new Error(message("writeFailed", { reason: describeError(error) }));
     }
   }
 
@@ -1091,7 +1145,11 @@ export class OpcuaTools {
       });
     } catch (error) {
       throw new Error(
-        `Failed to call method ${methodNodeId} on object ${objectNodeId}: ${describeError(error)}`
+        message("methodFailed", {
+          method_node_id: methodNodeId,
+          object_node_id: objectNodeId,
+          reason: describeError(error),
+        })
       );
     }
   }
@@ -1120,12 +1178,23 @@ export class OpcuaTools {
 
   private async subscribeOpcuaNodes(nodeIds: string[], options: SubscribeOptions) {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new Error("subscribe_opcua_nodes requires a non-empty node_ids array");
+      throw new Error(
+        message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
+      );
     }
     const session = this.requireSession();
     const records: SubscriptionRecord[] = [];
     for (const nodeId of nodeIds) {
-      records.push(await this.subs.subscribe(session, nodeId, options));
+      // Named per node, as the Python runtime words it: a batch that fails on
+      // its fourth node should say which one, not report the library's own
+      // phrasing for whichever call happened to throw.
+      try {
+        records.push(await this.subs.subscribe(session, nodeId, options));
+      } catch (error) {
+        throw new Error(
+          message("subscribeFailed", { node_id: nodeId, reason: describeError(error) })
+        );
+      }
     }
     return subscriptionResult(records);
   }
@@ -1138,7 +1207,12 @@ export class OpcuaTools {
    */
   private async unsubscribeOpcuaNodes(subscriptionIds: string[]) {
     if (!Array.isArray(subscriptionIds) || subscriptionIds.length === 0) {
-      throw new Error("unsubscribe_opcua_nodes requires a non-empty subscription_ids array");
+      throw new Error(
+        message("emptyArray", {
+          tool: "unsubscribe_opcua_nodes",
+          argument: "subscription_ids",
+        })
+      );
     }
     const active = new Set(this.subs.list().map((record) => record.subscription_id));
     const unknown = subscriptionIds.filter((id) => !active.has(id));
@@ -1168,7 +1242,9 @@ export class OpcuaTools {
         bufferSize
       ));
     } catch (error) {
-      throw new Error(`Failed to subscribe to events from node ${nodeId}: ${describeError(error)}`);
+      throw new Error(
+        message("eventSubscribeFailed", { node_id: nodeId, reason: describeError(error) })
+      );
     }
 
     return objectResult({
@@ -1182,7 +1258,7 @@ export class OpcuaTools {
   private readEvents(nodeId: string, limit: number) {
     const drained = this.events.drain(this.requireSession(), nodeId, limit);
     if (drained === null) {
-      throw new Error(`Not subscribed to events from node ${nodeId}. Call subscribe_events first.`);
+      throw new Error(message("notSubscribedToEvents", { node_id: nodeId }));
     }
     const result = eventResult(drained.records);
     if (drained.dropped > 0) {
@@ -1201,7 +1277,7 @@ export class OpcuaTools {
     try {
       alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
     } catch (error) {
-      throw new Error(`Failed to list active alarms from node ${nodeId}: ${describeError(error)}`);
+      throw new Error(message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }));
     }
 
     this.events.remember(alarms);
@@ -1211,20 +1287,21 @@ export class OpcuaTools {
   private async acknowledgeAlarm(eventId: string, comment: string, conditionId?: string) {
     const condition = conditionId || this.events.conditionFor(eventId);
     if (!condition) {
-      throw new Error(
-        `Unknown event_id "${eventId}". Call list_active_alarms first, or pass the ` +
-          "condition_id of the alarm to acknowledge."
-      );
+      throw new Error(message("unknownEventId", { event_id: eventId }));
     }
 
     let statusCode;
     try {
       statusCode = await acknowledgeAlarm(this.requireSession(), condition, eventId, comment);
     } catch (error) {
-      throw new Error(`Failed to acknowledge alarm ${condition}: ${describeError(error)}`);
+      throw new Error(
+        message("acknowledgeFailed", { condition_id: condition, reason: describeError(error) })
+      );
     }
     if (statusCode !== StatusCodes.Good) {
-      throw new Error(`Failed to acknowledge alarm ${condition}: ${statusCode.name}`);
+      throw new Error(
+        message("acknowledgeFailed", { condition_id: condition, reason: statusCode.name })
+      );
     }
 
     return objectResult({

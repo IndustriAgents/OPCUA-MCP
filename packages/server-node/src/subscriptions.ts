@@ -22,6 +22,7 @@ import {
 
 import { CONTRACT } from "./contract.js";
 import { HistoryRecord, toHistoryRecord } from "./records.js";
+import { message } from "./errors.js";
 
 // Defaults and bounds, read from the contract rather than written here. They
 // were five constants declared identically in this file and in
@@ -102,7 +103,7 @@ export function resolveOptions(options: SubscribeOptions): {
 
 /** The message both runtimes give for an ID that is not (or no longer) active. */
 export function unknownSubscriptionMessage(id: string): string {
-  return `No such subscription: ${id}`;
+  return message("unknownSubscription", { subscription_id: id });
 }
 
 /** The same, for a batch cancel — named in full so the caller can see which failed.
@@ -115,7 +116,7 @@ export function unknownSubscriptionMessage(id: string): string {
 export function unknownSubscriptionsMessage(ids: string[]): string {
   return ids.length === 1
     ? unknownSubscriptionMessage(ids[0])
-    : `No such subscriptions: ${ids.join(", ")}. Nothing was cancelled.`;
+    : message("unknownSubscriptions", { subscription_ids: ids.join(", ") });
 }
 
 /** The message both runtimes give when the OPC UA server refuses an explicit cancel.
@@ -126,10 +127,7 @@ export function unknownSubscriptionsMessage(ids: string[]): string {
  * on shutdown a refused delete is the normal case, not news.
  */
 export function terminateFailedMessage(id: string, reason: string): string {
-  return (
-    `Cancelled ${id} here, but the OPC UA server did not accept the delete: ${reason}. ` +
-    `It may keep publishing until the subscription's lifetime expires.`
-  );
+  return message("subscriptionDeleteFailed", { subscription_id: id, reason });
 }
 
 export class SubscriptionManager {

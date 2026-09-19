@@ -103,6 +103,17 @@ class OPCUAMCPServer {
   }
 
   async run() {
+    // Before the transport, not after it. `tools/list` no longer opens the
+    // connection itself, so something has to — and connecting the transport
+    // first means requests are served *during* the warm-up: a tools/call landing
+    // then found no session yet, cached "this server supports nothing", and
+    // refused a history read against a server that advertises HistoricalAccess.
+    // The Python runtime has always done this in its lifespan, which runs before
+    // the first request for the same reason.
+    //
+    // Never fatal: a plant that is unreachable simply means the optional tools
+    // appear once a tool call has brought the connection up.
+    await this.tools.warmUp();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error("OPC UA MCP Server running on stdio");

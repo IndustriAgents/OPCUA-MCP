@@ -417,6 +417,12 @@
     "minBufferSize": 1,
     "maxBufferSize": 1000
   },
+  "limits": {
+    "$comment": "Bounds on how much one call may ask for, here rather than written out in each runtime. Like traversal's caps these are refusals rather than tuning knobs: browse was bounded from the start because an unbounded walk of a plant address space is a request that never returns, and the same was true of a raw history read over a year of 100ms data, of a batch read with no length, and of a subscribe that asks a PLC for one subscription per node with nothing counting them. maxHistoryValues is also what num_values: 0 now means — 'as many as allowed', not 'every reading in the range'.",
+    "maxNodesPerRead": 500,
+    "maxHistoryValues": 5000,
+    "maxSubscriptions": 200
+  },
   "traversal": {
     "$comment": "Bounds and defaults for browse_opcua_nodes, here rather than written out in each runtime — they were duplicated as literals in tools.ts and server.py, which is how two servers come to disagree about how deep 'deep' is. The caps are not tuning knobs but refusals: an unbounded walk of a plant address space is a request that never returns.",
     "rootNodeId": "ns=0;i=85",
@@ -452,6 +458,8 @@
     "unknownTool": "Unknown tool: {tool}",
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
     "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
+    "tooManyNodes": "{tool} accepts at most {limit} nodes in one call, got {count}. Split the request.",
+    "tooManySubscriptions": "This server already holds {active} of at most {limit} subscriptions; subscribing to {wanted} more would exceed it. Cancel some with unsubscribe_opcua_nodes.",
     "nodeNotWritable": "Node {node_id} is not writable under the operator policy",
     "methodNotAllowed": "Method {object_node_id}|{method_node_id} is not allowed by the operator policy",
     "guardMissing": "Tool \"{tool}\" declares no policy guard, so it cannot be authorized",
@@ -471,6 +479,11 @@
     "unknownSubscription": "No such subscription: {subscription_id}",
     "unknownSubscriptions": "No such subscriptions: {subscription_ids}. Nothing was cancelled.",
     "subscriptionDeleteFailed": "Cancelled {subscription_id} here, but the OPC UA server did not accept the delete: {reason}. It may keep publishing until the subscription's lifetime expires."
+  },
+  "notices": {
+    "$comment": "Messages a tool adds beside a successful result, rather than instead of one. They are returned as a trailing plain-text content block and are deliberately NOT part of structuredContent: a notice is not a record, and a client reading the structured result must not have to filter it out. Worded here for the same reason the errors are — read_events carried two hand-mirrored copies of the dropped-events sentence before this block existed. Placeholders are {name}.",
+    "droppedEvents": "Note: {dropped} older event(s) were dropped before this read — the buffer of {buffer_size} filled up. Raise buffer_size or read more often.",
+    "historyTruncated": "Note: {count} readings is the per-call maximum, so the range may hold more — narrow start_time/end_time, or summarise the whole of it with aggregate_function."
   },
   "resources": [
     {
@@ -501,7 +514,7 @@
             "type": "array",
             "minItems": 1,
             "items": { "type": "string" },
-            "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list."
+            "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
           }
         },
         "required": ["node_ids"]
@@ -573,7 +586,7 @@
           },
           "num_values": {
             "type": "integer",
-            "description": "Maximum number of raw readings to return. 0 (the default) means every reading in the range. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
+            "description": "Maximum number of raw readings to return, capped at 5000. 0 (the default) means as many as that cap allows, not every reading in the range — a raw read of a year of fast data is a request that never returns. When the cap is reached the result says so, and the way to see the whole range is `aggregate_function` rather than a bigger number. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
           },
           "aggregate_function": {
             "type": "string",
@@ -712,7 +725,7 @@
             "type": "array",
             "minItems": 1,
             "items": { "type": "string" },
-            "description": "The OPC UA node IDs to monitor. Example: ['ns=2;i=3']. A single node is a one-element list."
+            "description": "The OPC UA node IDs to monitor. Example: ['ns=2;i=3']. A single node is a one-element list. Each gets its own OPC UA subscription, and this server holds at most 200 at a time."
           },
           "publishing_interval": {
             "type": "number",

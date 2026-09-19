@@ -205,3 +205,73 @@ async def test_a_bad_retry_setting_is_rejected_at_startup(impl):
     with pytest.raises(BaseException):  # noqa: B017
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
+
+
+# --- the catalogue must not wait on the plant (issue #83) ----------------------
+
+
+#: Long enough that a `tools/list` which still connects cannot possibly hide
+#: inside the allowance below. With these settings a full round of backoff is
+#: 2s + 4s + 8s + 8s = 22s on both runtimes, against an endpoint that refuses
+#: immediately.
+SLOW_RETRY = {
+    "OPCUA_RECONNECT_INITIAL_DELAY_MS": "2000",
+    "OPCUA_RECONNECT_MAX_DELAY_MS": "8000",
+    "OPCUA_RECONNECT_MAX_RETRY": "3",
+}
+
+#: What a catalogue request is allowed to cost with the plant unreachable. Two
+#: orders of magnitude below the backoff budget above, and far above what
+#: answering from the contract actually takes.
+LIST_TOOLS_BUDGET_SECONDS = 5.0
+
+
+async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
+    """`tools/list` used to pay the whole reconnect budget, per call.
+
+    It opened a connection before probing capabilities, and `connect` holds its
+    lock across the entire backoff loop — so against a plant that is down every
+    catalogue request sat through it and serialised every concurrent tool call
+    behind it. Clients list at session start, which is exactly when a plant that
+    is down is most likely to be down.
+
+    The startup warm-up is where the waiting now happens, once, and it is not on
+    this path: by the time a request is served the attempt has already been made
+    and given up on.
+    """
+    params = _server_params(impl, "opc.tcp://127.0.0.1:1/unreachable")
+    params.env.update(SLOW_RETRY)
+
+    async with connect(params) as session:
+        started = asyncio.get_running_loop().time()
+        listed = await session.list_tools()
+        # Twice: the second is the one that would re-probe under the old code.
+        await session.list_tools()
+        elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < LIST_TOOLS_BUDGET_SECONDS, (
+        f"{impl}: two tools/list against an unreachable server took {elapsed:.1f}s; "
+        f"the catalogue is waiting on the network again"
+    )
+    # Still a usable catalogue: the core tools do not depend on a connection.
+    names = {tool.name for tool in listed.tools}
+    assert "get_server_status" in names, f"{impl}: {sorted(names)}"
+    assert "read_opcua_nodes" in names, f"{impl}: {sorted(names)}"
+
+
+async def test_the_catalogue_gains_the_optional_tools_once_the_server_is_reachable(
+    impl, restartable_opcua_server
+):
+    """Convergence without a notification, which is what both runtimes promise.
+
+    No `notifications/tools/list_changed` is sent — see docs/architecture.md for
+    why neither runtime offers one. What is promised instead is that the
+    catalogue is *correct when asked*: the capabilities are re-probed on every
+    (re)connect, so a client that listed too early and lists again gets the whole
+    surface.
+    """
+    async with connect(params_for(impl, restartable_opcua_server.url)) as session:
+        listed = await session.list_tools()
+        assert "read_opcua_history" in {tool.name for tool in listed.tools}, (
+            f"{impl}: the mock advertises HistoricalAccess, so the history tool must be offered"
+        )

@@ -82,20 +82,33 @@ async def _list_tools(params: StdioServerParameters) -> set[str]:
         return {t.name for t in (await session.list_tools()).tools}
 
 
+def node_tool(name: str) -> str:
+    """The full path to a Node CLI, or skip.
+
+    Resolved rather than passed as a bare name: on Windows `npm` is `npm.cmd`,
+    and `subprocess.run(["npm", ...])` without a shell fails with
+    `FileNotFoundError: [WinError 2]`. `shutil.which` already knows this; the
+    fixtures were asking it and then discarding the answer.
+    """
+    resolved = shutil.which(name)
+    if resolved is None:
+        pytest.skip(f"{name} not available")
+    return resolved
+
+
 @pytest.fixture(scope="module")
 def npm_install(tmp_path_factory):
     """Pack the npm tarball and install it into a scratch project."""
-    if shutil.which("npm") is None:
-        pytest.skip("npm not available")
+    npm = node_tool("npm")
 
     staging = tmp_path_factory.mktemp("npm-pack")
-    out = _run(["npm", "pack", "--pack-destination", str(staging)], cwd=NODE_PKG_DIR)
+    out = _run([npm, "pack", "--pack-destination", str(staging)], cwd=NODE_PKG_DIR)
     tarball = staging / out.stdout.strip().splitlines()[-1]
     assert tarball.is_file(), f"npm pack did not produce {tarball}"
 
     project = tmp_path_factory.mktemp("npm-consumer")
-    _run(["npm", "init", "-y"], cwd=project)
-    _run(["npm", "install", str(tarball)], cwd=project)
+    _run([npm, "init", "-y"], cwd=project)
+    _run([npm, "install", str(tarball)], cwd=project)
     return project
 
 
@@ -220,7 +233,12 @@ def test_wheel_does_not_pollute_site_packages(wheel_venv):
     namespaced filename to avoid colliding with other distributions. It now ships
     inside the package.
     """
-    site_packages = next((wheel_venv.parent / "lib").glob("python*/site-packages"))
+    # Windows puts it at `Lib/site-packages`; POSIX at `lib/pythonX.Y/site-packages`.
+    candidates = [
+        *(wheel_venv.parent / "lib").glob("python*/site-packages"),
+        wheel_venv.parent / "Lib" / "site-packages",
+    ]
+    site_packages = next(path for path in candidates if path.is_dir())
     record = next(site_packages.glob("opcua_mcp_server-*.dist-info/RECORD")).read_text(
         encoding="utf-8"
     )
@@ -273,17 +291,16 @@ async def test_wheel_installed_server_lists_tools(wheel_venv, opcua_server, tmp_
 @pytest.fixture(scope="module")
 def packed_mcpb(tmp_path_factory):
     """Build the real `.mcpb` and unpack it, yielding the extracted directory."""
-    if shutil.which("npm") is None:
-        pytest.skip("npm not available")
+    npm = node_tool("npm")
     if not (NODE_PKG_DIR / "node_modules").is_dir():
         pytest.skip("Node dependencies not installed — run `npm ci` in packages/server-node")
 
-    _run(["npm", "run", "build:mcpb"], cwd=NODE_PKG_DIR)
+    _run([npm, "run", "build:mcpb"], cwd=NODE_PKG_DIR)
     bundles = list((NODE_PKG_DIR / "dist").glob("*.mcpb"))
     assert len(bundles) == 1, f"expected exactly one .mcpb, got {bundles}"
 
     unpacked = tmp_path_factory.mktemp("mcpb") / "extension"
-    unpack = ["npx", "--no-install", "mcpb", "unpack", str(bundles[0]), str(unpacked)]
+    unpack = [node_tool("npx"), "--no-install", "mcpb", "unpack", str(bundles[0]), str(unpacked)]
     _run(unpack, cwd=NODE_PKG_DIR)
     return unpacked
 

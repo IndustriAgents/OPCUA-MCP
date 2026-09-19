@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than truncated, and `subscribe_opcua_nodes` counts against
   `limits.maxSubscriptions` (200) because it asks a PLC for one subscription per
   node.
+- **The artifact smoke fixtures could not run on Windows**, the third thing the
+  cross-platform job found. They invoked `npm`/`npx` as bare names, which
+  `subprocess` cannot resolve to `npm.cmd` without a shell (`[WinError 2]`), and
+  they looked for `lib/pythonX.Y/site-packages` in a venv where Windows puts
+  `Lib/site-packages`. The fixtures already called `shutil.which` and threw the
+  answer away; they now use it.
 - **Forty-six test files read the contract at the system locale**, also found by
   the new cross-platform job. `Path.read_text()` defaults to the system encoding,
   which on Windows is cp1252 — so every em dash and ellipsis in

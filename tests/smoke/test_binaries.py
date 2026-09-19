@@ -134,7 +134,7 @@ def test_binary_reports_the_manifest_version(binary):
     """
     proc = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
-    expected = json.loads((NODE_PKG_DIR / "package.json").read_text())["version"]
+    expected = json.loads((NODE_PKG_DIR / "package.json").read_text(encoding="utf-8"))["version"]
     assert proc.stdout.strip() == expected
 
 

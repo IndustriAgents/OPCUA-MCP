@@ -17,7 +17,7 @@ import pytest
 from conftest import ROOT
 from opcua_mcp_server.contract import contract_candidates, load_contract
 
-CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
+CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 TOOLS = CONTRACT["tools"]
 CAPABILITIES = CONTRACT["capabilities"]
 RESOURCES = CONTRACT["resources"]
@@ -392,11 +392,12 @@ def test_error_template_is_used_by_both_runtimes(key):
     remove, reintroduced one key at a time.
     """
     python_sources = " ".join(
-        path.read_text()
+        path.read_text(encoding="utf-8")
         for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").glob("*.py")
     )
     node_sources = " ".join(
-        path.read_text() for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
     )
     assert f'"{key}"' in python_sources, f"errors.{key} is never used by the Python server"
     assert f'"{key}"' in node_sources, f"errors.{key} is never used by the Node server"
@@ -409,7 +410,7 @@ def _python_string_literals(path: Path) -> list[str]:
     scan and it flagged the *docstring* that explains the bug, which is precisely
     the kind of false positive that gets a useful test deleted.
     """
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -436,7 +437,7 @@ def _typescript_string_literals(path: Path) -> list[str]:
     Crude next to a parser, and enough: block comments and `//` lines are what
     carry the prose that would otherwise look like an inlined message.
     """
-    text = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.DOTALL)
+    text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
     text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
     matches = re.findall(r"\"([^\"\n]*)\"|'([^'\n]*)'|`([^`]*)`", text)
     return [group for match in matches for group in match if group]
@@ -481,4 +482,32 @@ def test_no_runtime_still_carries_its_own_copy_of_a_message():
     ]
     assert not offenders, (
         f"these messages are inlined again instead of coming from contract.errors: {offenders}"
+    )
+
+
+def test_no_test_reads_a_file_at_the_system_locale():
+    """`read_text()` without an encoding is a Windows-only failure waiting to happen.
+
+    `Path.read_text` defaults to the system locale, which on Windows is cp1252 —
+    so the em dashes and ellipses throughout `contract/tools.json` come back as
+    replacement characters and every description comparison fails. The *product*
+    has always known this: `contract.py` passes `encoding="utf-8"` explicitly and
+    says why. The tests did not, and nothing noticed until CI first ran on
+    Windows, because on macOS and Linux the locale happens to be UTF-8.
+
+    Checked here rather than left to the cross-platform job, which is not a
+    required check and runs on two of the four jobs: this makes the mistake fail
+    everywhere, immediately, for the price of a grep.
+    """
+    # Assembled rather than written out, so this line is not itself a hit.
+    bare_read = ".read_text" + "()"
+    offenders = [
+        f"{path.relative_to(ROOT)}:{number}"
+        for path in (ROOT / "tests").rglob("*.py")
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if bare_read in line
+    ]
+    assert not offenders, (
+        f"these read a file at the system locale and will fail on Windows; "
+        f'pass encoding="utf-8": {offenders}'
     )

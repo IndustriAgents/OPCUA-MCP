@@ -16,11 +16,11 @@ from opcua_mcp_server.contract import CONTRACT
 from opcua_mcp_server.limits import MAX_HISTORY_VALUES, history_values, history_was_clipped
 
 LIMITS = CONTRACT["limits"]
-NODE_SRC = (ROOT / "packages" / "server-node" / "src" / "tools.ts").read_text()
+NODE_SRC = (ROOT / "packages" / "server-node" / "src" / "tools.ts").read_text(encoding="utf-8")
 PYTHON_SRC = (
     ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "server.py"
-).read_text()
-CONTRACT_TEXT = (ROOT / "contract" / "tools.json").read_text()
+).read_text(encoding="utf-8")
+CONTRACT_TEXT = (ROOT / "contract" / "tools.json").read_text(encoding="utf-8")
 
 
 def test_every_limit_is_a_positive_whole_number():
@@ -39,8 +39,10 @@ def test_the_limits_are_the_ones_both_runtimes_enforce():
     """
     python_limits = (
         ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "limits.py"
-    ).read_text()
-    node_limits = (ROOT / "packages" / "server-node" / "src" / "limits.ts").read_text()
+    ).read_text(encoding="utf-8")
+    node_limits = (ROOT / "packages" / "server-node" / "src" / "limits.ts").read_text(
+        encoding="utf-8"
+    )
     for name in ("maxNodesPerRead", "maxHistoryValues", "maxSubscriptions"):
         assert f'LIMITS["{name}"]' in python_limits, f"Python does not read limits.{name}"
         assert f"CONTRACT.limits.{name}" in node_limits, f"Node does not read limits.{name}"
@@ -96,7 +98,9 @@ def test_the_truncation_notice_exists_and_names_what_to_do_instead():
 # --- how num_values resolves, from the table both runtimes share ---------------
 
 
-TABLE = json.loads((ROOT / "tests" / "fixtures" / "history-limits.json").read_text())
+TABLE = json.loads(
+    (ROOT / "tests" / "fixtures" / "history-limits.json").read_text(encoding="utf-8")
+)
 
 
 def _number(value):

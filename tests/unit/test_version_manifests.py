@@ -30,11 +30,11 @@ SERVER_JSON = ROOT / "server.json"
 
 
 def _node_version() -> str:
-    return json.loads(NODE_PKG.read_text())["version"]
+    return json.loads(NODE_PKG.read_text(encoding="utf-8"))["version"]
 
 
 def _py_version(pyproject) -> str:
-    return tomllib.loads(pyproject.read_text())["project"]["version"]
+    return tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
 
 
 def test_manifests_agree_on_version():
@@ -50,9 +50,13 @@ def test_manifests_agree_on_version():
         "server-node/package.json": _node_version(),
         "server-python/pyproject.toml": _py_version(PYTHON_PYPROJECT),
         "mock-server/pyproject.toml": _py_version(MOCK_PYPROJECT),
-        "server-node/mcpb/manifest.json": json.loads(MCPB_MANIFEST.read_text())["version"],
-        "server.json": json.loads(SERVER_JSON.read_text())["version"],
-        "server.json packages[0]": json.loads(SERVER_JSON.read_text())["packages"][0]["version"],
+        "server-node/mcpb/manifest.json": json.loads(MCPB_MANIFEST.read_text(encoding="utf-8"))[
+            "version"
+        ],
+        "server.json": json.loads(SERVER_JSON.read_text(encoding="utf-8"))["version"],
+        "server.json packages[0]": json.loads(SERVER_JSON.read_text(encoding="utf-8"))["packages"][
+            0
+        ]["version"],
     }
     assert len(set(versions.values())) == 1, f"version drift across manifests: {versions}"
 
@@ -67,7 +71,7 @@ def test_no_hardcoded_version_in_node_source():
     offenders = [
         path.name
         for path in sorted((ROOT / "packages" / "server-node" / "src").glob("*.ts"))
-        if 'version: "' in path.read_text()
+        if 'version: "' in path.read_text(encoding="utf-8")
     ]
     assert not offenders, f"hardcoded version literal in: {offenders}"
 
@@ -81,7 +85,7 @@ def test_the_npm_lockfile_records_the_package_version():
     produces a version diff nobody asked for. Regenerate with
     `npm install --package-lock-only` rather than editing by hand.
     """
-    lock = json.loads(NODE_LOCKFILE.read_text())
+    lock = json.loads(NODE_LOCKFILE.read_text(encoding="utf-8"))
     expected = _node_version()
     assert lock["version"] == expected, "package-lock.json top-level version is stale"
     assert lock["packages"][""]["version"] == expected, 'packages[""] version is stale'
@@ -95,8 +99,8 @@ def test_the_registry_manifest_points_at_this_package():
     fault: it makes the listing unverifiable, and only a fresh npm release can fix
     it. The version halves of this pair are covered above.
     """
-    registry = json.loads(SERVER_JSON.read_text())
-    package = json.loads(NODE_PKG.read_text())
+    registry = json.loads(SERVER_JSON.read_text(encoding="utf-8"))
+    package = json.loads(NODE_PKG.read_text(encoding="utf-8"))
     assert registry["name"] == package.get("mcpName"), (
         f"server.json name {registry['name']!r} != package.json mcpName {package.get('mcpName')!r}"
     )

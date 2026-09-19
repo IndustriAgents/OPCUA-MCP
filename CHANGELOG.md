@@ -91,6 +91,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than truncated, and `subscribe_opcua_nodes` counts against
   `limits.maxSubscriptions` (200) because it asks a PLC for one subscription per
   node.
+- **Forty-six test files read the contract at the system locale**, also found by
+  the new cross-platform job. `Path.read_text()` defaults to the system encoding,
+  which on Windows is cp1252 — so every em dash and ellipsis in
+  `contract/tools.json` came back as a replacement character and the description
+  comparisons failed. The product has always passed `encoding="utf-8"`
+  explicitly, with a comment saying why; the tests never did, and on macOS and
+  Linux the locale happens to be UTF-8 so nothing noticed. Fixed everywhere, with
+  a unit test that fails if a bare read reappears.
 - **`isEphemeralInstall` missed npx caches spelled with forward slashes on
   Windows** — found by the new cross-platform CI job on its first run. It split
   the path on the *host's* separator, so a Windows path written with `/` (which

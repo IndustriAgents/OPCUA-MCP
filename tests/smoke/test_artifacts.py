@@ -221,7 +221,9 @@ def test_wheel_does_not_pollute_site_packages(wheel_venv):
     inside the package.
     """
     site_packages = next((wheel_venv.parent / "lib").glob("python*/site-packages"))
-    record = next(site_packages.glob("opcua_mcp_server-*.dist-info/RECORD")).read_text()
+    record = next(site_packages.glob("opcua_mcp_server-*.dist-info/RECORD")).read_text(
+        encoding="utf-8"
+    )
 
     top_level = {line.split("/")[0] for line in record.splitlines() if line.strip()}
     # Drop metadata and the console script, which RECORD lists as ../../../bin/...
@@ -289,8 +291,8 @@ def packed_mcpb(tmp_path_factory):
 def test_mcpb_manifest_matches_the_package_version(packed_mcpb):
     """`build-mcpb.mjs` stamps the version from package.json, so a release that
     forgets to touch mcpb/manifest.json still ships a correctly labelled bundle."""
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
-    package = json.loads((NODE_PKG_DIR / "package.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
+    package = json.loads((NODE_PKG_DIR / "package.json").read_text(encoding="utf-8"))
     assert manifest["version"] == package["version"]
 
 
@@ -301,7 +303,7 @@ def test_mcpb_is_self_contained(packed_mcpb):
     bundle that expected its dependencies to be present would fail at startup on
     a user's machine and nowhere else.
     """
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     entry = packed_mcpb / manifest["server"]["entry_point"]
     assert entry.is_file(), f"entry point {manifest['server']['entry_point']} missing"
     assert not list(packed_mcpb.rglob("node_modules"))
@@ -314,7 +316,7 @@ def test_mcpb_exposes_the_endpoint_as_user_config(packed_mcpb):
     Desktop renders the field as a form and substitutes the answer here. If the
     two halves stop matching, the server silently starts on the default endpoint.
     """
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     assert "opcua_server_url" in manifest["user_config"]
     assert manifest["user_config"]["opcua_server_url"]["required"] is True
     env = manifest["server"]["mcp_config"]["env"]
@@ -330,7 +332,7 @@ def test_mcpb_exposes_every_security_setting(packed_mcpb):
     unencrypted, anonymous default. Pinned against the runtime's own variable
     names so the two cannot drift apart in silence.
     """
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     env = manifest["server"]["mcp_config"]["env"]
 
     required = {
@@ -355,7 +357,7 @@ def test_mcpb_exposes_every_security_setting(packed_mcpb):
 
 
 def test_mcpb_exposes_the_production_policy(packed_mcpb):
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     env = manifest["server"]["mcp_config"]["env"]
     required = {
         "OPCUA_PROFILE",
@@ -379,7 +381,7 @@ async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb,
     half a credential and the server exited with a configuration error before
     serving anything.
     """
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     blank = {name: "" for name in manifest["server"]["mcp_config"]["env"]}
     params = StdioServerParameters(
         command="node",
@@ -403,7 +405,7 @@ async def test_mcpb_server_lists_tools(packed_mcpb, opcua_server):
     bundling inlines the contract and rewrites node-opcua's CommonJS requires, and
     a mistake in either shows up only here.
     """
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text())
+    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     params = StdioServerParameters(
         command="node",
         args=[str(packed_mcpb / manifest["server"]["entry_point"])],

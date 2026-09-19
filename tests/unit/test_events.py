@@ -25,7 +25,7 @@ from opcua_mcp_server.events import (
     refresh_timed_out_message,
 )
 
-CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
+CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 EVENTS = CONTRACT["events"]
 FIELD_KEYS = [field["key"] for field in EVENTS["fields"]]
 PATH_OF = {field["key"]: field["path"] for field in EVENTS["fields"]}

@@ -30,7 +30,9 @@ from opcua_mcp_server import format_iso_utc, history_record, history_records, va
 
 TIMESTAMP = datetime(2026, 9, 9, 13, 36, 1, 468000)
 
-FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "value-encoding.json").read_text())
+FIXTURE = json.loads(
+    (ROOT / "tests" / "fixtures" / "value-encoding.json").read_text(encoding="utf-8")
+)
 CASES = {case["name"]: case for case in FIXTURE["cases"]}
 
 # The native python-opcua value for each case in the fixture. The Node suite has

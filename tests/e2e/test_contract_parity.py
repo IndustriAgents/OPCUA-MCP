@@ -21,7 +21,7 @@ import pytest
 from conftest import ROOT
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, text_of
 
-CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
+CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 
 # The bundled mock server enables history but advertises no aggregate functions,
 # so a tool is applicable here if it needs nothing or accepts "history".

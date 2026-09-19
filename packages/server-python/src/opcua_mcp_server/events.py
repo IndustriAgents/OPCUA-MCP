@@ -30,6 +30,7 @@ from typing import Any
 from opcua import ua
 
 from .contract import EVENTS
+from .notices import notice
 from .records import variant_to_json
 
 #: The Server object — where most servers raise every event they have.
@@ -78,10 +79,7 @@ def dropped_events_message(dropped: int, buffer_size: int) -> str:
     complete event stream from one that lost alarms during a burst will read the
     gap as quiet.
     """
-    return (
-        f"Note: {dropped} older event(s) were dropped before this read — the buffer "
-        f"of {buffer_size} filled up. Raise buffer_size or read more often."
-    )
+    return notice("droppedEvents", dropped=dropped, buffer_size=buffer_size)
 
 
 def _select_clause(path: str) -> ua.SimpleAttributeOperand:

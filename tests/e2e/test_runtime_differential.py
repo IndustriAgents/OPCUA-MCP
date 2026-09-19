@@ -285,6 +285,19 @@ DIFFERENTIAL_FAILURES = [
         {},
         "Unknown tool: read_opcua_tags",
     ),
+    (
+        "a batch read past the per-call maximum",
+        "read_opcua_nodes",
+        {"node_ids": [f"ns=2;i={index}" for index in range(501)]},
+        "read_opcua_nodes accepts at most 500 nodes in one call, got 501. Split the request.",
+    ),
+    (
+        "subscribing to more nodes than this server will hold",
+        "subscribe_opcua_nodes",
+        {"node_ids": [f"ns=2;i={index}" for index in range(201)]},
+        "This server already holds 0 of at most 200 subscriptions; subscribing to 201 more "
+        "would exceed it. Cancel some with unsubscribe_opcua_nodes.",
+    ),
 ]
 
 

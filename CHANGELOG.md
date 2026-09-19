@@ -38,10 +38,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Node runtime — wrapped as "Failed to read history of node …" for a request
   that never reached the OPC UA server.
 
+- **`tools/list` waited on the network, once per call** (#83). It opened a
+  connection before probing capabilities, and `connect` holds its lock across the
+  whole backoff loop — so against an unreachable plant every catalogue request
+  paid the full reconnect budget (7s by default, 32s with
+  `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised every concurrent tool call
+  behind it. Clients list at session start, which is when a plant that is down is
+  most likely to be down. Capabilities are now probed where they can change —
+  once at startup and again on every reconnect — and `tools/list` does no network
+  I/O at all.
+- **A request served during Node's startup could poison the capability cache.**
+  The warm-up ran after the transport was connected, so a `tools/call` landing
+  mid-probe found no session yet, cached "this server supports nothing", and
+  refused a history read against a server that advertises HistoricalAccess for
+  the rest of the process. The warm-up now completes before the first request, as
+  the Python lifespan has always done, and "no session yet" is no longer cached
+  as an answer.
+- **A raw history read had no bound** (#85). `num_values: 0` meant "every reading
+  in the range" — against a node historised at 100ms, the same request that never
+  returns that the browse caps were added to prevent. It now means "as many as
+  allowed" (`limits.maxHistoryValues`, 5000), and a read that stops at the cap
+  says so in a trailing notice rather than returning a short list that reads as
+  complete. A batch read is capped at `limits.maxNodesPerRead` (500) and refused
+  rather than truncated, and `subscribe_opcua_nodes` counts against
+  `limits.maxSubscriptions` (200) because it asks a PLC for one subscription per
+  node.
+
 ### Changed
 - Behavioural parity is now driven by shared tables rather than by hand-mirrored
   code (#90), extending the pattern `tests/fixtures/value-encoding.json`
   established: one table for argument validation, one for failure wording.
+- Neither runtime sends `notifications/tools/list_changed`, and
+  `docs/architecture.md` now says so beside the same decision for
+  `notifications/resources/updated`, with the SDK-generation reason (#84). The
+  catalogue is re-listable at any time and converges without it.
+- New shared homes for what both runtimes must agree on: `contract/tools.json` ->
+  `limits` (bounds) and `notices` (messages added beside a result, including the
+  dropped-events sentence that was two hand-mirrored literals), read by
+  `limits.py` / `limits.ts` and `notices.py` / `notices.ts`, with
+  `tests/fixtures/history-limits.json` driving both.
 
 ## [0.4.1] — 2026-09-18
 

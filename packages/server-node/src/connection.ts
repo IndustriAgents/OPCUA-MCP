@@ -384,12 +384,24 @@ export class OpcuaConnection {
     }
   }
 
-  async accessHistoryDataCapability(): Promise<boolean> {
+  /** Whether the server reports HistoricalAccess.
+   *
+   * `on` is the session to ask, for a caller that already holds one. Passing it
+   * is not an optimisation: this is called from `onSessionReplaced`, which runs
+   * *inside* `reconnect()`, and `ensureConnection()` from there re-enters the
+   * connect path it is standing in. The Python half takes its client the same
+   * way and for the same reason.
+   */
+  async accessHistoryDataCapability(on?: ClientSession): Promise<boolean> {
     // Best-effort: never let an optional capability probe break tools/list. A
     // transient OPC UA outage should still leave the core tools advertised.
     try {
-      await this.ensureConnection();
-      const dataValue = await this.session!.readVariableValue(CONTRACT.capabilities.history.nodeId);
+      let session = on;
+      if (!session) {
+        await this.ensureConnection();
+        session = this.session!;
+      }
+      const dataValue = await session.readVariableValue(CONTRACT.capabilities.history.nodeId);
       return dataValue.statusCode === StatusCodes.Good && dataValue.value?.value === true;
     } catch (error) {
       console.error("accessHistoryDataCapability probe failed:", error);
@@ -397,13 +409,22 @@ export class OpcuaConnection {
     }
   }
 
-  async serverCapabilitiesAggregateFunctions(): Promise<string[]> {
+  /** The aggregate functions the server advertises, or none.
+   *
+   * `on` is the session to ask; see `accessHistoryDataCapability` for why that
+   * matters rather than merely saving a call.
+   */
+  async serverCapabilitiesAggregateFunctions(on?: ClientSession): Promise<string[]> {
     // Best-effort: any failure (incl. a connection error) yields no aggregate
     // functions rather than breaking tools/list.
     let aggregateFunctions: string[] = [];
     try {
-      await this.ensureConnection();
-      const browseResult = await this.session!.browse({
+      let session = on;
+      if (!session) {
+        await this.ensureConnection();
+        session = this.session!;
+      }
+      const browseResult = await session.browse({
         nodeId: CONTRACT.capabilities.aggregate.nodeId,
         browseDirection: 0, // Forward
         resultMask: 63, // All information (including BrowseName)

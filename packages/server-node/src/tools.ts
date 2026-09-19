@@ -22,6 +22,13 @@ import { browseAllReferences } from "./browse.js";
 import { OpcuaConnection, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { message } from "./errors.js";
+import {
+  MAX_NODES_PER_READ,
+  MAX_SUBSCRIPTIONS,
+  historyValues,
+  historyWasClipped,
+} from "./limits.js";
+import { notice } from "./notices.js";
 import { validateArguments } from "./validation.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
 import { toDate } from "./dates.js";
@@ -179,8 +186,27 @@ function toNodeValueRecord(nodeId: string, dataValue: DataValue | undefined): No
  * one block per element, so the Node server does the same rather than emitting a
  * single array — the two servers' responses are then read the same way.
  */
-function historyResult(dataValues: DataValue[] | null | undefined) {
-  return recordBlocks(toHistoryRecords(dataValues));
+/** History records, with a notice when the call hit the per-call maximum.
+ *
+ * A trailing plain-text block rather than a field, because `historyRecords` is
+ * an array of readings and a truncation flag is not a reading — the same shape
+ * and the same reason `read_events` reports dropped events this way. Outside
+ * `structuredContent` for the same reason.
+ *
+ * Only when the cap itself was reached: a caller who asked for 10 and got 10 has
+ * what they asked for.
+ */
+function historyResult(dataValues: DataValue[] | null | undefined, wanted?: number) {
+  const records = toHistoryRecords(dataValues);
+  const result = recordBlocks(records);
+  if (wanted === undefined || !historyWasClipped(records.length, wanted)) return result;
+  return {
+    ...result,
+    content: [
+      ...result.content,
+      { type: "text", text: notice("historyTruncated", { count: records.length }) },
+    ],
+  };
 }
 
 /** The same framing for the subscription family (resultShapes.subscriptionRecords). */
@@ -326,10 +352,35 @@ export class OpcuaTools {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
     // every `subscribe_opcua_nodes` handle the agent holds silently dead.
-    this.conn.onSessionReplaced = (session) => {
+    this.conn.onSessionReplaced = async (session) => {
+      // A new session may be a restarted server with different capabilities, and
+      // it is the only moment the answer can have changed — which is what lets
+      // `listTools` stop waiting on a socket.
       this.capabilities = null;
-      return this.subs.reattach(session);
+      await this.subs.reattach(session);
+      // With the session in hand, not through the connection: this runs inside
+      // `reconnect()`, and a probe that called `ensureConnection()` from here
+      // would re-enter the connect path it is standing in.
+      await this.probeCapabilities(session).catch(() => undefined);
     };
+  }
+
+  /** Open the first connection and probe it, before any request is served.
+   *
+   * The Python runtime does this in its lifespan and this runtime did not — it
+   * got its first connection from whichever `tools/list` happened to arrive
+   * first, which is precisely the coupling #83 removed. Without a warm-up the
+   * first catalogue would now always be the core tools, even against a plant
+   * that is up.
+   *
+   * Best-effort and never fatal: an MCP client starts this server when *it*
+   * starts, which may be long before the plant network is reachable.
+   * `get_server_status` reports what is wrong in the meantime, and every tool
+   * call retries.
+   */
+  async warmUp(): Promise<void> {
+    await this.conn.ensureConnection().catch(() => undefined);
+    if (!this.capabilities) await this.probeCapabilities().catch(() => undefined);
   }
 
   /** Tear down every OPC UA subscription this server created.
@@ -354,33 +405,37 @@ export class OpcuaTools {
     return this.conn.ensureConnection();
   }
 
-  private serverCapabilitiesAggregateFunctions(): Promise<string[]> {
-    return this.conn.serverCapabilitiesAggregateFunctions();
+  private serverCapabilitiesAggregateFunctions(on?: ClientSession): Promise<string[]> {
+    return this.conn.serverCapabilitiesAggregateFunctions(on);
   }
 
-  private accessHistoryDataCapability(): Promise<boolean> {
-    return this.conn.accessHistoryDataCapability();
+  private accessHistoryDataCapability(on?: ClientSession): Promise<boolean> {
+    return this.conn.accessHistoryDataCapability(on);
   }
 
-  /** Re-probe what the connected OPC UA server can do, best-effort.
+  /** Read what the connected OPC UA server can do, off the session we already have.
    *
-   * One connection attempt for both probes, not one each: against a server that
-   * is down, each probe would otherwise sit through the whole configured backoff
-   * on its own and double what a tools/list costs. A failure is not fatal — the
-   * core tools are offered regardless, and the optional ones reappear once the
-   * server is back.
+   * Never connects. Both probes run against a live session or not at all, so a
+   * failure is not fatal — the core tools are offered regardless, and the
+   * optional ones appear once a session exists and has been probed.
    */
-  private async refreshCapabilities(): Promise<Set<string>> {
-    await this.conn.ensureConnection().catch(() => undefined);
-    const probeable = this.conn.connected;
-    const historyOk = probeable && (await this.accessHistoryDataCapability());
-    this.aggregateFunctions = probeable ? await this.serverCapabilitiesAggregateFunctions() : [];
+  private async probeCapabilities(on?: ClientSession): Promise<Set<string>> {
+    const available = new Set<string>();
+    const session = on ?? this.session;
+    if (!session) {
+      // Deliberately not cached. "No session yet" is not "this server supports
+      // nothing", and caching it as though it were is what made a request served
+      // during the warm-up poison the answer for the rest of the process.
+      this.aggregateFunctions = [];
+      return available;
+    }
+    const historyOk = await this.accessHistoryDataCapability(session);
+    this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions(session);
 
     // A tool gated on capabilities is offered when the server reports *any* of
     // them. `read_opcua_history` lists both: a server with only aggregates can
     // still answer an aggregate read, and gating it on `history` alone would
     // hide the one thing such a server is good at.
-    const available = new Set<string>();
     if (historyOk) available.add("history");
     if (this.aggregateFunctions.length > 0) available.add("aggregate");
     this.capabilities = available;
@@ -393,16 +448,35 @@ export class OpcuaTools {
    * filtering is not enforcement: a client may hold a tools/list from when the
    * server still reported HistoricalAccess, and this runtime used to let that
    * call straight through to node-opcua while the Python one refused it by name.
+   * By the time `callTool` asks, a session has been ensured, so a cold cache
+   * here probes rather than guesses.
    */
   private async capabilitiesMet(tool: ToolSpec): Promise<boolean> {
     if (tool.capabilities.length === 0) return true;
-    const available = this.capabilities ?? (await this.refreshCapabilities());
+    const available = this.capabilities ?? (await this.probeCapabilities());
     return tool.capabilities.some((capability) => available.has(capability));
   }
 
-  /** The advertised tool list: the contract, gated by runtime capabilities. */
+  /** The advertised tool list: the contract, gated by runtime capabilities.
+   *
+   * Deliberately does no network I/O. This used to call `ensureConnection()`
+   * before probing, so against an unreachable plant every tools/list sat through
+   * node-opcua's whole `connectionStrategy` backoff — and clients list at
+   * session start, which is exactly when a plant that is down is most likely to
+   * be down.
+   *
+   * The capabilities are probed where they can change instead: on every
+   * (re)connect, through `onSessionReplaced`. Convergence is unchanged — a
+   * client that listed while the plant was down sees the core tools, any tool
+   * call brings the connection up and re-probes, and the next tools/list carries
+   * the full catalogue. What is gone is only the waiting.
+   *
+   * No `notifications/tools/list_changed` is sent, here or on the Python
+   * runtime, for the same reason no `notifications/resources/updated` is — see
+   * docs/architecture.md.
+   */
   async listTools(): Promise<Tool[]> {
-    const available = await this.refreshCapabilities();
+    const available = this.capabilities ?? new Set<string>();
     const aggregateOk = available.has("aggregate");
 
     const tools = this.policy
@@ -690,6 +764,18 @@ export class OpcuaTools {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" }));
     }
+    // Refused, not truncated: a short list of readings is indistinguishable from
+    // a complete one, and dropping nodes from a read is the kind of quiet wrong
+    // answer the browse caps exist to prevent.
+    if (nodeIds.length > MAX_NODES_PER_READ) {
+      throw new Error(
+        message("tooManyNodes", {
+          tool: "read_opcua_nodes",
+          limit: MAX_NODES_PER_READ,
+          count: nodeIds.length,
+        })
+      );
+    }
 
     try {
       const dataValues = await session.read(
@@ -730,17 +816,21 @@ export class OpcuaTools {
 
     try {
       if (aggregateFunction === undefined) {
-        const historyValues = await session.readHistoryValue(
+        // `0` used to mean "every reading in the range", which against a node
+        // historised at 100ms is a request that never returns — and the browse
+        // caps beside it have always been refusals rather than tuning knobs.
+        const wanted = historyValues(request.numValues);
+        const historyReadings = await session.readHistoryValue(
           [nodeId],
           toDate(request.start) as any,
           toDate(request.end) as any,
-          { numValuesPerNode: request.numValues }
+          { numValuesPerNode: wanted }
         );
-        if (historyValues.length !== 1) throw new Error("Read history failed");
-        if (historyValues[0].statusCode !== StatusCodes.Good) {
-          throw new Error(`Read history failed with status: ${historyValues[0].statusCode.name}`);
+        if (historyReadings.length !== 1) throw new Error("Read history failed");
+        if (historyReadings[0].statusCode !== StatusCodes.Good) {
+          throw new Error(`Read history failed with status: ${historyReadings[0].statusCode.name}`);
         }
-        return historyResult((historyValues[0].historyData as HistoryData).dataValues);
+        return historyResult((historyReadings[0].historyData as HistoryData).dataValues, wanted);
       }
 
       // Don't depend on a prior tools/list having populated the cache: a client
@@ -756,17 +846,20 @@ export class OpcuaTools {
         );
       }
 
-      const historyValues = await session.readAggregateValue(
+      const aggregated = await session.readAggregateValue(
         { nodeId },
         toDate(request.start) as any,
         (toDate(request.end) ?? new Date()) as any,
         AggregateFunction[aggregateFunction as keyof typeof AggregateFunction],
         request.processingInterval
       );
-      if (historyValues.statusCode !== StatusCodes.Good) {
-        throw new Error(`Read aggregate failed with status: ${historyValues.statusCode.name}`);
+      if (aggregated.statusCode !== StatusCodes.Good) {
+        throw new Error(`Read aggregate failed with status: ${aggregated.statusCode.name}`);
       }
-      return historyResult((historyValues.historyData as HistoryData).dataValues);
+      // No cap on an aggregate read: the number of results is decided by
+      // `processing_interval` over the range, which is the whole point of asking
+      // for one — it is how to see a week without transferring a week.
+      return historyResult((aggregated.historyData as HistoryData).dataValues);
     } catch (error) {
       throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }));
     }
@@ -1180,6 +1273,20 @@ export class OpcuaTools {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(
         message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
+      );
+    }
+    // One OPC UA subscription per monitored node is what makes a single
+    // unsubscribe take the whole thing down — and it is also what makes an
+    // unbounded subscribe ask a PLC for one subscription per node, past whatever
+    // it is willing to hold, with nothing here counting them.
+    const active = this.subs.list().length;
+    if (active + nodeIds.length > MAX_SUBSCRIPTIONS) {
+      throw new Error(
+        message("tooManySubscriptions", {
+          active,
+          limit: MAX_SUBSCRIPTIONS,
+          wanted: nodeIds.length,
+        })
       );
     }
     const session = this.requireSession();

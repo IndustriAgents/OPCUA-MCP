@@ -82,6 +82,10 @@ export const CONTRACT: {
   };
   /** Message templates for every failure a tool call can return; see errors.ts. */
   errors: Record<string, string>;
+  /** Message templates for notices added beside a result; see notices.ts. */
+  notices: Record<string, string>;
+  /** How much one call may ask for. Refusals, not tuning knobs. */
+  limits: { maxNodesPerRead: number; maxHistoryValues: number; maxSubscriptions: number };
   resources: Array<{
     uri: string;
     name: string;

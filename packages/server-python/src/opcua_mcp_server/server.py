@@ -31,7 +31,14 @@ from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .errors import message as error_message
+from .limits import (
+    MAX_NODES_PER_READ,
+    MAX_SUBSCRIPTIONS,
+    history_values,
+    history_was_clipped,
+)
 from .node_ids import canonical_node_id
+from .notices import notice
 from .policy import describe_policy, tool_policy, values_at
 from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
@@ -157,34 +164,54 @@ def _bind(state: dict, client) -> None:
     replaced because the MCP server hands the same dict to every tool call, so
     this is what makes a tool that reads `lifespan_context["opcua_client"]` see
     the new session rather than the dead one.
+
+    Re-probing here is what lets `tools/list` stop waiting on the network: a new
+    session is the only moment the answer can have changed, so the catalogue is
+    recomputed exactly then rather than on every catalogue request.
     """
     state["opcua_client"] = client
     SUBSCRIPTIONS.reattach(client)
+    _probe_capabilities(client)
 
 
-def _refresh_capabilities(connection: OpcuaConnection) -> None:
-    """Re-probe the optional capabilities, best-effort.
+def _probe_capabilities(client) -> bool:
+    """Read the optional capabilities off a live client. True if they changed.
 
-    On every tools/list rather than once at startup, as the Node server does: a
-    server that was unreachable when this process began must not have its history
-    and aggregate tools hidden for the lifetime of the session.
+    Best-effort by design: any failure yields "not supported" rather than an
+    error, because an optional capability must never break `tools/list`.
+    """
+    before = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
+    _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
+    _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
+    after = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
+    return before != after
+
+
+def _forget_capabilities() -> None:
+    """Drop what was probed, because the session it was true of is gone."""
+    _CAPABILITIES["history"] = False
+    _CAPABILITIES["aggregate_functions"] = {}
+
+
+def _connect_and_probe(connection: OpcuaConnection) -> None:
+    """Open the first connection and read its capabilities.
 
     One connection attempt for both probes, not one each: against a server that
     is down, each would otherwise sit through the whole configured backoff on its
-    own and double what a tools/list costs. The attempt itself is why this is
-    also what the lifespan calls to open the first connection.
+    own. `_bind` does the probing, through `on_client_replaced`.
+
+    Called from the lifespan, and never from `tools/list` — see
+    :meth:`PolicyMCPServer.list_tools` for why a catalogue request must not wait
+    on a socket.
     """
-    _CAPABILITIES["history"] = False
-    _CAPABILITIES["aggregate_functions"] = {}
+    _forget_capabilities()
     try:
-        client = connection.ensure_connected()
+        connection.ensure_connected()
     except Exception:
-        # `connect` has already said why on stderr; an optional capability must
-        # never break tools/list, so a server that is down simply advertises the
-        # core tools until it comes back.
+        # `connect` has already said why on stderr. A server that is down simply
+        # advertises the core tools until it comes back, at which point
+        # `on_client_replaced` re-probes and the catalogue is announced again.
         return
-    _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
-    _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
 
 
 def _probe(read, client, fallback):
@@ -210,7 +237,7 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     # building the client fetches the server's certificate from its endpoint
     # list, so this blocks on the network too. Connecting and probing are one
     # call so a server that is down costs one round of backoff, not two.
-    await asyncio.to_thread(_refresh_capabilities, connection)
+    await asyncio.to_thread(_connect_and_probe, connection)
     if not connection.connected:
         # Deliberately not fatal. An MCP client starts this server when *it*
         # starts, which may be long before the plant network is reachable; dying
@@ -303,12 +330,27 @@ class PolicyMCPServer(MCPServer):
     """MCPServer whose advertised and callable tools obey deployment policy."""
 
     async def list_tools(self):
-        # Re-probe before answering: what the OPC UA server supports is only
-        # knowable while connected, and a catalogue frozen at startup would hide
-        # the history tool for good after one unlucky moment. Best-effort, so a
-        # server that is still down simply lists the core tools.
-        if _CONNECTION is not None:
-            await asyncio.to_thread(_refresh_capabilities, _CONNECTION)
+        """The catalogue, from what the *current* session was found to support.
+
+        Deliberately does no network I/O. This used to open a connection before
+        answering, and `OpcuaConnection.connect` holds its lock across the whole
+        backoff loop — so against an unreachable plant every `tools/list` paid
+        the full reconnect budget (7s by default, 32s with
+        `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised every concurrent tool call
+        behind it. Clients list at session start, which is exactly when a plant
+        that is down is most likely to be down.
+
+        The capabilities are probed where they can change instead — on every
+        (re)connect, in `_bind`. Convergence is unchanged: a client that listed
+        while the plant was down sees the core tools, any tool call brings the
+        connection up and re-probes, and the next `tools/list` carries the full
+        catalogue. What is gone is only the waiting.
+
+        No `notifications/tools/list_changed` is sent, on either runtime, for the
+        same reason no `notifications/resources/updated` is — see
+        docs/architecture.md. The catalogue is re-listable at any time and this
+        is what both runtimes can honestly promise.
+        """
         policy = tool_policy()
         specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
         listed = await super().list_tools()
@@ -465,6 +507,26 @@ def _node_value_record(node_id: str, data_value: Any) -> dict:
     }
 
 
+def _history_result(records: list[dict], wanted: int) -> Any:
+    """History records, with a notice when the call hit the per-call maximum.
+
+    A trailing plain-text block rather than a field, because ``historyRecords``
+    is an array of readings and a truncation flag is not a reading — the same
+    shape and the same reason ``read_events`` reports dropped events this way.
+    Outside ``structuredContent`` for the same reason.
+
+    Only when the cap itself was reached: a caller who asked for 10 and got 10
+    has what they asked for.
+    """
+    if not history_was_clipped(len(records), wanted):
+        return records
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
+        + [TextContent(type="text", text=notice("historyTruncated", count=len(records)))],
+        structured_content={"result": records},
+    )
+
+
 def _object_result(record: Any) -> CallToolResult:
     """A result that is one object rather than a list of records.
 
@@ -498,6 +560,18 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
     """
     if not node_ids:
         raise ToolError(error_message("emptyArray", tool="read_opcua_nodes", argument="node_ids"))
+    if len(node_ids) > MAX_NODES_PER_READ:
+        # Refused, not truncated: a short list of readings is indistinguishable
+        # from a complete one, and dropping nodes from a read is the kind of
+        # quiet wrong answer the browse caps exist to prevent.
+        raise ToolError(
+            error_message(
+                "tooManyNodes",
+                tool="read_opcua_nodes",
+                limit=MAX_NODES_PER_READ,
+                count=len(node_ids),
+            )
+        )
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         nodes = [client.get_node(node_id) for node_id in node_ids]
@@ -535,13 +609,17 @@ def read_opcua_history(
     client = ctx.request_context.lifespan_context["opcua_client"]
 
     if aggregate_function is None:
+        # `0` used to mean "every reading in the range", which against a node
+        # historised at 100ms is a request that never returns — and the browse
+        # caps beside it have always been refusals rather than tuning knobs.
+        wanted = history_values(num_values)
         try:
             values = client.get_node(node_id).read_raw_history(
                 parse_iso_datetime(start_time),
                 parse_iso_datetime(end_time),
-                num_values,
+                wanted,
             )
-            return history_records(values)
+            return _history_result(history_records(values), wanted)
         except Exception as e:
             raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
 
@@ -571,6 +649,9 @@ def read_opcua_history(
         if not result.StatusCode.is_good():
             raise ValueError(f"Read aggregate failed with status: {result.StatusCode.name}")
 
+        # No cap on an aggregate read: the number of results is decided by
+        # `processing_interval` over the range, which is the whole point of
+        # asking for one — it is how to see a week without transferring a week.
         return history_records(result.HistoryData.DataValues)
     except Exception as e:
         raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
@@ -1119,6 +1200,20 @@ async def subscribe_opcua_nodes(
     if not node_ids:
         raise ToolError(
             error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
+        )
+    # One OPC UA subscription per monitored node is what makes a single
+    # unsubscribe take the whole thing down — and it is also what makes an
+    # unbounded subscribe ask a PLC for one subscription per node, past whatever
+    # it is willing to hold, with nothing here counting them.
+    active = len(SUBSCRIPTIONS.list())
+    if active + len(node_ids) > MAX_SUBSCRIPTIONS:
+        raise ToolError(
+            error_message(
+                "tooManySubscriptions",
+                active=active,
+                limit=MAX_SUBSCRIPTIONS,
+                wanted=len(node_ids),
+            )
         )
     records = []
     for node_id in node_ids:

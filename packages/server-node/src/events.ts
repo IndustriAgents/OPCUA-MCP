@@ -26,6 +26,7 @@ import {
 
 import { CONTRACT } from "./contract.js";
 import { variantToJson } from "./records.js";
+import { notice } from "./notices.js";
 
 const EVENTS = CONTRACT.events;
 
@@ -61,10 +62,7 @@ export function refreshTimedOutMessage(timeoutSeconds: number, collected: number
  * gap as quiet.
  */
 export function droppedEventsMessage(dropped: number, bufferSize: number): string {
-  return (
-    `Note: ${dropped} older event(s) were dropped before this read — the buffer ` +
-    `of ${bufferSize} filled up. Raise buffer_size or read more often.`
-  );
+  return notice("droppedEvents", { dropped, buffer_size: bufferSize });
 }
 
 /** The subscription parameters both the buffered and the ConditionRefresh paths use.

@@ -1,0 +1,36 @@
+{
+  "$comment": "How num_values resolves, driven through BOTH limits modules: tests/unit/test_limits.py and packages/server-node/test/limits.test.mjs read this file. The same pattern as value-encoding.json and argument-validation.json. `wanted` is how many readings the OPC UA server is asked for; `clippedWhenReturned` is how many records coming back must trigger the truncation notice, or null when no number of records should. maxHistoryValues is 5000; the cases name it as `max` so a change to the contract moves both sides at once.",
+  "cases": [
+    { "name": "the default asks for the cap, not for everything", "num_values": 0, "wanted": "max" },
+    { "name": "absent is the same as zero", "num_values": null, "wanted": "max" },
+    { "name": "a small request is honoured as asked", "num_values": 10, "wanted": 10 },
+    { "name": "a request past the cap is clamped to it", "num_values": 999999, "wanted": "max" },
+    { "name": "exactly the cap is the cap", "num_values": "max", "wanted": "max" },
+    {
+      "name": "a negative count is not a smaller request, it is not a request",
+      "num_values": -5,
+      "wanted": "max"
+    },
+    { "name": "a fractional count is truncated toward zero", "num_values": 10.9, "wanted": 10 }
+  ],
+  "clipping": [
+    {
+      "name": "a small read that returned everything it asked for says nothing",
+      "wanted": 10,
+      "returned": 10,
+      "clipped": false
+    },
+    {
+      "name": "a capped read that filled the cap says so",
+      "wanted": "max",
+      "returned": "max",
+      "clipped": true
+    },
+    {
+      "name": "a capped read that came back short did not hit the cap",
+      "wanted": "max",
+      "returned": 42,
+      "clipped": false
+    }
+  ]
+}

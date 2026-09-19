@@ -178,6 +178,42 @@ The probes are **best-effort by design**: any failure yields "not supported"
 rather than an error. Python reads these through the lifecycle's active session;
 it does no network I/O at import time and creates no throwaway probe sessions.
 
+They also run where the answer can *change* — on every (re)connect — and not on
+every `tools/list`. That was the other way round, and it was expensive in the one
+situation that matters: `list_tools` opened a connection before answering, and
+`OpcuaConnection.connect` holds its lock across the whole backoff loop, so
+against an unreachable plant every catalogue request paid the full reconnect
+budget (7s by default, 32s with `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised
+every concurrent tool call behind it. Clients list at session start, which is
+exactly when a plant that is down is most likely to be down.
+
+Both runtimes now warm up once, before serving their first request — Python in
+its lifespan, Node in `run()` — and re-probe from the session-replaced callback.
+`tools/list` answers from that, with no network I/O at all. Node's probes take the
+session as an argument for this reason and not as an optimisation: the callback
+runs *inside* `reconnect()`, so a probe that called `ensureConnection()` from
+there would re-enter the connect path it is standing in.
+
+Convergence does not depend on a notification. A client that listed while the
+plant was down sees the core tools; any tool call brings the connection up and
+re-probes; the next `tools/list` carries the whole surface.
+
+### Why the tool list is polled too
+
+`notifications/tools/list_changed` is not sent, on either runtime, for the same
+reason `notifications/resources/updated` is not — and it is the same SDK split.
+`@modelcontextprotocol/sdk` 1.x can deliver it over stdio; the Python `mcp` 2.x
+SDK derives `tools.listChanged` from whether `subscriptions/listen` is served
+(`mcp/server/lowlevel/server.py`), that method exists only for streamable HTTP,
+and at protocol 2026-07-28 a change notification sent on the shared channel is
+dropped with a debug log. Announcing the catalogue on Node only would mean a
+client written against one runtime behaving differently against the other, which
+is the thing this repo is organised to prevent.
+
+The catalogue is re-listable at any time, and unlike a resource update there is
+no information a client can only learn from the notification — which is why
+polling is an honest answer here and was not for issue #3.
+
 > There are three mocks, on purpose. The main one (`packages/mock-server/`,
 > :4840) enables history and advertises **no** aggregate functions, so the suite
 > can assert the aggregate tool stays hidden when unsupported. The second
@@ -311,14 +347,14 @@ packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records
                              · subscriptions · events · connection
-                             · diagnostics · errors · validation
-                             · version · install · cli · server
+                             · diagnostics · errors · notices · validation
+                             · limits · version · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
                              · subscriptions · events · connection
-                             · diagnostics · errors · validation
-                             · tools · install · index · sea
+                             · diagnostics · errors · notices · validation
+                             · limits · tools · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
@@ -352,6 +388,21 @@ Address-space discovery is breadth-first and bounded by both depth and inspected
 node count, with a visited set for cyclic reference graphs. Its response says
 when the budget truncated the search; callers can select a narrower root or
 increase the explicit limit instead of triggering an unbounded plant-wide crawl.
+
+Browse was bounded from the start and three other requests were not, which
+`contract/tools.json` -> `limits` now fixes. A raw history read of a year of
+100ms data is the same request that never returns — `num_values: 0` used to mean
+"every reading in the range" and now means "as many as allowed"
+(`maxHistoryValues`), with a trailing notice when the cap is what stopped it, the
+way `read_events` already reports dropped events. A batch read is capped at
+`maxNodesPerRead` and *refused* rather than truncated, because a short list of
+readings is indistinguishable from a complete one. And because there is one OPC
+UA subscription per monitored node — which is what lets a single unsubscribe take
+the whole thing down — an unbounded `subscribe_opcua_nodes` asks a PLC for one
+subscription per node past whatever it is willing to hold, so `maxSubscriptions`
+counts them. An aggregate read is deliberately uncapped: how many results it
+returns is decided by `processing_interval`, which is the whole point of asking
+for one.
 
 Identity is derived rather than restated: with a client certificate configured,
 both runtimes announce the `subjectAltName` URI of that certificate as the

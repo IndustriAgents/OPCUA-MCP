@@ -16,7 +16,8 @@ flowchart LR
 The repo ships the same MCP server twice — once in Python, once in
 TypeScript/Node. They are interchangeable: same tool names, same descriptions,
 same parameters, same error wording. Users pick whichever runtime their stack
-already has.
+already has, or no runtime at all via the bundle and executable routes in
+docs/install.md.
 
 That interchangeability is not maintained by discipline. It is maintained by
 `contract/tools.json`, the single source of truth for the tool surface:
@@ -47,7 +48,7 @@ cast straight off the wire), while the Python runtime validated against the
 looser signature-derived schema and worded the refusal its own way.
 
 The contract also pins what the tools *return*. **Every** tool names a shape
-from `resultShapes` — ten of the seventeen named none until 0.4.0, and for those
+from `resultShapes` — ten of the then seventeen named none until 0.4.0, when the contract declared a shape for every tool and consolidated the count to thirteen, and for those
 the output format, error wording and defaults were two hand-written copies that
 no test compared, which is where every divergence between the two runtimes
 turned out to live. `read_opcua_history` produces `historyRecords`, one flat

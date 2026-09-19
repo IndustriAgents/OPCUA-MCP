@@ -86,6 +86,8 @@ export const CONTRACT: {
   notices: Record<string, string>;
   /** How much one call may ask for. Refusals, not tuning knobs. */
   limits: { maxNodesPerRead: number; maxHistoryValues: number; maxSubscriptions: number };
+  /** What the OPC UA server on the other end may send us; see transport-limits.ts. */
+  transport: { maxChunkCount: number; maxChunkSize: number; maxMessageSize: number };
   resources: Array<{
     uri: string;
     name: string;

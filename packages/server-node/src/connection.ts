@@ -41,6 +41,7 @@ import {
   userIdentity,
 } from "./security.js";
 import { message } from "./errors.js";
+import { transportSettings } from "./transport-limits.js";
 
 // Happy Eyeballs: try IPv4 and IPv6 rather than only the first address DNS
 // returns. Every Node this package now supports defaults to this, so the call is
@@ -177,6 +178,11 @@ export class OpcuaConnection {
         // is built on from moving under us in a future release.
         keepSessionAlive: true,
         requestedSessionTimeout: reconnect.sessionTimeout,
+        // What this client will let the server send it. node-opcua enforces both
+        // itself; the Python runtime has to patch its library to do the same, and
+        // the point of taking the numbers from the contract is that the two are
+        // safe against the same thing. See transport-limits.ts.
+        transportSettings: transportSettings(),
         ...clientSecurityOptions(security),
         endpoint_must_exist: false,
       });

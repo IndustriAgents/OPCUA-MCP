@@ -233,3 +233,68 @@ async def test_reads_are_not_audited(impl, opcua_server):
         records = audit_records(errlog)
 
     assert records == [], f"{impl}: a read was audited: {records}"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_calls_audit_lines_can_be_tied_together(impl, opcua_server):
+    """`allowed` and its outcome must be joinable, and distinct calls must not be.
+
+    Each control call writes two lines, and there was nothing linking them. Both
+    runtimes serve calls concurrently, so overlapping writes produced interleaved
+    lines with no way to say which pairs — and two writes to the *same* node were
+    not even distinguishable by content. For a trail whose whole purpose is
+    "which control call reached the plant, and did it land", that was the one
+    missing field.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    async with connect_capturing_stderr(operator_params(impl, opcua_server)) as (session, errlog):
+        # The same node twice, so nothing but the id can tell the two apart.
+        for value in ("21.5", "22.5"):
+            result = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": value}]}
+            )
+            assert not result.is_error, text_of(result)
+        records = audit_records(errlog)
+
+    assert all(record.get("call_id") for record in records), (
+        f"{impl}: a line with no call_id cannot be joined to anything: {records}"
+    )
+
+    by_call: dict[str, list[dict]] = {}
+    for record in records:
+        by_call.setdefault(record["call_id"], []).append(record)
+
+    assert len(by_call) == 2, f"{impl}: two calls must have two ids, got {sorted(by_call)}"
+    for call_id, lines in by_call.items():
+        decisions = {line["decision"] for line in lines}
+        assert decisions == {"allowed", "completed"}, f"{impl}/{call_id}: {decisions}"
+        # And a joined pair agrees about what it was: an id that spanned two
+        # different calls would be worse than no id at all.
+        assert len({line["tool"] for line in lines}) == 1, lines
+        assert len({tuple(line["node_ids"]) for line in lines}) == 1, lines
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_refusal_and_its_outcome_share_one_id(impl, opcua_server):
+    """A denial is one line, and it still carries an id.
+
+    A denied call never runs, so it has no outcome line — but it must still be
+    findable by the same key as everything else, or a log search for one call id
+    would quietly return nothing for exactly the calls someone is most likely to
+    be searching for.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    async with connect_capturing_stderr(operator_params(impl, opcua_server)) as (session, errlog):
+        denied = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=12", "value": "true"}]}
+        )
+        assert denied.is_error, impl
+        records = audit_records(errlog)
+
+    [refusal] = [record for record in records if record["decision"] == "denied"]
+    assert refusal.get("call_id"), f"{impl}: a denial with no call_id: {refusal}"
+    assert not [record for record in records if record["call_id"] == refusal["call_id"]][1:], (
+        f"{impl}: a denied call must write exactly one line: {records}"
+    )

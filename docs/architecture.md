@@ -348,13 +348,15 @@ packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
                              · capabilities · aggregates · records
                              · subscriptions · events · connection
                              · diagnostics · errors · notices · validation
-                             · limits · version · install · cli · server
+                             · limits · transport_limits · version
+                             · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
                              · subscriptions · events · connection
                              · diagnostics · errors · notices · validation
-                             · limits · tools · install · index · sea
+                             · limits · transport-limits · tools
+                             · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)
@@ -411,6 +413,19 @@ free on the Node side (node-opcua reads the certificate itself) and explicit on
 the Python side (`certificate_application_uri`), because python-opcua would
 otherwise announce its own `urn:freeopcua:client` and be refused by equipment the
 Node runtime got into with the same files.
+
+What a server may send *us* is bounded too, from `contract/tools.json` ->
+`transport`, and this one is a patch rather than a setting on the Python side.
+CVE-2022-25304 is a missing limit on chunk reassembly: `python-opcua` appends
+every Intermediate chunk to a list with nothing counting it, so a server that
+never terminates the message exhausts the client. There is no fixed version and
+there will not be one. Both runtimes advertise `MaxChunkCount` and
+`MaxMessageSize` in the Hello — python-opcua's own defaults are `0`, meaning "no
+limit" — and both enforce them on receipt, because advertising binds only a
+server that chooses to obey: node-opcua does it itself, and the Python runtime
+wraps `SecureConnection._receive`. See [SECURITY.md](../SECURITY.md) for the
+residual risk, and `transport_limits.py` for why patching a dependency was judged
+the lesser evil.
 
 The **default is `None`/`None`**: unauthenticated and unencrypted, appropriate
 for the bundled mock and local development and **not** appropriate for

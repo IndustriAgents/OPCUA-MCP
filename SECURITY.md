@@ -130,8 +130,8 @@ Three properties worth knowing:
 Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 
 ```json
-{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","profile":"operator",
- "tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
+ "profile":"operator","tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
 ```
 
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
@@ -139,9 +139,62 @@ as the verdict, because a call that was permitted and a call that reached the
 plant are different facts. Reads are never audited. Neither credentials nor the
 values being written appear in a record, and a test asserts it.
 
+`call_id` is what ties the two lines of one call together. Both runtimes serve
+calls concurrently, so two overlapping writes produce four interleaved lines —
+and two writes to the *same* node are not distinguishable by content at all.
+Grep one id to get one call's whole story:
+
+```console
+$ grep '"call_id":"9f2c1ab4de77f031"' plant.log
+```
+
+A denied call never runs, so it is one line rather than two, and it carries an id
+like everything else.
+
 It is **not durable**: nothing here writes a file or survives the process. For a
 retained record, collect the server's stderr — the format is stable and
 line-oriented for exactly that.
+
+## Known advisories in dependencies
+
+### CVE-2022-25304 — unbounded chunk reassembly in `python-opcua`
+
+**Status: mitigated in this project; no upstream fix exists or is expected.**
+
+An OPC UA message may be split across chunks, and `python-opcua` reassembles them
+by appending each one to a list with nothing counting it
+(`opcua/common/connection.py`, `SecureConnection._receive`). A server that sends
+Intermediate chunks and never sends the terminating one grows that list until the
+client is out of memory.
+
+Dependabot reports no patched version, and there will not be one: `python-opcua`
+is unmaintained, and the advisory names its successor `asyncua` as well.
+
+What this project does about it, in both runtimes and from the same numbers
+(`contract/tools.json` → `transport`):
+
+- **Advertises** `MaxChunkCount` and `MaxMessageSize` in the OPC UA Hello.
+  `python-opcua` defaults both to `0`, which tells the server this client will
+  accept a message of any size in any number of chunks.
+- **Enforces** them on what actually arrives, because advertising binds only a
+  server that chooses to obey. The Node runtime hands both to `node-opcua`, which
+  enforces them itself. The Python runtime wraps `SecureConnection._receive` so a
+  message past `maxChunkCount` chunks raises, the buffered chunks are dropped,
+  and the connection layer rebuilds the channel the way it does for any other
+  dead session.
+
+The bound is 1024 chunks × 64 KiB = 64 MiB per message: far above any real OPC UA
+response, far below a memory-exhaustion attack.
+`tests/unit/test_transport_limits.py` drives the attack through `python-opcua`'s
+*real* reassembly, so a future release that moves the ground under the patch
+fails a test rather than silently disabling the guard.
+
+**Residual risk.** This bounds one message. It does not make an unmaintained
+OPC UA stack safe against everything, and the honest mitigation for a hostile
+network remains the one in [Connection security](#connection-security-important):
+authenticate the server, encrypt the channel, and do not point either runtime at
+an endpoint you do not trust. The Node runtime is on a maintained client library
+and is the better choice where that matters.
 
 ## Supported versions
 

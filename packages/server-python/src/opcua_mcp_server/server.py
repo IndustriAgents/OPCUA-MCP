@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import secrets
 import sys
 from collections import deque
 from collections.abc import AsyncIterator
@@ -93,7 +94,30 @@ def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason: str = "") -> None:
+def new_call_id() -> str:
+    """An id for one tool call, to tie its audit lines together.
+
+    Every control call writes two lines — ``allowed`` before it, then
+    ``completed`` or ``failed`` after — and without this there was nothing
+    linking them. Both runtimes serve calls concurrently, so two overlapping
+    writes produced four interleaved lines and no way to say which pairs; where
+    the targets happened to match (the same node written twice) they were not even
+    distinguishable by content. For a trail whose purpose is "which control call
+    reached the plant and did it land", that was the one missing field.
+
+    Random rather than a counter: it never needs to be meaningful or ordered, only
+    unique within a process, and a counter would invite reading it as a total.
+    """
+    return secrets.token_hex(8)
+
+
+def _audit_decision(
+    name: str,
+    arguments: dict[str, Any],
+    decision: str,
+    reason: str = "",
+    call_id: str | None = None,
+) -> None:
     """Write one line of the control audit trail to stderr.
 
     Only ``control`` and ``alarm-action`` tools: an audit trail that also
@@ -109,6 +133,9 @@ def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason:
     record = {
         "event": "opcua_mcp_policy",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        # Second, so it is next to the timestamp in the line an operator reads and
+        # can be grepped for to pull one call's whole story out of a shipped log.
+        "call_id": call_id,
         "profile": tool_policy().config.profile,
         "tool": name,
         "decision": decision,
@@ -383,6 +410,7 @@ class PolicyMCPServer(MCPServer):
 
     async def call_tool(self, name, arguments, context=None):
         arguments = arguments or {}
+        call_id = new_call_id()
         try:
             spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
             if spec is None:
@@ -397,13 +425,13 @@ class PolicyMCPServer(MCPServer):
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             tool_policy().authorize(name, arguments)
-            _audit_decision(name, arguments, "allowed")
+            _audit_decision(name, arguments, "allowed", call_id=call_id)
             if not _capabilities_met(spec):
                 raise ToolError(
                     error_message("capabilityMissing", capabilities=", ".join(spec["capabilities"]))
                 )
         except (PermissionError, ValueError) as exc:
-            _audit_decision(name, arguments, "denied", str(exc))
+            _audit_decision(name, arguments, "denied", str(exc), call_id=call_id)
             raise ToolError(str(exc)) from exc
 
         # The outcome, not only the decision. "Permitted" and "happened" are
@@ -414,9 +442,9 @@ class PolicyMCPServer(MCPServer):
             result = await self._run_tool(name, arguments, context, spec)
         except Exception as error:
             reported = _without_sdk_prefix(name, error)
-            _audit_decision(name, arguments, "failed", describe_error(reported))
+            _audit_decision(name, arguments, "failed", describe_error(reported), call_id=call_id)
             raise reported from error.__cause__
-        _audit_decision(name, arguments, "completed")
+        _audit_decision(name, arguments, "completed", call_id=call_id)
         return result
 
     async def _run_tool(self, name, arguments, context, spec):

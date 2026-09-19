@@ -54,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rest of the process. The warm-up now completes before the first request, as
   the Python lifespan has always done, and "no session yet" is no longer cached
   as an answer.
+- **Security: CVE-2022-25304, unbounded chunk reassembly in `python-opcua`.**
+  An OPC UA message may be split across chunks, and `python-opcua` appends each
+  one to a list with nothing counting it, so a server that never terminates the
+  message exhausts the client. The advisory has no patched version and will not
+  get one — the library is unmaintained and the advisory names `asyncua` too.
+  Both runtimes now advertise `MaxChunkCount`/`MaxMessageSize` in the OPC UA
+  Hello (python-opcua's defaults are `0`, i.e. unlimited) and enforce them on
+  receipt from one shared bound in `contract/tools.json` -> `transport`:
+  node-opcua natively, and the Python runtime by wrapping
+  `SecureConnection._receive`. See SECURITY.md for the residual risk.
+- **The audit trail's lines could not be tied together** (#87). Each control call
+  writes `allowed` and then `completed`/`failed`, and nothing linked them; two
+  concurrent writes to the same node were not distinguishable by content at all.
+  Every line now carries a `call_id`.
 - **A raw history read had no bound** (#85). `num_values: 0` meant "every reading
   in the range" — against a node historised at 100ms, the same request that never
   returns that the browse caps were added to prevent. It now means "as many as

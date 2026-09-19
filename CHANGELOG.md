@@ -142,6 +142,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required status check.
 - Dependency bumps, superseding Dependabot PRs #66, #67 and #68: `@types/node`
   26.5.0 → 26.6.0, `pyinstaller` 6.22.2 → 6.22.3, `ruff` 0.16.6 → 0.16.8.
+- Further dependency bumps, superseding Dependabot PRs #98–#102:
+  `node-opcua-client` 2.183.1 → 2.184.8 and `node-opcua-crypto` 5.10.1 → 5.11.0
+  (both runtime, so the full end-to-end suite is what clears them),
+  `@types/node` → 26.6.2, `prettier` → 3.9.8, and in `release.yml`
+  `actions/upload-artifact` v4 → v7 with `actions/download-artifact` v4 → v8.
 
 ## [0.4.1] — 2026-09-18
 

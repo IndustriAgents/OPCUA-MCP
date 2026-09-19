@@ -46,15 +46,15 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "node-opcua-client": "^2.183.1",
-    "node-opcua-crypto": "^5.10.1"
+    "node-opcua-client": "^2.184.8",
+    "node-opcua-crypto": "^5.11.0"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",
-    "@types/node": "^26.6.0",
+    "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",
     "postject": "^1.0.0-alpha.6",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.8",
     "typescript": "^7.0.2"
   },
   "overrides": {

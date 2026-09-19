@@ -168,3 +168,65 @@ jobs:
       - name: Run artifact smoke tests
         working-directory: tests
         run: uv run --no-sync pytest -v -m smoke smoke/
+
+  # Windows and macOS, which nothing else in CI touches. The platform branches
+  # this exercises are real and were covered only by unit tests that pass a faked
+  # `platform` string: `install.py` resolves a different config path per OS (the
+  # `%APPDATA%` fallback among them), and `index.ts`'s `isEntryPoint()` compares
+  # `process.argv[1]` through `realpathSync`, where Windows junctions behave
+  # unlike POSIX symlinks. Windows is also where most SCADA stacks and most
+  # Claude Desktop installs live.
+  #
+  # Unit plus smoke, not the full e2e suite: e2e drives three mock OPC UA servers
+  # and takes ~10 minutes, and running it three more times buys far less than the
+  # packaging and path coverage does. `release.yml` already builds the executables
+  # on all three OSes — but only builds them, with no suite behind it, so a
+  # Windows regression was discoverable by cutting a release and not before.
+  #
+  # NOTE: deliberately *not* yet a required status check in the `main-protection`
+  # ruleset. Adding a required check that has never run on this repository is how
+  # a merge gate becomes unsatisfiable; promote it once it has been green for a
+  # few PRs, following the order described on `smoke` above.
+  cross-platform:
+    name: Unit & artifacts — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/server-node/package-lock.json
+
+      - name: Build Node server
+        working-directory: packages/server-node
+        run: |
+          npm ci
+          npm run build
+
+      - name: Unit tests (Node)
+        working-directory: packages/server-node
+        run: npm test
+
+      # `--group packaging` brings in PyInstaller for the executable the smoke
+      # tests build, which is the artifact most likely to differ per platform.
+      - name: Sync workspace (all packages)
+        run: uv sync --all-packages --group packaging
+
+      - name: Unit tests (Python)
+        working-directory: tests
+        run: uv run --no-sync pytest -v unit/
+
+      - name: Run artifact smoke tests
+        working-directory: tests
+        run: uv run --no-sync pytest -v -m smoke smoke/

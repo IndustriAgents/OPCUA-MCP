@@ -43,6 +43,10 @@ def test_tool_has_required_fields(tool):
         "capabilities",
         "description",
         "inputSchema",
+        # What this server may do when the session dies under the request. Every
+        # tool must say; see tests/unit/test_retry_policy.py for what each value
+        # means and why it is not `annotations.idempotentHint`.
+        "retryPolicy",
     ):
         assert field in tool, f"{tool.get('name')} is missing {field!r}"
     assert tool["description"].strip(), f"{tool['name']} has an empty description"

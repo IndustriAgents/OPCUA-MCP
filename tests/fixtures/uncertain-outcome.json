@@ -1,0 +1,39 @@
+{
+  "$comment": "One table of control calls and the sentence each must fail with when its OPC UA session dies before the server answers. Driven through BOTH runtimes: tests/unit/test_retry_policy.py and packages/server-node/test/retry-policy.test.mjs read this file and assert the same string. The same pattern as argument-validation.json, and for the same reason — two hand-written copies of a rule are two rules. The wording itself comes from contract/tools.json -> errors.uncertainOutcome; what is pinned here is the `targets` substitution, which each runtime builds from the tool's own `guard` and which is the part a human reads to decide what to check before sending the call again. Values are never in it: a setpoint is process data, and this message goes to the same stream the audit trail does.",
+  "reason": "BadSessionIdInvalid",
+  "cases": [
+    {
+      "name": "a single-node write names the node it was aimed at",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=5", "value": 99.9 }] },
+      "targets": "node_ids=ns=2;i=5"
+    },
+    {
+      "name": "a batch write names every node, so none of them is assumed to have landed",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          { "node_id": "ns=2;i=5", "value": 99.9 },
+          { "node_id": "ns=2;i=6", "value": 12 }
+        ]
+      },
+      "targets": "node_ids=ns=2;i=5, ns=2;i=6"
+    },
+    {
+      "name": "a method call names the object and the method, which is what authorised it",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=20",
+        "method_node_id": "ns=2;i=21",
+        "arguments": [1]
+      },
+      "targets": "object_node_id=ns=2;i=20; method_node_id=ns=2;i=21"
+    },
+    {
+      "name": "an acknowledgement names the condition, not the comment",
+      "tool": "acknowledge_alarm",
+      "arguments": { "event_id": "abc123", "comment": "checked the valve" },
+      "targets": "event_id=abc123"
+    }
+  ]
+}

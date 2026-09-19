@@ -131,7 +131,8 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 
 ```json
 {"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
- "profile":"operator","tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+ "attempt":1,"profile":"operator","tool":"write_opcua_nodes","decision":"allowed",
+ "node_ids":["ns=2;i=13"]}
 ```
 
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
@@ -150,6 +151,17 @@ $ grep '"call_id":"9f2c1ab4de77f031"' plant.log
 
 A denied call never runs, so it is one line rather than two, and it carries an id
 like everything else.
+
+`attempt` is which *physical* attempt a line is about. One call can reach the
+plant twice: the session dies, the connection is rebuilt, and a request the
+contract marks `retryPolicy: resend` is sent again — on a new session, which is
+re-authorized before it goes out, because a restarted server may have renumbered
+its namespaces. A trail whose purpose is "what reached the plant" has to count
+those separately, so the second attempt gets its own `allowed` line under the
+same `call_id`. No `control` or `alarm-action` call is ever re-sent (see
+`retryPolicies` in `contract/tools.json`), so on a write `attempt` is always 1 —
+what changes for control is that a call whose outcome is genuinely unknown now
+says so rather than being quietly repeated.
 
 It is **not durable**: nothing here writes a file or survives the process. For a
 retained record, collect the server's stderr — the format is stable and

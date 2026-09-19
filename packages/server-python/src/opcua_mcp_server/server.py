@@ -10,6 +10,7 @@ import sys
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -111,12 +112,53 @@ def new_call_id() -> str:
     return secrets.token_hex(8)
 
 
+@dataclass
+class _Call:
+    """One tools/call in flight, as the dispatcher and the audit trail see it.
+
+    ``attempt`` is mutable and is the reason this is an object rather than a
+    handful of parameters: the retry decision is taken several frames below the
+    audit lines that have to report it. Before this, a call that died on its
+    session and was re-sent wrote one ``allowed`` line for the first attempt and
+    nothing at all about the second — an audit trail that under-counts what
+    actually reached the plant (issue #105).
+    """
+
+    name: str
+    arguments: dict[str, Any]
+    spec: dict[str, Any]
+    call_id: str
+    attempt: int = 1
+    #: Whether a refusal has already been recorded for this call. Keeps a denial
+    #: to one line rather than two: the ``failed`` line would otherwise repeat
+    #: its reason and read as though the plant had rejected the call.
+    denied: bool = False
+
+
+def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
+    """What a call was aimed at, for a message a human will read.
+
+    The same ``guard`` the audit record and the policy read, so the three cannot
+    name different things. Targets only — never the values, for the same reason
+    :func:`_audit_decision` withholds them.
+    """
+    targets = _audit_targets(spec, arguments)
+    if not targets:
+        return "unknown"
+    parts = []
+    for key, value in targets.items():
+        rendered = ", ".join(str(item) for item in value) if isinstance(value, list) else value
+        parts.append(f"{key}={rendered}")
+    return "; ".join(parts)
+
+
 def _audit_decision(
     name: str,
     arguments: dict[str, Any],
     decision: str,
     reason: str = "",
     call_id: str | None = None,
+    attempt: int = 1,
 ) -> None:
     """Write one line of the control audit trail to stderr.
 
@@ -136,6 +178,11 @@ def _audit_decision(
         # Second, so it is next to the timestamp in the line an operator reads and
         # can be grepped for to pull one call's whole story out of a shipped log.
         "call_id": call_id,
+        # Which physical attempt this line is about. One call can reach the plant
+        # twice — the session dies, the connection is rebuilt, the request is
+        # re-sent — and a trail whose purpose is "what reached the plant" has to
+        # count those separately rather than fold them into one line.
+        "attempt": attempt,
         "profile": tool_policy().config.profile,
         "tool": name,
         "decision": decision,
@@ -411,8 +458,8 @@ class PolicyMCPServer(MCPServer):
     async def call_tool(self, name, arguments, context=None):
         arguments = arguments or {}
         call_id = new_call_id()
+        spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
         try:
-            spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
             if spec is None:
                 raise ValueError(error_message("unknownTool", tool=name))
             # Shape before permission: a call that does not match the contract is
@@ -425,61 +472,123 @@ class PolicyMCPServer(MCPServer):
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             tool_policy().authorize(name, arguments)
-            _audit_decision(name, arguments, "allowed", call_id=call_id)
-            if not _capabilities_met(spec):
-                raise ToolError(
-                    error_message("capabilityMissing", capabilities=", ".join(spec["capabilities"]))
-                )
+            _audit_decision(name, arguments, "allowed", call_id=call_id, attempt=1)
         except (PermissionError, ValueError) as exc:
-            _audit_decision(name, arguments, "denied", str(exc), call_id=call_id)
+            _audit_decision(name, arguments, "denied", str(exc), call_id=call_id, attempt=1)
             raise ToolError(str(exc)) from exc
 
         # The outcome, not only the decision. "Permitted" and "happened" are
         # different facts, and the gap between them is where a control call that
         # reached the plant and then failed lives — which is the one an operator
         # most needs to find afterwards.
+        call = _Call(name=name, arguments=arguments, spec=spec, call_id=call_id)
         try:
-            result = await self._run_tool(name, arguments, context, spec)
+            result = await self._run_tool(call, context)
         except Exception as error:
             reported = _without_sdk_prefix(name, error)
-            _audit_decision(name, arguments, "failed", describe_error(reported), call_id=call_id)
+            if not call.denied:
+                _audit_decision(
+                    name,
+                    arguments,
+                    "failed",
+                    describe_error(reported),
+                    call_id=call_id,
+                    attempt=call.attempt,
+                )
             raise reported from error.__cause__
-        _audit_decision(name, arguments, "completed", call_id=call_id)
+        _audit_decision(name, arguments, "completed", call_id=call_id, attempt=call.attempt)
         return result
 
-    async def _run_tool(self, name, arguments, context, spec):
+    async def _run_tool(self, call: _Call, context):
+        name, arguments = call.name, call.arguments
         # The one tool that must answer while the connection is down: it exists
         # to say so, and reaches for the connection itself.
         if name == "get_server_status" or _CONNECTION is None:
             return await super().call_tool(name, arguments, context)
 
         connection = _CONNECTION
+        # Connect *before* the capability gate, not after. The capability map is
+        # filled in by the reconnect callback, so on a process that started while
+        # the plant was unreachable it still holds its startup defaults — and
+        # checking it first refused `read_opcua_history` as "the server advertises
+        # none of: history" without ever asking the server. Unknown is not absent
+        # (issue #108).
         try:
             await asyncio.to_thread(connection.ensure_connected)
         except Exception as error:
             raise ToolError(not_connected_message(connection.url, describe_error(error))) from error
+
+        if not _capabilities_met(call.spec):
+            raise ToolError(
+                error_message(
+                    "capabilityMissing", capabilities=", ".join(call.spec["capabilities"])
+                )
+            )
 
         try:
             return await super().call_tool(name, arguments, context)
         except Exception as error:
             if not is_connection_error(error):
                 raise
-            # A connection can die between the check above and the call: being
-            # connected a moment ago is all anything can ever know. Whether
-            # running it again is *safe* is settled by the contract's own
-            # `idempotentHint` — a dead session almost certainly means the
-            # request never reached the server, but "almost certainly" is not a
-            # licence to fire `call_opcua_method` twice at a machine.
-            may_repeat = bool(spec["annotations"]["idempotentHint"])
-            suffix = " and retrying once" if may_repeat else ""
-            print(
-                f"OPC UA call failed on a dead session; reconnecting{suffix}",
-                file=sys.stderr,
-            )
-            await asyncio.to_thread(connection.reconnect)
-            if not may_repeat:
-                raise
-            return await super().call_tool(name, arguments, context)
+            return await self._recover(call, context, connection, error)
+
+    async def _recover(self, call: _Call, context, connection: OpcuaConnection, error: Exception):
+        """Rebuild the session a call died on, and decide what may follow it.
+
+        A connection can die between the check and the call: being connected a
+        moment ago is all anything can ever know. What happens next is settled by
+        the contract's own `retryPolicy` — *not* by `annotations.idempotentHint`,
+        which both runtimes used to read for this. That annotation tells the model
+        whether calling a tool twice is meaningful; this decides whether this
+        server may put a second request on the wire after an outcome it does not
+        know. `write_opcua_nodes` carries `idempotentHint: true` and must not be
+        re-sent: Part 4 §5.11.4 lets a Write partially succeed and defines no
+        operation order, so a lost response never proved the write had not landed
+        (issue #106).
+
+        The connection is rebuilt whatever the policy, so the next call finds a
+        live session.
+        """
+        name, arguments = call.name, call.arguments
+        policy = call.spec["retryPolicy"]
+        suffix = " and retrying once" if policy == "resend" else ""
+        print(
+            f"OPC UA call failed on a dead session; reconnecting{suffix}",
+            file=sys.stderr,
+        )
+        await asyncio.to_thread(connection.reconnect)
+
+        if policy == "uncertainOutcome":
+            raise ToolError(
+                error_message(
+                    "uncertainOutcome",
+                    tool=name,
+                    reason=describe_error(error),
+                    targets=describe_targets(call.spec, arguments),
+                )
+            ) from error
+        if policy != "resend":
+            raise error
+
+        # Re-authorize before the second attempt, and audit it as its own.
+        #
+        # `reconnect` has just re-read the server's NamespaceArray and re-bound it
+        # into the policy, because a server that restarted may have loaded its
+        # namespaces in a different order — which is the whole reason the `nsu=`
+        # allowlist form exists. So the mapping this call was authorized against
+        # is not necessarily the mapping the second attempt will resolve against,
+        # and re-running the check is what stops a request reaching a node nobody
+        # allowed (issue #105). It touches no network.
+        call.attempt = 2
+        try:
+            tool_policy().authorize(name, arguments)
+        except (PermissionError, ValueError) as exc:
+            call.denied = True
+            _audit_decision(name, arguments, "denied", str(exc), call_id=call.call_id, attempt=2)
+            raise ToolError(str(exc)) from exc
+        _audit_decision(name, arguments, "allowed", call_id=call.call_id, attempt=2)
+
+        return await super().call_tool(name, arguments, context)
 
 
 # Create an MCP server instance. The server identity must match the Node server's

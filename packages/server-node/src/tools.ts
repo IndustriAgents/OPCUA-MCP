@@ -19,7 +19,7 @@ import {
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { browseAllReferences } from "./browse.js";
-import { OpcuaConnection, notConnectedMessage } from "./connection.js";
+import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { message } from "./errors.js";
 import {
@@ -259,18 +259,18 @@ function outputSchema(resultShape: string | undefined): Tool["outputSchema"] {
   } as Tool["outputSchema"];
 }
 
-/** Whether a tool may be run a second time when the first attempt found a dead session.
+/** What a call was aimed at, for a message a human will read.
  *
- * Keyed on the contract's own `idempotentHint`, so the question is answered once,
- * where the tool is declared, rather than in a list here that could disagree with
- * what tools/list tells the model. A dead session almost certainly means the
- * request never reached the server — but "almost certainly" is not a licence to
- * fire `call_opcua_method` twice at a machine, so the non-idempotent tools report
- * the failure and leave the retry to a human.
+ * The same `guard` the audit record and the policy read, so the three cannot
+ * name different things. Targets only — never the values, for the same reason
+ * `auditDecision` withholds them.
  */
-function retryIsSafe(name: string): boolean {
-  const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
-  return tool?.annotations.idempotentHint === true;
+export function describeTargets(tool: ToolSpec, args: Record<string, unknown>): string {
+  const targets = auditTargets(tool, args);
+  const parts = Object.entries(targets).map(
+    ([key, value]) => `${key}=${Array.isArray(value) ? value.join(", ") : String(value)}`
+  );
+  return parts.length > 0 ? parts.join("; ") : "unknown";
 }
 
 /** What a control call was aimed at, for the audit record.
@@ -321,6 +321,7 @@ function auditDecision(
   args: Record<string, unknown>,
   decision: "allowed" | "denied" | "failed" | "completed",
   callId: string,
+  attempt: number,
   reason?: string
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
@@ -332,6 +333,11 @@ function auditDecision(
       // Second, so it is next to the timestamp in the line an operator reads and
       // can be grepped for to pull one call's whole story out of a shipped log.
       call_id: callId,
+      // Which physical attempt this line is about. One call can reach the plant
+      // twice — the session dies, the connection is rebuilt, the request is
+      // re-sent — and a trail whose purpose is "what reached the plant" has to
+      // count those separately rather than fold them into one line.
+      attempt,
       profile: policy.config.profile,
       tool: name,
       decision,
@@ -578,9 +584,22 @@ export class OpcuaTools {
 
   /** Serve a tools/call request: authorize it, then run it on a live session. */
   async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
-    const { name, arguments: args } = request.params;
+    const { name } = request.params;
+    const args = request.params.arguments ?? {};
     const callId = newCallId();
     let authorized = false;
+    // How the audit trail sees this call while it is in flight.
+    //
+    // `attempt` is which *physical* attempt the lines below are about: one call
+    // can reach the plant twice — the session dies, the connection is rebuilt,
+    // the request is re-sent — and `recover` bumps it so `completed` and
+    // `failed` say which attempt they describe rather than folding both into one
+    // line (issue #105).
+    //
+    // `denied` keeps a refusal to one line rather than two. A denial has already
+    // been recorded as one, and the `failed` line below would otherwise repeat
+    // its reason and read as though the plant had rejected the call.
+    const audit = { attempt: 1, denied: false };
 
     try {
       // Shape before permission: a call that does not match the contract is not a
@@ -594,22 +613,23 @@ export class OpcuaTools {
       if (!spec) {
         throw new Error(message("unknownTool", { tool: name }));
       }
-      validateArguments(name, spec.inputSchema, args ?? {});
+      validateArguments(name, spec.inputSchema, args);
 
       // This is the security boundary. Filtering tools/list improves the model's
       // choices, but clients cache catalogs and may call a previously visible
       // tool directly, so authorize again before touching the OPC UA network.
       try {
-        this.policy.authorize(name, args ?? {});
+        this.policy.authorize(name, args);
         authorized = true;
-        auditDecision(this.policy, name, args ?? {}, "allowed", callId);
+        auditDecision(this.policy, name, args, "allowed", callId, 1);
       } catch (error) {
         auditDecision(
           this.policy,
           name,
-          args ?? {},
+          args,
           "denied",
           callId,
+          1,
           error instanceof Error ? error.message : String(error)
         );
         throw error;
@@ -620,15 +640,16 @@ export class OpcuaTools {
         return statusResult(await this.getServerStatus());
       }
 
-      if (!(await this.capabilitiesMet(spec))) {
-        throw new Error(
-          message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
-        );
-      }
-
       // Connecting is attempted before dispatching, so that a server that is
       // simply not there is reported as that rather than as a puzzling failure
       // from whichever tool happened to be called first.
+      //
+      // And before the capability gate, not after. The capability answers are
+      // filled in by the reconnect callback, so a process that started while the
+      // plant was unreachable still holds its startup defaults — and checking
+      // them first refused `read_opcua_history` as "the server advertises none
+      // of: history" without ever asking the server. Unknown is not absent
+      // (issue #108).
       try {
         await this.ensureConnection();
       } catch (error) {
@@ -640,21 +661,32 @@ export class OpcuaTools {
         );
       }
 
-      const result = await this.conn.withRetry(
-        () => this.dispatch(name, args ?? {}),
-        retryIsSafe(name)
-      );
+      if (!(await this.capabilitiesMet(spec))) {
+        throw new Error(
+          message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
+        );
+      }
+
+      let result;
+      try {
+        result = await this.dispatch(name, args);
+      } catch (error) {
+        if (!isConnectionError(error)) throw error;
+        result = await this.recover(spec, args, callId, audit, error);
+      }
       // The outcome, not only the decision. "Permitted" and "happened" are
       // different facts, and the gap between them is where a control call that
       // reached the plant and then failed lives — which is the one an operator
       // most needs to find afterwards.
-      auditDecision(this.policy, name, args ?? {}, "completed", callId);
+      auditDecision(this.policy, name, args, "completed", callId, audit.attempt);
       return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
-      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", callId, reason);
+      if (authorized && !audit.denied) {
+        auditDecision(this.policy, name, args, "failed", callId, audit.attempt, reason);
+      }
       // No "Error: " prefix. `isError` already says it is one, and the Python
       // runtime returns the bare message — so prefixing here made every failure
       // read two ways depending on which runtime a client had started.
@@ -663,6 +695,77 @@ export class OpcuaTools {
         isError: true,
       };
     }
+  }
+
+  /** Rebuild the session a call died on, and decide what may follow it.
+   *
+   * A connection can die between `ensureConnection` and the call: it can only
+   * report what was true a moment ago. What happens next is settled by the
+   * contract's own `retryPolicy` — *not* by `annotations.idempotentHint`, which
+   * both runtimes used to read for this. That annotation tells the model whether
+   * calling a tool twice is meaningful; this decides whether this server may put
+   * a second request on the wire after an outcome it does not know.
+   * `write_opcua_nodes` carries `idempotentHint: true` and must not be re-sent:
+   * Part 4 §5.11.4 lets a Write partially succeed and defines no operation order,
+   * so a lost response never proved the write had not landed (issue #106).
+   *
+   * The connection is rebuilt whatever the policy, so the next call finds a live
+   * session.
+   */
+  private async recover(
+    spec: ToolSpec,
+    args: Record<string, unknown>,
+    callId: string,
+    audit: { attempt: number; denied: boolean },
+    error: unknown
+  ) {
+    const policy = spec.retryPolicy;
+    console.error(
+      `OPC UA call failed on a dead session; reconnecting${
+        policy === "resend" ? " and retrying once" : ""
+      }`
+    );
+    await this.conn.reconnect();
+
+    if (policy === "uncertainOutcome") {
+      throw new Error(
+        message("uncertainOutcome", {
+          tool: spec.name,
+          reason: describeError(error),
+          targets: describeTargets(spec, args),
+        })
+      );
+    }
+    if (policy !== "resend") throw error;
+
+    // Re-authorize before the second attempt, and audit it as its own.
+    //
+    // `reconnect` has just re-read the server's NamespaceArray and re-bound it
+    // into the policy, because a server that restarted may have loaded its
+    // namespaces in a different order — which is the whole reason the `nsu=`
+    // allowlist form exists. So the mapping this call was authorized against is
+    // not necessarily the mapping the second attempt will resolve against, and
+    // re-running the check is what stops a request reaching a node nobody
+    // allowed (issue #105). It touches no network.
+    audit.attempt = 2;
+    try {
+      this.policy.authorize(spec.name, args);
+    } catch (denial) {
+      audit.denied = true;
+      auditDecision(
+        this.policy,
+        spec.name,
+        args,
+        "denied",
+        callId,
+        2,
+        denial instanceof Error ? denial.message : String(denial)
+      );
+      throw denial;
+    }
+    auditDecision(this.policy, spec.name, args, "allowed", callId, 2);
+
+    return await this.dispatch(spec.name, args);
   }
 
   /** Run one tool. The caller has already authorized it and ensured a session. */

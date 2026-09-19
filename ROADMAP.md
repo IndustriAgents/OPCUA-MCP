@@ -63,13 +63,20 @@ changes to this repository.
 
 Nothing is queued. Everything that was here at 0.3.0 — node search and
 browse-path resolution, typed method arguments, full node attribute reads, X.509
-user authentication — shipped in 0.4.0.
+user authentication — shipped in 0.4.0, and the architecture review that opened
+#81–#90 is closed out too: the contract is now the advertised surface on both
+runtimes and the thing enforcing arguments, failures are worded from it, the
+catalogue no longer waits on the plant, the requests that had no bounds have them,
+chunk reassembly is bounded against CVE-2022-25304, and CI runs on Windows and
+macOS.
 
 The next thing worth doing is decided by what
 [#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) turns up: a result
 from a real vendor server is the one input this repository cannot generate for
 itself, and it is more likely to set priorities usefully than anything that could
-be written down now.
+be written down now. It is also what decides the one question the review left
+open rather than answered — whether this should serve a plant or a workstation
+(see below).
 
 ## Considered and set aside
 
@@ -80,8 +87,46 @@ condition below is met.
 | Work | Set aside because | Reopen when |
 |---|---|---|
 | Streamable-HTTP transport ([#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14)) | The tool policy is enforced per process and has no notion of *who* is calling; an HTTP listener would make it a remote endpoint that can write to a PLC | Per-client authorisation has a design |
-| Multiple or file-configured endpoints ([#15](https://github.com/midhunxavier/OPCUA-MCP/issues/15)) | A per-tool endpoint argument would make `writable_nodes` mean different physical nodes per server, on keys that are already session-scoped. One process per endpoint costs nothing today and keeps a misconfigured policy to one PLC | Node-ID canonicalisation and URI-based allowlists have landed |
+| Multiple or file-configured endpoints ([#15](https://github.com/midhunxavier/OPCUA-MCP/issues/15)) | **Its condition has been met — see below.** | Superseded |
 | Docker images ([#16](https://github.com/midhunxavier/OPCUA-MCP/issues/16)) | Four distribution channels already ship, and a container adds little for a stdio server that runs beside its client | A remote transport lands, or a deployment requires an image |
+
+### Multiple endpoints: the condition was met, and the answer is still not yet
+
+#15 was set aside on a stated condition — "Node-ID canonicalisation and URI-based
+allowlists have landed" — because the objection was that a per-tool endpoint
+argument would make `writable_nodes` mean different physical nodes per server, on
+keys that are session-scoped. Both landed in 0.4.0 (`node_ids.py` and its Node
+twin canonicalise spelling; `nsu=<uri>;i=…` entries resolve against the live
+NamespaceArray on every connect). So the condition is met and the objection is
+gone, which means the honest thing is to say what the *remaining* reason is
+rather than leave a lapsed condition standing.
+
+The remaining reason is that a second endpoint is not one argument, it is a
+different product. Today `OPCUA_SERVER_URL` is process-global, every tool targets
+it implicitly, stdio is the only transport, and each MCP client gets its own OPC
+UA session — which on equipment where sessions are licensed is a cost per client
+per endpoint. Serving a plant rather than a workstation needs, together:
+
+- an endpoint registry, and an endpoint argument on every tool that names a node;
+- policy scoped per endpoint, since `writable_nodes` for PLC A must not authorise
+  anything on PLC B — which is the same missing notion of *who is asking* that
+  set aside [#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14);
+- pooled sessions, so N clients do not mean N sessions per PLC;
+- a transport that can serve more than one client.
+
+That is one piece of work, not four, and #14 is half of it. The tool signatures
+are the part that would have to change, and they were only just stabilised at
+0.4.0 — so the sequencing that makes sense is to let
+[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) come back from real
+equipment first: whether sessions are actually scarce, and whether anyone is
+trying to run this for a line rather than for themselves, decides whether this is
+worth the tool-surface break. Until then, one process per endpoint is not a
+workaround, it is the design, and [README.md](README.md#overview) now says so
+where someone would meet it.
+
+**Reopen when** a compatibility report or a user says they are running this
+against more than one endpoint at once, or per-client authorisation gets a design
+(which is #14's condition and this one's too).
 
 ### The control audit trail, as it actually stands
 
@@ -92,14 +137,17 @@ useful than either claim.
 Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 
 ```json
-{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","profile":"operator",
- "tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
+ "profile":"operator","tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
 ```
 
 `decision` is one of `allowed`, `denied`, `completed` or `failed` — the outcome
 as well as the verdict, because "permitted" and "happened" are different facts
 and the gap between them is where a control call that reached the plant and then
-failed lives. The targets come from the same `guard` declaration in
+failed lives. `call_id` is what joins a call's lines to each other, which they had
+no way to be until [#87](https://github.com/midhunxavier/OPCUA-MCP/issues/87):
+both runtimes serve calls concurrently, so overlapping writes interleave, and two
+writes to the same node were not distinguishable by content. The targets come from the same `guard` declaration in
 `contract/tools.json` that the policy authorises from, so the two cannot disagree
 about which arguments matter. Reads are never audited; a trail that recorded
 every read would bury the lines anyone is looking for. Neither credentials nor

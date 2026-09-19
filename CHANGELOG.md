@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **The one-endpoint-per-process ceiling is now stated where someone meets it**
+  (#88). `OPCUA_SERVER_URL` is read once, every tool targets it, stdio is the only
+  transport, and each MCP client opens its own OPC UA session — which on equipment
+  where sessions are licensed is a cost per client per endpoint. README.md says
+  so in the overview.
+- **#15's reopen condition had been met and nobody noticed.** `ROADMAP.md` set
+  multiple endpoints aside until "node-ID canonicalisation and URI-based
+  allowlists have landed"; both shipped in 0.4.0. The roadmap now records that the
+  condition lapsed, what the *remaining* reason is (a second endpoint needs an
+  endpoint registry, per-endpoint policy, session pooling and a multi-client
+  transport — one piece of work, of which #14 is half), and a reopen condition
+  that can actually be observed.
+
 ### Fixed
 - **The Python server advertised schemas that were not the contract's** (#81).
   Its `tools/list` carried the schema `MCPServer` derives from each function

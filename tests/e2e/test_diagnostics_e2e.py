@@ -236,7 +236,7 @@ async def test_other_tools_say_what_to_call_when_disconnected():
 
 def test_the_contract_is_where_the_node_ids_come_from():
     """Neither server may carry its own copy of ServerStatus / NamespaceArray."""
-    contract = json.loads((ROOT / "contract" / "tools.json").read_text())
+    contract = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
     diagnostics = contract["diagnostics"]
     assert diagnostics["serverStatusNodeId"] == "ns=0;i=2256"
     assert diagnostics["namespaceArrayNodeId"] == "ns=0;i=2255"

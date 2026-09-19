@@ -51,11 +51,14 @@
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",
-    "@types/node": "^26.5.0",
+    "@types/node": "^26.6.0",
     "esbuild": "^0.28.2",
     "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "tmp": "^0.2.6"
   },
   "engines": {
     "node": ">=22.13.0"

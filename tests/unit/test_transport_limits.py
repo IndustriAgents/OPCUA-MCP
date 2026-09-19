@@ -31,7 +31,7 @@ from opcua_mcp_server.transport_limits import (
     install_receive_guard,
 )
 
-CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text())
+CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(autouse=True)
@@ -140,7 +140,7 @@ def test_the_real_client_factory_advertises_them():
     """The knobs are useless if nothing sets them on the client that connects."""
     source = (
         ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "security.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "advertise_limits(client)" in source, (
         "create_client must advertise the transport bounds, or the Hello goes out "
         "with python-opcua's unlimited defaults"

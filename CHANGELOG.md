@@ -91,6 +91,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than truncated, and `subscribe_opcua_nodes` counts against
   `limits.maxSubscriptions` (200) because it asks a PLC for one subscription per
   node.
+- **The artifact smoke fixtures could not run on Windows**, the third thing the
+  cross-platform job found. They invoked `npm`/`npx` as bare names, which
+  `subprocess` cannot resolve to `npm.cmd` without a shell (`[WinError 2]`), and
+  they looked for `lib/pythonX.Y/site-packages` in a venv where Windows puts
+  `Lib/site-packages`. The fixtures already called `shutil.which` and threw the
+  answer away; they now use it.
+- **Forty-six test files read the contract at the system locale**, also found by
+  the new cross-platform job. `Path.read_text()` defaults to the system encoding,
+  which on Windows is cp1252 — so every em dash and ellipsis in
+  `contract/tools.json` came back as a replacement character and the description
+  comparisons failed. The product has always passed `encoding="utf-8"`
+  explicitly, with a comment saying why; the tests never did, and on macOS and
+  Linux the locale happens to be UTF-8 so nothing noticed. Fixed everywhere, with
+  a unit test that fails if a bare read reappears.
+- **`isEphemeralInstall` missed npx caches spelled with forward slashes on
+  Windows** — found by the new cross-platform CI job on its first run. It split
+  the path on the *host's* separator, so a Windows path written with `/` (which
+  Windows accepts, and which `process.argv[1]` may well carry) was one unsplit
+  segment that matched nothing: `--install` would then write the npx cache path
+  into a client config as though it were a real install, and the entry would
+  break the next time the cache was pruned. It now splits on either separator,
+  which is what the Python half already got for free from `Path(...).parts`.
+- **Security: `tmp` path traversal (GHSA-ph9p-34f9-6g65, GHSA-52f5-9888-hmc6).**
+  A dev-only transitive dependency, reached through
+  `@anthropic-ai/mcpb` → `@inquirer/prompts` → `@inquirer/editor` →
+  `external-editor` → `tmp@0.0.33`, whose vulnerable `tmpNameSync` is the API
+  `external-editor` calls. No version bump fixes it — `external-editor` pins
+  `^0.0.33` at its own latest — so it is pinned with an npm `overrides` entry to
+  `^0.2.6`. `npm audit` is clean.
 
 ### Changed
 - Behavioural parity is now driven by shared tables rather than by hand-mirrored
@@ -105,6 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped-events sentence that was two hand-mirrored literals), read by
   `limits.py` / `limits.ts` and `notices.py` / `notices.ts`, with
   `tests/fixtures/history-limits.json` driving both.
+- **CI now runs on Windows and macOS** (#89), which nothing in it touched before.
+  A new `cross-platform` job runs the unit suites and the artifact smoke tests on
+  both, covering the per-OS branches in `install.py` (the `%APPDATA%` config path
+  among them) and `isEntryPoint()`'s `realpathSync` comparison, which Windows
+  junctions do not behave like POSIX symlinks under. It is deliberately not yet a
+  required status check.
+- Dependency bumps, superseding Dependabot PRs #66, #67 and #68: `@types/node`
+  26.5.0 → 26.6.0, `pyinstaller` 6.22.2 → 6.22.3, `ruff` 0.16.6 → 0.16.8.
 
 ## [0.4.1] — 2026-09-18
 

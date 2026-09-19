@@ -29,9 +29,14 @@ const scratch = () => mkdtempSync(join(tmpdir(), "opcua-install-"));
 
 describe("claudeDesktopConfigPath", () => {
   test("macOS uses Application Support", () => {
+    // Built with `join` rather than written out, because that is what the
+    // function uses and `join` spells a separator the host's way: asserting a
+    // POSIX literal made this a test that passed on macOS and Linux and failed
+    // on Windows for saying nothing about the product. What is under test is the
+    // segments, and they are the same everywhere.
     assert.equal(
       claudeDesktopConfigPath("darwin", {}, "/Users/e"),
-      "/Users/e/Library/Application Support/Claude/claude_desktop_config.json"
+      join("/Users/e", "Library", "Application Support", "Claude", "claude_desktop_config.json")
     );
   });
 
@@ -67,6 +72,21 @@ describe("isEphemeralInstall", () => {
   test("recognises npx and dlx caches", () => {
     assert.equal(isEphemeralInstall("/home/e/.npm/_npx/abc/node_modules/x/build/index.js"), true);
     assert.equal(isEphemeralInstall("/home/e/.local/share/pnpm/dlx-1234/node_modules/x.js"), true);
+  });
+
+  test("recognises them spelled the Windows way too", () => {
+    // Both separators, on every host. A path here comes from `process.argv[1]`
+    // or from a caller rather than from `path.join`, and Windows accepts either
+    // — so a forward-slashed Windows path used to be one unsplit segment that
+    // matched nothing, and a cache path was written into the config as though it
+    // were a real install.
+    const windows = "C:\\Users\\e\\AppData\\Local\\npm-cache\\_npx\\abc\\node_modules\\x.js";
+    assert.equal(isEphemeralInstall(windows), true);
+    assert.equal(isEphemeralInstall("C:/Users/e/AppData/Local/npm-cache/_npx/abc/x.js"), true);
+    assert.equal(
+      isEphemeralInstall("C:\\Program Files\\nodejs\\node_modules\\opcua-mcp-server\\x.js"),
+      false
+    );
   });
 
   test("a global or local install is not ephemeral", () => {

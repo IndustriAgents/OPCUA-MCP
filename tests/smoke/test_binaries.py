@@ -32,7 +32,7 @@ import sys
 import pytest
 from conftest import ROOT
 from mcp import StdioServerParameters
-from test_artifacts import CORE_TOOLS, NODE_PKG_DIR, PY_PKG_DIR, _list_tools, _run
+from test_artifacts import CORE_TOOLS, NODE_PKG_DIR, PY_PKG_DIR, _list_tools, _run, node_tool
 
 pytestmark = pytest.mark.smoke
 
@@ -54,15 +54,14 @@ def _node_major() -> int:
 @pytest.fixture(scope="module")
 def node_binary():
     """Build the Node single-file executable."""
-    if shutil.which("npm") is None:
-        pytest.skip("npm not available")
+    npm = node_tool("npm")
     if not (NODE_PKG_DIR / "node_modules").is_dir():
         pytest.skip("Node dependencies not installed — run `npm ci` in packages/server-node")
     if _node_major() < 20:
         # A build-time floor only: the server itself still supports Node 18.
         pytest.skip(f"single-file executables need Node 20+ to build; found Node {_node_major()}")
 
-    _run(["npm", "run", "build:sea"], cwd=NODE_PKG_DIR)
+    _run([npm, "run", "build:sea"], cwd=NODE_PKG_DIR)
     binary = NODE_PKG_DIR / "dist" / f"opcua-mcp-server-node-{PLATFORM}{EXE_SUFFIX}"
     assert binary.is_file(), f"expected {binary} after build:sea"
     return binary
@@ -134,7 +133,7 @@ def test_binary_reports_the_manifest_version(binary):
     """
     proc = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
-    expected = json.loads((NODE_PKG_DIR / "package.json").read_text())["version"]
+    expected = json.loads((NODE_PKG_DIR / "package.json").read_text(encoding="utf-8"))["version"]
     assert proc.stdout.strip() == expected
 
 

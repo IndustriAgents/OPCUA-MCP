@@ -21,7 +21,9 @@ import pytest
 from opcua_mcp_server.node_ids import canonical_node_id, namespace_uri_form, resolve_node_id
 
 FIXTURE = json.loads(
-    (Path(__file__).resolve().parents[1] / "fixtures" / "node-id-forms.json").read_text()
+    (Path(__file__).resolve().parents[1] / "fixtures" / "node-id-forms.json").read_text(
+        encoding="utf-8"
+    )
 )
 NAMESPACES = FIXTURE["namespaces"]
 

@@ -27,8 +27,8 @@ PYTHON_PYPROJECT = ROOT / "packages" / "server-python" / "pyproject.toml"
 
 def _expected_version(impl: str) -> str:
     if impl == "node":
-        return json.loads(NODE_PKG.read_text())["version"]
-    return tomllib.loads(PYTHON_PYPROJECT.read_text())["project"]["version"]
+        return json.loads(NODE_PKG.read_text(encoding="utf-8"))["version"]
+    return tomllib.loads(PYTHON_PYPROJECT.read_text(encoding="utf-8"))["project"]["version"]
 
 
 @pytest.mark.parametrize("impl", ["python", "node"])

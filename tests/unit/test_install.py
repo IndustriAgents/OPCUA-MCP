@@ -151,7 +151,7 @@ def test_rejects_an_mcpservers_that_is_not_an_object():
 def test_creates_the_config_file_and_its_parent_directory(tmp_path: Path):
     target = tmp_path / "Claude" / "claude_desktop_config.json"  # directory absent
     assert run_install(URL, config_path=target) == 0
-    entry = json.loads(target.read_text())["mcpServers"][SERVER_KEY]
+    entry = json.loads(target.read_text(encoding="utf-8"))["mcpServers"][SERVER_KEY]
     assert entry["env"] == {"OPCUA_SERVER_URL": URL}
 
 
@@ -169,9 +169,9 @@ def test_backs_up_an_existing_config_before_replacing_an_entry(tmp_path, config_
 
     backups = [p for p in tmp_path.iterdir() if ".bak-" in p.name]
     assert len(backups) == 1, "expected exactly one backup"
-    assert json.loads(backups[0].read_text()) == before
+    assert json.loads(backups[0].read_text(encoding="utf-8")) == before
 
-    after = json.loads(config_path.read_text())
+    after = json.loads(config_path.read_text(encoding="utf-8"))
     assert after["mcpServers"][SERVER_KEY]["command"] != "old"
     assert after["mcpServers"]["other"] == {"command": "x"}
 
@@ -181,7 +181,7 @@ def test_an_existing_entry_without_force_fails_without_touching_the_file(config_
     config_path.write_text(before)
 
     assert run_install(URL, config_path=config_path) == 1
-    assert config_path.read_text() == before
+    assert config_path.read_text(encoding="utf-8") == before
     assert "already configured" in capsys.readouterr().err
 
 
@@ -191,14 +191,14 @@ def test_a_corrupt_config_is_an_error_not_something_to_overwrite(config_path, ca
     config_path.write_text("{ not json")
 
     assert run_install(URL, config_path=config_path) == 1
-    assert config_path.read_text() == "{ not json"
+    assert config_path.read_text(encoding="utf-8") == "{ not json"
     assert "not valid JSON" in capsys.readouterr().err
 
 
 def test_an_empty_config_file_is_treated_as_an_empty_config(config_path):
     config_path.write_text("")
     assert run_install(URL, config_path=config_path) == 0
-    assert json.loads(config_path.read_text())["mcpServers"][SERVER_KEY]
+    assert json.loads(config_path.read_text(encoding="utf-8"))["mcpServers"][SERVER_KEY]
 
 
 def test_every_advertised_client_is_a_string():

@@ -16,7 +16,9 @@ from conftest import ROOT
 from opcua_mcp_server.contract import CONTRACT
 from opcua_mcp_server.validation import SUPPORTED_KEYWORDS, validate_arguments
 
-CASES = json.loads((ROOT / "tests" / "fixtures" / "argument-validation.json").read_text())["cases"]
+CASES = json.loads(
+    (ROOT / "tests" / "fixtures" / "argument-validation.json").read_text(encoding="utf-8")
+)["cases"]
 SPECS = {tool["name"]: tool for tool in CONTRACT["tools"]}
 
 

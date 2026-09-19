@@ -253,11 +253,12 @@ def test_the_history_family_shares_one_result_shape():
 def test_every_tool_declares_a_result_shape():
     """The systemic fix: the contract pins behaviour, not only interface.
 
-    Ten of the seventeen tools used to declare `resultShape: null`, and for those
-    the output format, error wording and defaults were two hand-written copies
-    that no test compared. The parity suite could prove the two servers
-    *advertise* the same thing; it could not prove they *do* the same thing — and
-    four confirmed divergences lived in exactly that gap.
+    Most tools used to declare `resultShape: null` — ten of the seventeen there
+    were before 0.4.0 merged several — and for those the output format, error
+    wording and defaults were two hand-written copies that no test compared. The
+    parity suite could prove the two servers *advertise* the same thing; it could
+    not prove they *do* the same thing — and four confirmed divergences lived in
+    exactly that gap.
 
     With a shape on every tool, `tests/e2e/test_contract_parity.py` checks every
     tool's actual output against the contract on both runtimes.
@@ -533,3 +534,39 @@ def test_no_test_reads_a_file_at_the_system_locale():
         f"these read a file at the system locale and will fail on Windows; "
         f'pass encoding="utf-8": {offenders}'
     )
+
+
+# --- the contract's own header ---------------------------------------------------
+#
+# A contributor's first read of the single source of truth is its header, and it
+# had drifted three ways at once (#115): it named FastMCP, which the SDK renamed
+# in 2.x; it said Python advertised signature-derived schemas, which #81 changed;
+# and it pointed at a test path that had moved. None of that could be caught,
+# because prose is not executable — so the checkable parts of it are checked here.
+
+
+HEADER = CONTRACT["$comment"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted({candidate for candidate in re.findall(r"tests/[\w/]+\.py", HEADER)}),
+)
+def test_a_path_the_header_names_exists(path):
+    """It pointed at `tests/test_contract_parity.py` long after the file moved."""
+    assert (ROOT / path).is_file(), f"contract header names {path}, which does not exist"
+
+
+def test_the_header_names_the_runtime_the_python_server_actually_uses():
+    """It said FastMCP for two minor versions after the SDK renamed it."""
+    server = (
+        ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "server.py"
+    ).read_text(encoding="utf-8")
+    assert "from mcp.server.mcpserver import" in server, "the Python server changed runtime"
+    assert "MCPServer" in HEADER
+    assert "FastMCP" not in HEADER or "not FastMCP" in HEADER
+
+
+def test_the_header_does_not_still_claim_signature_derived_schemas():
+    """#81 made both servers advertise the contract's own schema."""
+    assert "signature-derived input schemas are checked" not in HEADER

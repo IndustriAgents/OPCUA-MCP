@@ -494,6 +494,47 @@
     "reconnectOnly": "Rebuild the connection and report the original failure. Honest for the monitor tools: a subscription lives on the session, so it died with it and the failure is complete rather than uncertain.",
     "uncertainOutcome": "Rebuild the connection and fail with errors.uncertainOutcome, which says the request may or may not have reached the plant and names what it was aimed at. For every control tool: re-sending would be a second physical actuation on a guess, and reporting a plain failure would claim knowledge this server does not have."
   },
+  "deadSession": {
+    "$comment": "What tells a failure of the *connection* from a failure of the *request*. It decides whether rebuilding the session and trying again is meaningful at all: a BadNodeIdUnknown would fail identically on a fresh session, so retrying it would only hide the real answer. It was 23 hand-transcribed strings matched against the error's rendered text, and the test guarding them parametrised over the same constant — so it passed by construction and could not detect the failure it existed to catch, which is a client library rewording a message and silently disabling reconnection. The three groups below are three different kinds of evidence, and only one of them is prose.",
+    "statusCodeNames": {
+      "$comment": "OPC UA status codes, by the names the specification gives them. Both client libraries publish these in their own enums (python-opcua's ua.StatusCodes, node-opcua's StatusCodes), so each runtime resolves this list against its library rather than carrying numbers — and a name that ceases to exist there fails tests/unit/test_reconnect.py instead of quietly never matching again. The numbers are fixed by the spec, which is what makes the two runtimes provably agree.",
+      "names": [
+        "BadSessionIdInvalid",
+        "BadSessionClosed",
+        "BadSessionNotActivated",
+        "BadSecureChannelClosed",
+        "BadSecureChannelIdInvalid",
+        "BadServerNotConnected",
+        "BadNotConnected",
+        "BadConnectionClosed",
+        "BadConnectionRejected",
+        "BadDisconnect",
+        "BadNoCommunication",
+        "BadCommunicationError",
+        "BadServerHalted",
+        "BadTcpInternalError"
+      ]
+    },
+    "socketErrors": {
+      "$comment": "Failures below OPC UA, which carry no status code because the socket never got far enough to have one. These are operating-system error codes, not library prose: their spelling is fixed by errno and by Node's `os` constants, so matching them in text is as stable as matching a status code and there is nothing better to match.",
+      "codes": [
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "EPIPE",
+        "ETIMEDOUT",
+        "EHOSTUNREACH",
+        "ENETUNREACH"
+      ]
+    },
+    "phrases": {
+      "$comment": "The remainder, matched in the error's text, and the only fragile part of this. The first is this project's own wording (`requireSession` / `_open_with_backoff` raise it) and so cannot drift under us. The other two are node-opcua prose for a socket that went away without an errno reaching us, and they are exactly what a library release may reword — which is why the e2e test that kills the mock mid-call matters more than any of this list: it is the one check that fails when reconnection stops working for real.",
+      "texts": [
+        "No OPC UA session available",
+        "socket has been disconnected",
+        "The connection has been rejected"
+      ]
+    }
+  },
   "analog": {
     "$comment": "Where a node says what its number means. OPC UA Part 8 §5.3 defines AnalogItemType and introduces EngineeringUnits by citing the Mars Climate Orbiter; these three properties are how a server publishes the unit and the two ranges. Both runtimes resolve them with one TranslateBrowsePathsToNodeIds for the whole batch and one Read of whatever resolved, in chunks of `maxPropertiesPerRequest` (a 500-node read is 1500 browse paths, and MaxNodesPerTranslateBrowsePathsToNodeIds is an operational limit servers publish and enforce, so one request that large is one a conformant server may refuse), then cache the answer for the life of the session — a node's unit does not change while a session lasts, and re-reading it per call would put two round trips on every read. The cache is dropped when the session is replaced, because a restarted server may be a different server. `enforceEuRangeOnWrite` is the safety half: a value outside the range the plant itself published is refused before anything is sent, which is a bound the equipment declares rather than one a human retyped into a policy file. OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true turns it off for deployments that have to write outside normal operation on purpose.",
     "engineeringUnitsBrowseName": "0:EngineeringUnits",
@@ -519,6 +560,9 @@
     "emptyArray": "{tool} requires a non-empty {argument} array",
     "missingArgument": "{tool} requires {argument}",
     "wrongType": "{tool} argument {argument} must be {expected}",
+    "unknownArgument": "{tool} has no argument {argument}. It accepts: {allowed}.",
+    "notAllowedValue": "{tool} argument {argument} must be one of {allowed}, got {value}",
+    "belowMinimum": "{tool} argument {argument} must be at least {minimum}, got {value}",
     "unknownTool": "Unknown tool: {tool}",
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
     "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
@@ -588,7 +632,8 @@
             "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
           }
         },
-        "required": ["node_ids"]
+        "required": ["node_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -612,10 +657,21 @@
           },
           "depth": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many levels below the starting node to walk. 1 (the default) lists its immediate children; 0 returns only the starting node itself, which is how to resolve a `browse_path` to a node ID. Clamped to 64."
           },
           "node_class": {
             "type": "string",
+            "enum": [
+              "Object",
+              "Variable",
+              "Method",
+              "ObjectType",
+              "VariableType",
+              "ReferenceType",
+              "DataType",
+              "View"
+            ],
             "description": "Keep only nodes of this OPC UA NodeClass: 'Variable' for readable tags, 'Object' for structure, 'Method' for callable operations. Every class is returned when unset. Filtering does not prune the walk — an Object is still descended into when `depth` allows."
           },
           "name_filter": {
@@ -628,10 +684,12 @@
           },
           "max_nodes": {
             "type": "integer",
+            "minimum": 0,
             "description": "Stop after inspecting this many nodes (default 500, clamped to 5000). A traversal that stops early sets 'truncated' in the result."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -659,6 +717,7 @@
           },
           "num_values": {
             "type": "integer",
+            "minimum": 0,
             "description": "Maximum number of raw readings to return, capped at 5000. 0 (the default) means as many as that cap allows, not every reading in the range — a raw read of a year of fast data is a request that never returns. When the cap is reached the result says so, and the way to see the whole range is `aggregate_function` rather than a bigger number. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
           },
           "aggregate_function": {
@@ -667,10 +726,12 @@
           },
           "processing_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "Width in milliseconds of each interval the aggregate is computed over. 0 (the default) makes the whole range a single interval, giving one result. Only meaningful with `aggregate_function`."
           }
         },
-        "required": ["node_id"]
+        "required": ["node_id"],
+        "additionalProperties": false
       }
     },
     {
@@ -681,7 +742,12 @@
       "capabilities": [],
       "resultShape": "serverStatus",
       "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server.",
-      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "list_subscriptions",
@@ -691,7 +757,12 @@
       "capabilities": [],
       "resultShape": "subscriptionRecords",
       "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. This is how to collect what subscribe_opcua_nodes has been watching; the same document is also readable as the 'opcua://subscriptions' resource.",
-      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "list_active_alarms",
@@ -710,10 +781,12 @@
           },
           "timeout_seconds": {
             "type": "number",
+            "minimum": 0,
             "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -748,14 +821,33 @@
                 },
                 "data_type": {
                   "type": "string",
+                  "enum": [
+                    "Boolean",
+                    "SByte",
+                    "Byte",
+                    "Int16",
+                    "UInt16",
+                    "Int32",
+                    "UInt32",
+                    "Int64",
+                    "UInt64",
+                    "Float",
+                    "Double",
+                    "String",
+                    "DateTime",
+                    "Guid",
+                    "ByteString"
+                  ],
                   "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
                 }
               },
-              "required": ["node_id", "value"]
+              "required": ["node_id", "value"],
+              "additionalProperties": false
             }
           }
         },
-        "required": ["nodes"]
+        "required": ["nodes"],
+        "additionalProperties": false
       }
     },
     {
@@ -787,7 +879,8 @@
             "items": {}
           }
         },
-        "required": ["object_node_id", "method_node_id"]
+        "required": ["object_node_id", "method_node_id"],
+        "additionalProperties": false
       }
     },
     {
@@ -809,18 +902,22 @@
           },
           "publishing_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "How often (ms) the OPC UA server publishes queued changes. Default 1000. Clamped to at least 50."
           },
           "sampling_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "How often (ms) the OPC UA server samples each node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
           },
           "buffer_size": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many of the most recent changes to retain per subscription; older ones are discarded. Default 20, clamped to 1..1000."
           }
         },
-        "required": ["node_ids"]
+        "required": ["node_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -841,7 +938,8 @@
             "description": "The subscription IDs returned by subscribe_opcua_nodes, as listed by list_subscriptions. Example: ['sub-1']."
           }
         },
-        "required": ["subscription_ids"]
+        "required": ["subscription_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -861,14 +959,17 @@
           },
           "severity_min": {
             "type": "integer",
+            "minimum": 0,
             "description": "Buffer only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event."
           },
           "buffer_size": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many events to hold before the oldest are dropped (default 100)."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -888,10 +989,12 @@
           },
           "limit": {
             "type": "integer",
+            "minimum": 0,
             "description": "Maximum number of events to return (default 50)."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -923,7 +1026,8 @@
             "description": "NodeId of the condition instance to acknowledge. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
           }
         },
-        "required": ["event_id"]
+        "required": ["event_id"],
+        "additionalProperties": false
       }
     }
   ]

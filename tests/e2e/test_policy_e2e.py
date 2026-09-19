@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from contextlib import asynccontextmanager
 
@@ -327,4 +328,146 @@ async def test_a_refusal_and_its_outcome_share_one_id(impl, opcua_server):
     assert refusal.get("call_id"), f"{impl}: a denial with no call_id: {refusal}"
     assert not [record for record in records if record["call_id"] == refusal["call_id"]][1:], (
         f"{impl}: a denied call must write exactly one line: {records}"
+    )
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_the_audit_trail_says_which_plant_and_on_whose_behalf(impl, opcua_server):
+    """A record a reviewer can still interpret six months later (issue #113).
+
+    "A write to ns=2;i=5 was allowed" is not interpretable on its own: a node id
+    is not stable across a server restart — that is the whole reason the `nsu=`
+    allowlist form exists — and the record said nothing about where it went, over
+    which session, or on whose behalf.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    params = operator_params(impl, opcua_server)
+    params.env["OPCUA_OPERATOR_ID"] = "line-a-hmi"
+    async with connect_capturing_stderr(params) as (session, errlog):
+        result = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "27.5"}]}
+        )
+        assert not result.is_error, text_of(result)
+        records = audit_records(errlog)
+
+    assert records, f"{impl}: nothing was audited at all"
+    for record in records:
+        assert record["endpoint"] == opcua_server, f"{impl}: {record}"
+        assert record["operator"] == "line-a-hmi", f"{impl}: {record}"
+        assert record["session"], f"{impl}: no session on {record}"
+    # One call, one session: both lines rode the same one, which is what makes
+    # "were these two writes either side of an outage?" answerable.
+    assert len({record["session"] for record in records}) == 1
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_an_unset_operator_is_recorded_as_unknown_rather_than_invented(impl, opcua_server):
+    """This server has no notion of who is calling, and says so.
+
+    A name nothing verified would be worse than none: it would make a record look
+    attributable when it is not.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    async with connect_capturing_stderr(operator_params(impl, opcua_server)) as (session, errlog):
+        await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "28.5"}]}
+        )
+        records = audit_records(errlog)
+
+    assert records, f"{impl}: nothing was audited at all"
+    for record in records:
+        assert record["operator"] is None, f"{impl}: {record}"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_the_audit_trail_can_be_given_somewhere_durable_to_go(impl, opcua_server):
+    """stderr is the MCP client's rotating log, not a compliance artifact.
+
+    The file is the seam a collector reads. What it must contain is *exactly*
+    what stderr contained — a durable copy that differed from the live stream
+    would be worse than no copy.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "audit.jsonl")
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_AUDIT_FILE"] = path
+        async with connect_capturing_stderr(params) as (session, errlog):
+            allowed = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "26.5"}]}
+            )
+            assert not allowed.is_error, text_of(allowed)
+            denied = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=12", "value": "true"}]}
+            )
+            assert denied.is_error, impl
+            from_stderr = audit_records(errlog)
+
+        with open(path, encoding="utf-8") as handle:
+            from_file = [json.loads(line) for line in handle if line.strip()]
+
+    assert from_file == from_stderr, f"{impl}: the durable copy is not the live stream"
+    assert {record["decision"] for record in from_file} == {"allowed", "completed", "denied"}
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_an_audit_file_that_cannot_be_opened_stops_the_server(impl, opcua_server):
+    """Not a silent fall back to stderr.
+
+    An operator who set this expects a durable record; starting anyway would
+    leave them believing they had one, and they would find out from the absence
+    of the line they went looking for.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    params = operator_params(impl, opcua_server)
+    params.env["OPCUA_AUDIT_FILE"] = os.path.join(os.sep, "no", "such", "place", "audit.jsonl")
+
+    result = subprocess.run(
+        [params.command, *params.args],
+        env=params.env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+    )
+
+    assert result.returncode != 0, f"{impl}: started anyway:\n{result.stderr}"
+    assert "OPCUA_AUDIT_FILE" in result.stderr, f"{impl}: {result.stderr}"
+
+
+async def test_both_runtimes_write_the_same_record_shape(opcua_server):
+    """One call, both servers, the same keys in the same order.
+
+    Every other audit test here is parametrized over the runtimes and asserts the
+    same things of each, which proves both satisfy the assertions and not that
+    they agree — a field one server carried and the other did not would pass every
+    one of them. This is the check that a log collector can read both.
+
+    Order as well as membership, because the record is read by eye as often as by
+    a parser and two servers emitting the same fields in different orders would
+    make one call's two lines look like two different kinds of event.
+    """
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+
+    shapes = {}
+    for impl in ("python", "node"):
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_OPERATOR_ID"] = "line-a-hmi"
+        async with connect_capturing_stderr(params) as (session, errlog):
+            result = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "30.5"}]}
+            )
+            assert not result.is_error, f"{impl}: {text_of(result)}"
+            records = audit_records(errlog)
+        assert records, f"{impl}: nothing was audited at all"
+        shapes[impl] = [list(record) for record in records]
+
+    assert shapes["python"] == shapes["node"], (
+        f"the two runtimes write different audit records:\n"
+        f"  python: {shapes['python']}\n  node:   {shapes['node']}"
     )

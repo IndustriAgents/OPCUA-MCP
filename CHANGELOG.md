@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`OPCUA_AUDIT_FILE`: somewhere durable for the control audit trail to go**
+  (#113). It only ever went to stderr, which for a stdio subprocess launched by
+  an MCP client is that client's rotating log — not a compliance artifact, not
+  integrity-protected, and not shippable by policy. The file is append-only, one
+  JSON object per line, written synchronously per record; a restart appends and
+  never truncates; a file that cannot be opened stops the server rather than
+  falling back and leaving an operator believing they had a durable record.
+  stderr is still written either way. Rotation, syslog and the Windows Event Log
+  are deliberately out: a file a collector tails is the seam.
+- **Audit records now say which plant, which session, and on whose behalf**
+  (#113). The record named the call, the profile, the tool, the decision and the
+  targets — and nothing else, so "a write to `ns=2;i=5` was allowed" was not
+  interpretable six months later, given that `ns=2;i=5` names a different
+  physical node after a server reloads its namespaces in a different order. Every
+  record now carries `endpoint`, `session` and `operator`
+  (from `OPCUA_OPERATOR_ID`, a deployment label rather than an identity: this
+  server has no notion of who is calling, and a name nothing verified would be
+  worse than none).
 - **Every reading now says what its number means** (#110). `AnalogItemType`
   publishes `EngineeringUnits`, `EURange` and `InstrumentRange` — OPC UA Part 8
   §5.3 introduces the first by citing the Mars Climate Orbiter — and nothing here
@@ -26,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation on purpose.
 
 ### Security
+- **A refusal and a plant rejection read the same** — and one of them no longer
+  does. A rebuild that failed *during* recovery reported whatever the client
+  library said (`[Errno 61] Connection refused`) while the same outage a call
+  earlier had been described as "Not connected to the OPC UA server at …: … Call
+  get_server_status for details". One server, one event, two stories depending on
+  where in the request it happened to notice. Found by the end-to-end test added
+  for #112.
 - **The policy authorised nodes and never values** (#109). `writable_nodes` asked
   one question: is this node on the list? An allowlisted setpoint then accepted
   any number the variant codec would encode, so a model that correctly identified
@@ -65,6 +90,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached the plant twice is two records rather than one.
 
 ### Fixed
+- **A whole outage's worth of callers each ran their own backoff** (#111). The
+  Python connection held its lock across the entire retry loop, sleeps included,
+  so every concurrent tool call waited out the full budget (7s by default, 32s
+  with `OPCUA_RECONNECT_MAX_RETRY=-1`) before it was even told the server was
+  down. Serialising the callers was right; making them sit through the sleep was
+  not. `reconnect` now claims the attempt under the lock and does the teardown,
+  the backoff and the rebind without it, and a caller that arrives mid-rebuild
+  takes that attempt's answer rather than queueing another — the last of N
+  callers would otherwise wait N budgets to be told what the first already knew.
+- **One outage rebuilt the connection once per caller** (both runtimes). Every
+  in-flight call fails on the same dead session and every one of them asks for a
+  rebuild; the ones arriving after the first finished started another, tearing
+  down a session that was working and re-attaching every subscription on it for
+  nothing. A caller now names the session its operation died on, and one that has
+  already been replaced needs no second rebuild.
+- **Dead-session classification was 23 hand-transcribed strings, guarded by a
+  test that could not fail** (#112). The test parametrised over the same constant
+  it was checking, so it passed by construction — and the failure it existed to
+  catch is a client library rewording a message and silently disabling
+  reconnection, leaving a server dead until someone restarts it. The contract now
+  separates the three kinds of evidence: 14 OPC UA status codes *by name*, which
+  each runtime resolves against its own library's enum (so a name that stops
+  existing fails a test, and the numbers come from the spec, so the two runtimes
+  provably agree); 6 errno codes, fixed by the operating system; and 3 phrases,
+  the fragile part, kept small. Where an error carries a status code it is matched
+  on the number. And the check that actually fails when reconnection stops
+  working is new: an end-to-end test that takes the plant away while the session
+  still looks alive, so the failure arrives from inside a request.
+- **Argument validation accepted unknown properties** (#114). No input schema
+  forbade extras, so `{"node_clas": "Variable"}` was accepted and browsed with the
+  default node class — a misspelled *optional* argument changed behaviour instead
+  of producing a refusal the model could correct from. The shared validator gained
+  `additionalProperties`, `enum` (`node_class` and `data_type` are fixed sets; an
+  unknown node class used to match nothing and come back as an empty list,
+  indistinguishable from a subtree that really is empty) and `minimum` (every
+  numeric argument is floored at zero; a negative was silently clamped). Ceilings
+  stay clamps: they are documented caps on how much work one call may ask for.
 - **Two concurrent reconnects could tear down each other's fresh session**
   (#107). The Node runtime's `connect()` was single-flight but `reconnect()` was
   not, so two calls recovering from the same outage could interleave as: A tears
@@ -82,6 +144,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network I/O.
 
 ### Documentation
+- **The contract header's factual claims are now checked** rather than only
+  corrected. #122 fixed the three that had drifted — FastMCP (renamed in SDK 2.x),
+  signature-derived schemas (#81 changed that), and a test path that had moved —
+  and `tests/unit/test_contract.py` now asserts the checkable parts, so prose that
+  names a file has to name one that exists and prose that names a runtime has to
+  name the one the server imports.
+- **`docs/architecture.md` now says *why* there are two runtimes.** #122 added the
+  missing clause to "users pick whichever runtime their stack already has"; this
+  says what that sentence was standing in for, because it is what decides where
+  effort goes. Python is where the OPC UA and industrial-data ecosystem lives, and
+  `python-opcua` being unmaintained makes a second independent implementation
+  insurance rather than redundancy — which argues for pushing decisions into the
+  contract so each runtime shrinks toward a thin adapter, an argument "pick your
+  stack" does not make.
 - **The one-endpoint-per-process ceiling is now stated where someone meets it**
   (#88). `OPCUA_SERVER_URL` is read once, every tool targets it, stdio is the only
   transport, and each MCP client opens its own OPC UA session — which on equipment

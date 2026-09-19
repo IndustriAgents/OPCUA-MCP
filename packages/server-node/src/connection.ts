@@ -28,6 +28,7 @@
 // the client package keeps the compiler honest about what this server may use.
 import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua-client";
 
+import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
 
 import { SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
@@ -62,46 +63,80 @@ export type ConnectionState = "disconnected" | "connecting" | "connected" | "rec
 /** How often `awaitReconnection` looks to see whether the repair has finished. */
 const RECONNECT_POLL_MS = 100;
 
-/** OPC UA status codes and socket errors that mean "the session is gone".
+const DEAD_SESSION = CONTRACT.deadSession;
+
+/** The OPC UA status codes that mean "the session is gone", by name.
  *
- * Matched in the *message*, because by the time an error reaches a tool it has
- * usually been rewrapped as prose ("Failed to read node ns=2;i=3: ..."). Every
- * entry names a failure of the connection rather than of the request, which is
- * what makes retrying on a fresh session meaningful: a `BadNodeIdUnknown` would
- * fail exactly the same way the second time.
+ * The contract names them and node-opcua supplies the numbers, so this list is
+ * not a transcription of anything. A name the library stops publishing throws
+ * here, at import, rather than quietly never matching again — which was the real
+ * risk in the hand-written list this replaces, and the one its own test could not
+ * see because it parametrised over the same constant.
  */
-const DEAD_SESSION_MARKERS = [
-  "BadSessionIdInvalid",
-  "BadSessionClosed",
-  "BadSessionNotActivated",
-  "BadSecureChannelClosed",
-  "BadSecureChannelIdInvalid",
-  "BadServerNotConnected",
-  "BadNotConnected",
-  "BadConnectionClosed",
-  "BadConnectionRejected",
-  "BadDisconnect",
-  "BadNoCommunication",
-  "BadCommunicationError",
-  "BadServerHalted",
-  "BadTcpInternalError",
-  "No OPC UA session available",
-  "socket has been disconnected",
-  "The connection has been rejected",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EPIPE",
-  "ETIMEDOUT",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
+export const DEAD_SESSION_STATUS_CODES: Record<string, number> = Object.fromEntries(
+  DEAD_SESSION.statusCodeNames.names.map((name) => {
+    const code = (StatusCodes as unknown as Record<string, { value: number } | undefined>)[name];
+    if (!code) {
+      throw new Error(
+        `contract deadSession.statusCodeNames names ${name}, which node-opcua does not publish`
+      );
+    }
+    return [name, code.value];
+  })
+);
+
+/** Failures below OPC UA, which have no status code to carry. Fixed by errno, so
+ *  matching them in text is as stable as matching a code. */
+export const SOCKET_ERROR_CODES: readonly string[] = DEAD_SESSION.socketErrors.codes;
+
+/** The remainder, matched in the error's rendered text. The only fragile part of
+ *  this, and deliberately the smallest: see the contract's own note. */
+export const DEAD_SESSION_PHRASES: readonly string[] = DEAD_SESSION.phrases.texts;
+
+/** Everything matched in text, in one list, because two of the three groups are
+ *  and a caller asking "would this be retried" should not have to know which. */
+export const DEAD_SESSION_MARKERS: readonly string[] = [
+  ...Object.keys(DEAD_SESSION_STATUS_CODES),
+  ...DEAD_SESSION_PHRASES,
+  ...SOCKET_ERROR_CODES,
 ];
 
+const DEAD_SESSION_CODES = new Set(Object.values(DEAD_SESSION_STATUS_CODES));
+
+/** The status code an error carries, if it carries one.
+ *
+ * node-opcua puts it in different places depending on how the failure arrived:
+ * on the error itself for a rejected service call, and on the response's service
+ * result for a fault. Neither is guaranteed, which is why the text check below
+ * still exists.
+ */
+function statusCodeOf(error: unknown): number | null {
+  const candidate = error as {
+    statusCode?: { value?: unknown };
+    response?: { responseHeader?: { serviceResult?: { value?: unknown } } };
+  } | null;
+  const value =
+    candidate?.statusCode?.value ?? candidate?.response?.responseHeader?.serviceResult?.value;
+  return typeof value === "number" ? value : null;
+}
+
 /** True when `error` says the connection died rather than the request being wrong.
+ *
+ * Two kinds of evidence, strongest first. The **status code**, where the error
+ * carries one — a number cannot be reworded by a release note, and this is the
+ * only check here that is not string matching. Then the **text**, for everything
+ * that arrives as prose, which by the time an error reaches a tool is most of it.
+ *
+ * Every entry names a failure of the connection rather than of the request,
+ * which is what makes retrying on a fresh session meaningful: a
+ * `BadNodeIdUnknown` would fail exactly the same way the second time.
  *
  * The Python server's `is_connection_error` answers the same question about the
  * same failures, so a retry that happens on one runtime happens on the other.
  */
 export function isConnectionError(error: unknown): boolean {
+  const code = statusCodeOf(error);
+  if (code !== null && DEAD_SESSION_CODES.has(code)) return true;
   const message = error instanceof Error ? error.message : String(error ?? "");
   return DEAD_SESSION_MARKERS.some((marker) => message.includes(marker));
 }
@@ -123,6 +158,8 @@ export class OpcuaConnection {
   private reconnectPromise: Promise<void> | null = null;
   private state: ConnectionState = "disconnected";
   private lastError: string | null = null;
+  /** An id for the session currently held; see `sessionId`. */
+  private session_: string | null = null;
   session: ClientSession | null = null;
 
   /** Called with a *new* session after a dead one was replaced.
@@ -140,6 +177,23 @@ export class OpcuaConnection {
   /** Why the connection is not up, in the client library's words. */
   get lastErrorMessage(): string | null {
     return this.lastError;
+  }
+
+  /** An id for the session this server holds, or null while it holds none.
+   *
+   * Not the OPC UA server's own SessionId. node-opcua exposes one and
+   * python-opcua discards it, so a field built from it could not mean the same
+   * thing on both runtimes — and the audit trail needs a field that does. This
+   * is minted here when a session is established, which is what lets a record
+   * answer "which of this process's sessions did the call ride on", and so lets
+   * two writes either side of an outage be told apart.
+   *
+   * It is also what stops a burst of concurrent failures each rebuilding the
+   * connection in turn: a caller passes the session its operation died on to
+   * `reconnect`, and one that has already been replaced needs no second rebuild.
+   */
+  get sessionId(): string | null {
+    return this.session_;
   }
 
   /** The endpoint this server is configured to talk to. */
@@ -196,6 +250,7 @@ export class OpcuaConnection {
       const session = await client.createSession(userIdentity(security));
       this.opcuaClient = client;
       this.session = session;
+      this.session_ = randomBytes(8).toString("hex");
       this.state = "connected";
       this.lastError = null;
       console.error("OPC UA session created");
@@ -281,6 +336,7 @@ export class OpcuaConnection {
     const session = this.session;
     const client = this.opcuaClient;
     this.session = null;
+    this.session_ = null;
     this.opcuaClient = null;
     this.state = "disconnected";
 
@@ -342,8 +398,16 @@ export class OpcuaConnection {
    * closed (issue #107). The whole teardown → open → rebind → re-establish
    * sequence is therefore claimed once, and concurrent callers await the same
    * rebuild rather than starting a second.
+   *
+   * `stale` is the `sessionId` the caller's operation died on. If the connection
+   * has already moved past it, the caller's need is met and this returns without
+   * rebuilding: doing it again would tear down a session that is working and
+   * re-attach every subscription on it for nothing. Without this, a burst of
+   * concurrent failures — which is what an outage looks like from a server
+   * serving several calls — rebuilt once per caller in turn (issue #111).
    */
-  async reconnect(): Promise<void> {
+  async reconnect(stale?: string | null): Promise<void> {
+    if (stale != null && this.connected && this.session_ !== stale) return;
     if (!this.reconnectPromise) {
       this.reconnectPromise = this.rebuild().finally(() => {
         this.reconnectPromise = null;
@@ -406,6 +470,7 @@ export class OpcuaConnection {
    */
   async withRetry<T>(operation: () => Promise<T>, mayRepeat = true): Promise<T> {
     await this.ensureConnection();
+    const session = this.sessionId;
     try {
       return await operation();
     } catch (error) {
@@ -413,7 +478,7 @@ export class OpcuaConnection {
       console.error(
         `OPC UA call failed on a dead session; reconnecting${mayRepeat ? " and retrying once" : ""}`
       );
-      await this.reconnect();
+      await this.reconnect(session);
       if (!mayRepeat) throw error;
       return await operation();
     }

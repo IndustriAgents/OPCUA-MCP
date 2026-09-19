@@ -214,7 +214,7 @@ def tool_calls(method_node_id: str) -> list[tuple[str, dict]]:
     and subscribing to events before reading them. Every tool in the contract
     must appear here — `test_every_tool_is_exercised` fails otherwise — because a
     tool with a declared shape that nothing calls is a shape nothing checks,
-    which is the state all seventeen tools were in before ten of them gained one.
+    which is the state every tool was in before 0.4.0.
     """
     return [
         ("get_server_status", {}),
@@ -262,8 +262,9 @@ async def _stop_production_node_id(session) -> str:
 async def test_every_tool_output_matches_its_declared_shape(impl_params):
     """Every tool's *actual* output, on both runtimes, against the contract.
 
-    This is the systemic fix. Ten of the seventeen tools used to declare
-    `resultShape: null`, and for those the output format, error wording and
+    This is the systemic fix. Most tools used to declare `resultShape: null` —
+    ten of the seventeen there were before 0.4.0 merged several — and for those
+    the output format, error wording and
     defaults were two hand-written copies that no test compared — the parity
     suite could prove the two servers *advertise* the same thing, never that they
     *do* the same thing. Four confirmed divergences lived in exactly that gap

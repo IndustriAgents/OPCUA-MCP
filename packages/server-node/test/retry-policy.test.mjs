@@ -440,3 +440,63 @@ describe("OpcuaConnection.reconnect", () => {
     assert.equal(rebuilds, 2);
   });
 });
+
+describe("one outage, one rebuild", () => {
+  // What an outage actually looks like from a server serving several calls:
+  // every in-flight call fails on the same dead session and every one of them
+  // asks for a rebuild. The ones that arrive after the first rebuild finished
+  // would otherwise start another — tearing down a session that is working and
+  // re-attaching every subscription on it for nothing, once per caller in turn
+  // (issue #111).
+  it("does not rebuild again for a caller whose session has already been replaced", async () => {
+    const connection = new OpcuaConnection();
+    let rebuilds = 0;
+    connection.rebuild = async () => {
+      rebuilds += 1;
+      connection.session = { close: async () => {} };
+      connection.session_ = `session-${rebuilds}`;
+      connection.opcuaClient = { disconnect: async () => {} };
+      connection.state = "connected";
+    };
+
+    await connection.reconnect();
+    const died = connection.sessionId;
+
+    // Eight callers recovering from the same outage, one after another.
+    for (let caller = 0; caller < 8; caller += 1) {
+      await connection.reconnect(died);
+    }
+
+    assert.equal(rebuilds, 2, "rebuilt once per caller rather than once per outage");
+    assert.notEqual(connection.sessionId, died);
+  });
+
+  it("still rebuilds when the caller names no session", async () => {
+    const connection = new OpcuaConnection();
+    let rebuilds = 0;
+    connection.rebuild = async () => {
+      rebuilds += 1;
+    };
+
+    await connection.reconnect();
+    await connection.reconnect();
+    assert.equal(rebuilds, 2);
+  });
+
+  it("gives every session an id of its own, because the audit trail joins on it", async () => {
+    const connection = new OpcuaConnection();
+    let count = 0;
+    connection.rebuild = async () => {
+      count += 1;
+      connection.session_ = `session-${count}`;
+    };
+
+    assert.equal(connection.sessionId, null);
+    const seen = new Set();
+    for (let index = 0; index < 4; index += 1) {
+      await connection.reconnect();
+      seen.add(connection.sessionId);
+    }
+    assert.equal(seen.size, 4);
+  });
+});

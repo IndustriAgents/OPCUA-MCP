@@ -22,6 +22,7 @@ import { browseAllReferences } from "./browse.js";
 import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
+import { AuditSink, operatorId } from "./audit.js";
 import { ContractRefusal, message } from "./errors.js";
 import {
   MAX_NODES_PER_READ,
@@ -414,7 +415,9 @@ function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<str
  * collector ships off the machine.
  */
 function auditDecision(
+  sink: AuditSink,
   policy: ToolPolicy,
+  connection: OpcuaConnection,
   name: string,
   args: Record<string, unknown>,
   decision: "allowed" | "denied" | "failed" | "completed",
@@ -424,25 +427,33 @@ function auditDecision(
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
   if (!tool || !["control", "alarm-action"].includes(tool.accessClass)) return;
-  console.error(
-    JSON.stringify({
-      event: "opcua_mcp_policy",
-      timestamp: new Date().toISOString(),
-      // Second, so it is next to the timestamp in the line an operator reads and
-      // can be grepped for to pull one call's whole story out of a shipped log.
-      call_id: callId,
-      // Which physical attempt this line is about. One call can reach the plant
-      // twice — the session dies, the connection is rebuilt, the request is
-      // re-sent — and a trail whose purpose is "what reached the plant" has to
-      // count those separately rather than fold them into one line.
-      attempt,
-      profile: policy.config.profile,
-      tool: name,
-      decision,
-      ...auditTargets(tool, args),
-      ...(reason ? { reason } : {}),
-    })
-  );
+  sink.write({
+    event: "opcua_mcp_policy",
+    timestamp: new Date().toISOString(),
+    // Second, so it is next to the timestamp in the line an operator reads and
+    // can be grepped for to pull one call's whole story out of a shipped log.
+    call_id: callId,
+    // Which physical attempt this line is about. One call can reach the plant
+    // twice — the session dies, the connection is rebuilt, the request is
+    // re-sent — and a trail whose purpose is "what reached the plant" has to
+    // count those separately rather than fold them into one line.
+    attempt,
+    // Which plant, and which of this process's sessions. A node id is not stable
+    // across a server restart — that is the whole reason the `nsu=` allowlist
+    // form exists — so "a write to ns=2;i=5 was allowed" is only interpretable
+    // later alongside where it went and over which session.
+    endpoint: connection.endpointUrl,
+    session: connection.sessionId,
+    // On whose behalf, as the deployment chose to record it. null when
+    // OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion of
+    // who is calling, and a name nothing verified would be worse than none.
+    operator: operatorId(),
+    profile: policy.config.profile,
+    tool: name,
+    decision,
+    ...auditTargets(tool, args),
+    ...(reason ? { reason } : {}),
+  });
 }
 
 /** An id for one tool call, to tie its audit lines together.
@@ -476,7 +487,8 @@ export class OpcuaTools {
 
   constructor(
     private readonly conn: OpcuaConnection,
-    private readonly policy: ToolPolicy = toolPolicy()
+    private readonly policy: ToolPolicy = toolPolicy(),
+    private readonly audit: AuditSink = new AuditSink()
   ) {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
@@ -704,6 +716,9 @@ export class OpcuaTools {
     // been recorded as one, and the `failed` line below would otherwise repeat
     // its reason and read as though the plant had rejected the call.
     const audit = { attempt: 1, denied: false };
+    // Which session this call rides on, so recovery can tell "my session died"
+    // from "someone else already replaced it".
+    let session: string | null = null;
 
     try {
       // Shape before permission: a call that does not match the contract is not a
@@ -725,10 +740,12 @@ export class OpcuaTools {
       try {
         this.policy.authorize(name, args);
         authorized = true;
-        auditDecision(this.policy, name, args, "allowed", callId, 1);
+        auditDecision(this.audit, this.policy, this.conn, name, args, "allowed", callId, 1);
       } catch (error) {
         auditDecision(
+          this.audit,
           this.policy,
+          this.conn,
           name,
           args,
           "denied",
@@ -765,6 +782,8 @@ export class OpcuaTools {
         );
       }
 
+      session = this.conn.sessionId;
+
       if (!(await this.capabilitiesMet(spec))) {
         throw new Error(
           message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
@@ -776,20 +795,39 @@ export class OpcuaTools {
         result = await this.dispatch(name, args);
       } catch (error) {
         if (!isConnectionError(error)) throw error;
-        result = await this.recover(spec, args, callId, audit, error);
+        result = await this.recover(spec, args, callId, audit, session, error);
       }
       // The outcome, not only the decision. "Permitted" and "happened" are
       // different facts, and the gap between them is where a control call that
       // reached the plant and then failed lives — which is the one an operator
       // most needs to find afterwards.
-      auditDecision(this.policy, name, args, "completed", callId, audit.attempt);
+      auditDecision(
+        this.audit,
+        this.policy,
+        this.conn,
+        name,
+        args,
+        "completed",
+        callId,
+        audit.attempt
+      );
       return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
       if (authorized && !audit.denied) {
-        auditDecision(this.policy, name, args, "failed", callId, audit.attempt, reason);
+        auditDecision(
+          this.audit,
+          this.policy,
+          this.conn,
+          name,
+          args,
+          "failed",
+          callId,
+          audit.attempt,
+          reason
+        );
       }
       // No "Error: " prefix. `isError` already says it is one, and the Python
       // runtime returns the bare message — so prefixing here made every failure
@@ -821,6 +859,7 @@ export class OpcuaTools {
     args: Record<string, unknown>,
     callId: string,
     audit: { attempt: number; denied: boolean },
+    session: string | null,
     error: unknown
   ) {
     const policy = spec.retryPolicy;
@@ -829,7 +868,19 @@ export class OpcuaTools {
         policy === "resend" ? " and retrying once" : ""
       }`
     );
-    await this.conn.reconnect();
+    try {
+      await this.conn.reconnect(session);
+    } catch (rebuildFailed) {
+      // The same failure the pre-dispatch path reports, worded the same way.
+      // Left bare, this reached the model as whatever the client library said —
+      // the same outage the call before it had described as "Not connected to the
+      // OPC UA server at …: … Call get_server_status for details", so one server
+      // said two things about one event depending on where in the request it
+      // happened to notice.
+      throw new ContractRefusal(
+        notConnectedMessage(this.conn.endpointUrl, describeError(rebuildFailed))
+      );
+    }
 
     if (policy === "uncertainOutcome") {
       throw new Error(
@@ -857,7 +908,9 @@ export class OpcuaTools {
     } catch (denial) {
       audit.denied = true;
       auditDecision(
+        this.audit,
         this.policy,
+        this.conn,
         spec.name,
         args,
         "denied",
@@ -867,7 +920,7 @@ export class OpcuaTools {
       );
       throw denial;
     }
-    auditDecision(this.policy, spec.name, args, "allowed", callId, 2);
+    auditDecision(this.audit, this.policy, this.conn, spec.name, args, "allowed", callId, 2);
 
     return await this.dispatch(spec.name, args);
   }

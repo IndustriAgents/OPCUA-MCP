@@ -63,6 +63,13 @@ export const CONTRACT: {
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
   /** Prose for each `ToolSpec.retryPolicy` value; the tools name one of its keys. */
   retryPolicies: Record<string, string>;
+  /** What tells a failure of the connection from a failure of the request;
+   *  see connection.ts. */
+  deadSession: {
+    statusCodeNames: { names: string[] };
+    socketErrors: { codes: string[] };
+    phrases: { texts: string[] };
+  };
   /** Where a node says what its number means; see node-metadata.ts. */
   analog: {
     engineeringUnitsBrowseName: string;

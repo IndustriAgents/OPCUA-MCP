@@ -185,8 +185,8 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 
 ```json
 {"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
- "attempt":1,"profile":"operator","tool":"write_opcua_nodes","decision":"allowed",
- "node_ids":["ns=2;i=13"]}
+ "attempt":1,"endpoint":"opc.tcp://plc:4840","session":"3b91e0c4a77d2f10","operator":"line-a-hmi",
+ "profile":"operator","tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
 ```
 
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
@@ -206,6 +206,15 @@ $ grep '"call_id":"9f2c1ab4de77f031"' plant.log
 A denied call never runs, so it is one line rather than two, and it carries an id
 like everything else.
 
+`endpoint` and `session` are which plant and which of this process's sessions.
+Both matter because a node id does not: `ns=2;i=5` names a different physical node
+after a server reloads its namespaces in a different order, which is the whole
+reason the `nsu=` allowlist form exists. A record saying only that a write to
+`ns=2;i=5` was allowed is one a reviewer cannot interpret six months later.
+`session` is minted by this server rather than taken from the OPC UA server —
+python-opcua discards the server's SessionId and node-opcua exposes it, so a field
+built from it could not mean the same thing on both runtimes.
+
 `attempt` is which *physical* attempt a line is about. One call can reach the
 plant twice: the session dies, the connection is rebuilt, and a request the
 contract marks `retryPolicy: resend` is sent again — on a new session, which is
@@ -217,9 +226,29 @@ same `call_id`. No `control` or `alarm-action` call is ever re-sent (see
 what changes for control is that a call whose outcome is genuinely unknown now
 says so rather than being quietly repeated.
 
-It is **not durable**: nothing here writes a file or survives the process. For a
-retained record, collect the server's stderr — the format is stable and
+Set **`OPCUA_AUDIT_FILE`** for a copy that survives the process. For a stdio
+subprocess launched by an MCP client, stderr is that client's rotating log: not a
+compliance artifact, not integrity-protected, and not shippable by policy. The
+file is append-only, one JSON object per line, written synchronously per record —
+a process killed between performing a control call and flushing would have
+reached the plant and lost the only record of it, which is exactly what happens
+to an MCP server when its client quits. A restart appends; it never truncates.
+stderr is still written either way.
+
+A file that cannot be opened **stops the server**. Falling back to stderr would
+leave an operator believing they had a durable record, and they would find out
+from the absence of the line they went looking for.
+
+Rotation, syslog and the Windows Event Log are deliberately not here: an MCP
+server reimplementing `logrotate` would be a worse `logrotate` and a worse MCP
+server. A file a collector tails is the seam, and the format is stable and
 line-oriented for exactly that.
+
+**`OPCUA_OPERATOR_ID`** stamps a label on every record. It is a label and not an
+identity: this server has no notion of *who* is calling — one process, one
+configured endpoint, whoever holds the MCP client — and a name nothing verified
+would be worse than none, because it would make a record look attributable when
+it is not. Unset, `operator` is `null`.
 
 ## Known advisories in dependencies
 

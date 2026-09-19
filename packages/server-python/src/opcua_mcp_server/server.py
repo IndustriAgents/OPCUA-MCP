@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import secrets
 import sys
 from collections import deque
@@ -21,6 +22,7 @@ from opcua import Node, ua
 
 from . import events
 from .aggregates import validate_aggregate_function
+from .audit import AUDIT_FILE_ENV, AuditSink, describe_audit, operator_id
 from .capabilities import client_aggregate_functions, client_supports_history
 from .config import SERVER_URL, describe_reconnect, reconnect_config
 from .connection import (
@@ -142,6 +144,9 @@ class _Call:
     spec: dict[str, Any]
     call_id: str
     attempt: int = 1
+    #: The connection's session id when this call was dispatched. Lets recovery
+    #: skip a rebuild the connection has already had.
+    session: str | None = None
     #: Whether a refusal has already been recorded for this call. Keeps a denial
     #: to one line rather than two: the ``failed`` line would otherwise repeat
     #: its reason and read as though the plant had rejected the call.
@@ -165,6 +170,12 @@ def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
+#: Where the audit trail is written. stderr-only until `main` replaces it, which
+#: is the one place allowed to fail on a bad ``OPCUA_AUDIT_FILE`` — a server
+#: imported as a module (the tests do) must not need the environment to be right.
+_AUDIT = AuditSink()
+
+
 def _audit_decision(
     name: str,
     arguments: dict[str, Any],
@@ -173,7 +184,7 @@ def _audit_decision(
     call_id: str | None = None,
     attempt: int = 1,
 ) -> None:
-    """Write one line of the control audit trail to stderr.
+    """Write one line of the control audit trail.
 
     Only ``control`` and ``alarm-action`` tools: an audit trail that also
     recorded every read would bury the four lines anyone is looking for.
@@ -181,6 +192,11 @@ def _audit_decision(
     Never the *values* being written, only the targets. A setpoint is process
     data, and this stream is the one an MCP client shows the user and a log
     collector ships off the machine.
+
+    The field order is part of the record, not an accident: ``audit.ts`` builds
+    the same keys in the same order, and
+    ``tests/e2e/test_policy_e2e.py::test_both_runtimes_write_the_same_record_shape``
+    drives one call through both servers and compares them.
     """
     spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
     if spec is None or spec["accessClass"] not in {"control", "alarm-action"}:
@@ -196,6 +212,16 @@ def _audit_decision(
         # re-sent — and a trail whose purpose is "what reached the plant" has to
         # count those separately rather than fold them into one line.
         "attempt": attempt,
+        # Which plant, and which of this process's sessions. A node id is not
+        # stable across a server restart — that is the whole reason the `nsu=`
+        # allowlist form exists — so "a write to ns=2;i=5 was allowed" is only
+        # interpretable later alongside where it went and over which session.
+        "endpoint": SERVER_URL,
+        "session": _CONNECTION.session_id if _CONNECTION is not None else None,
+        # On whose behalf, as the deployment chose to record it. null when
+        # OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion
+        # of who is calling, and a name nothing verified would be worse than none.
+        "operator": operator_id(),
         "profile": tool_policy().config.profile,
         "tool": name,
         "decision": decision,
@@ -203,7 +229,7 @@ def _audit_decision(
     }
     if reason:
         record["reason"] = reason
-    print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
+    _AUDIT.write(record)
 
 
 #: What ``Tool.run`` puts in front of a ToolError raised inside a tool body.
@@ -534,6 +560,9 @@ class PolicyMCPServer(MCPServer):
             await asyncio.to_thread(connection.ensure_connected)
         except Exception as error:
             raise ToolError(not_connected_message(connection.url, describe_error(error))) from error
+        # Which session this call is about to ride on, so recovery can tell "my
+        # session died" from "someone else already replaced it".
+        call.session = connection.session_id
 
         if not _capabilities_met(call.spec):
             raise ToolError(
@@ -573,7 +602,18 @@ class PolicyMCPServer(MCPServer):
             f"OPC UA call failed on a dead session; reconnecting{suffix}",
             file=sys.stderr,
         )
-        await asyncio.to_thread(connection.reconnect)
+        try:
+            await asyncio.to_thread(connection.reconnect, call.session)
+        except Exception as rebuild_failed:
+            # The same failure the pre-dispatch path reports, worded the same way.
+            # Left bare, this reached the model as "[Errno 61] Connection refused"
+            # — the same outage the call before it had described as "Not connected
+            # to the OPC UA server at …: … Call get_server_status for details", so
+            # one server said two things about one event depending on where in the
+            # request it happened to notice.
+            raise ToolError(
+                not_connected_message(connection.url, describe_error(rebuild_failed))
+            ) from rebuild_failed
 
         if policy == "uncertainOutcome":
             raise ToolError(
@@ -1730,15 +1770,22 @@ def main() -> None:
     # Fail fast and readably on a bad security configuration: an MCP client only
     # ever shows the server's stderr, so letting it surface from a best-effort
     # capability probe (which swallows it) would leave nothing to go on.
+    global _AUDIT
     try:
         security_config()
         policy = tool_policy()
         reconnect = reconnect_config()
+        # Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
+        # cannot be given one has to be told now, not at the first control call
+        # they were relying on it to record.
+        audit = AuditSink(os.environ.get(AUDIT_FILE_ENV, "").strip() or None)
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
+    _AUDIT = audit
 
     print(f"Tool policy: {describe_policy(policy)}", file=sys.stderr)
+    print(f"Control audit: {describe_audit(audit)}", file=sys.stderr)
     print(f"Connection resilience: {describe_reconnect(reconnect)}", file=sys.stderr)
 
     mcp.run(transport="stdio")

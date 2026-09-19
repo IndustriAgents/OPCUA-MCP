@@ -242,6 +242,8 @@ Both runtimes read the same environment variables:
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node — see [Bounding the value, not only the node](#bounding-the-value-not-only-the-node) |
+| `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. A file that cannot be opened stops the server rather than falling back |
+| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
@@ -284,8 +286,10 @@ Both `operator` and `full` also require a secured OPC UA channel unless
 
 The policy is enforced again on **every call**, not only when tools are listed —
 an MCP client may hold a stale catalogue, and a hidden tool is a usability
-feature rather than a security boundary. Every control call is also recorded on
-stderr with its targets and its outcome.
+feature rather than a security boundary. Every control call is also recorded —
+with its targets, its outcome, the endpoint it went to and the session it rode
+on — to stderr and, if `OPCUA_AUDIT_FILE` is set, to an append-only file beside
+it.
 
 ### Bounding the value, not only the node
 

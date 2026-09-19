@@ -15,8 +15,11 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import tempfile
 
 import pytest
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, text_of
 
 # Retry settings for these tests: the defaults are tuned for a plant (seconds of
@@ -280,3 +283,78 @@ async def test_the_catalogue_gains_the_optional_tools_once_the_server_is_reachab
         assert "read_opcua_history" in {tool.name for tool in listed.tools}, (
             f"{impl}: the mock advertises HistoricalAccess, so the history tool must be offered"
         )
+
+
+async def test_a_call_that_dies_mid_request_is_recognised_and_recovered(
+    impl, restartable_opcua_server
+):
+    """The one test that can tell reconnection has actually stopped working.
+
+    Everything else here restarts the server *between* calls, so by the time the
+    next call arrives the client has already noticed and simply reconnects. This
+    takes the plant away while the session still looks alive, so the failure
+    arrives from inside a request, worded by the client library. That is the case
+    `is_connection_error` exists for, and the one the old parametrized marker test
+    could never produce: it asserted the classifier against its own constant, so a
+    library rewording a message would have left it green and the server dead until
+    restarted (issue #112).
+
+    The two runtimes reach it by different paths, and the assertion says so rather
+    than picking one. Python owns the whole of recovery — python-opcua has none —
+    so the failure surfaces inside the request and the dispatcher's own "failed on
+    a dead session" line is what proves the classification fired. node-opcua
+    repairs its own channel and notices the socket first, so on that runtime the
+    next call is usually refused by `ensureConnection` before it is dispatched,
+    and the evidence is the library's own. `docs/architecture.md` draws exactly
+    this distinction; a test that demanded one shape would be asserting a
+    coincidence.
+
+    What both must do is the part that matters: say the connection is gone rather
+    than return something wrong, and work again afterwards without a restart.
+    """
+    server = restartable_opcua_server
+    with tempfile.TemporaryFile("w+", errors="replace") as errlog:
+        async with (
+            stdio_client(params_for(impl, server.url), errlog=errlog) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+
+            before = await session.call_tool(
+                "read_opcua_nodes", {"node_ids": [NODE["Temperature"]]}
+            )
+            assert not before.is_error, f"{impl}: {text_of(before)}"
+
+            # The plant goes away with the session still looking alive.
+            server.stop()
+            during = await session.call_tool(
+                "read_opcua_nodes", {"node_ids": [NODE["Temperature"]]}
+            )
+            assert during.is_error, f"{impl}: a read against a dead server succeeded"
+            # And it says what is wrong. A read that came back as a puzzling tool
+            # error, or worse as a stale value, is the failure mode this whole
+            # layer exists to prevent.
+            assert "Not connected to the OPC UA server" in text_of(during), (
+                f"{impl}: the outage was not reported as one: {text_of(during)}"
+            )
+
+            server.start()
+            after = await read_until_ok(session, NODE["Temperature"])
+            assert not after.is_error, f"{impl}: never recovered: {text_of(after)}"
+            assert records_of(after)[0]["status"] == "Good", text_of(after)
+
+        errlog.seek(0)
+        log = errlog.read()
+
+    noticed = (
+        # The Python dispatcher's own classification, which is the whole of
+        # recovery on that runtime.
+        "failed on a dead session" in log
+        # node-opcua's, which gets there first on this one.
+        or "connection lost" in log
+        or "Failed to connect to OPC UA server" in log
+    )
+    assert noticed, (
+        f"{impl}: nothing in the server's log says it noticed the connection had "
+        f"gone, so whatever recovered did not do it on the outage's account:\n{log[-4000:]}"
+    )

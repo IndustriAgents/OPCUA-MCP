@@ -11,6 +11,7 @@ import {
 import { realpathSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 
+import { AUDIT_FILE_ENV, AuditSink, describeAudit } from "./audit.js";
 import { describeReconnect, reconnectConfig } from "./config.js";
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
@@ -31,9 +32,10 @@ console.log = (...args: any[]) => console.error(...args);
 class OPCUAMCPServer {
   private server: Server;
   private conn = new OpcuaConnection();
-  private tools = new OpcuaTools(this.conn);
+  private tools: OpcuaTools;
 
-  constructor() {
+  constructor(audit: AuditSink = new AuditSink()) {
+    this.tools = new OpcuaTools(this.conn, toolPolicy(), audit);
     this.server = new Server(
       {
         name: "opcua-mcp-server",
@@ -155,6 +157,7 @@ export function runMain(opts: { scriptPath: string | null }): void {
   // else came from a human at a terminal.
   const action = parseArgs(process.argv.slice(2));
   if (action.kind === "serve") {
+    let audit: AuditSink;
     // Fail fast and readably on a bad security configuration: an MCP client only
     // ever shows the server's stderr, so an unhandled parse error deep in a
     // capability probe would surface as "server exited" and nothing else.
@@ -166,14 +169,19 @@ export function runMain(opts: { scriptPath: string | null }): void {
     // the first place.
     try {
       securityConfig();
+      // Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
+      // cannot be given one has to be told now, not at the first control call
+      // they were relying on it to record.
+      audit = new AuditSink(process.env[AUDIT_FILE_ENV]?.trim() || null);
       console.error(`Tool policy: ${describePolicy(toolPolicy())}`);
+      console.error(`Control audit: ${describeAudit(audit)}`);
       console.error(`Connection resilience: ${describeReconnect(reconnectConfig())}`);
     } catch (error) {
       console.error(`Configuration error: ${(error as Error).message}`);
       process.exit(1);
     }
 
-    const server = new OPCUAMCPServer();
+    const server = new OPCUAMCPServer(audit);
     server.run().catch(console.error);
     return;
   }

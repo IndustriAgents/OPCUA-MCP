@@ -19,6 +19,31 @@ same parameters, same error wording. Users pick whichever runtime their stack
 already has, or no runtime at all via the bundle and executable routes in
 docs/install.md.
 
+**Why twice**, though — because "pick your stack" is less and less of an answer,
+as #122 noted when it added that last clause. Two of the four install routes need
+no runtime at all, the `.mcpb` (the flagship Claude Desktop path) is Node-only,
+and on the remaining two `npx -y` and `uvx` both bootstrap without a pre-existing
+install. Fewer and fewer people are picking a runtime to match anything.
+
+The reasons that do hold are worth stating plainly, because they are what decides
+where effort goes:
+
+- **Python is where the OPC UA and industrial-data ecosystem lives.** A plant
+  integrator extending this, or reading it to learn how something is done, is
+  more likely to be reading Python than TypeScript.
+- **`python-opcua` is unmaintained** — see `transport_limits.py` and
+  CVE-2022-25304, which this repo patches because no upstream fix exists or is
+  expected. A second, independently implemented client is insurance against that
+  library, not redundancy.
+
+That framing changes what to optimise. The cost of two runtimes is real and
+visible in the history: `0dd31b1 fix(node): mark tool failures as errors (#61)`
+and `f8f9242 fix(python): mark tool failures as errors (#63)` are one bug, filed
+twice and fixed twice. The answer is not to drop one but to keep pushing decisions
+*into the contract* — reconnect defaults, dead-session status codes, the policy
+schema, the retry policy — so each runtime shrinks toward a thin adapter over its
+own client library, and the thing that has to be written twice gets smaller.
+
 That interchangeability is not maintained by discipline. It is maintained by
 `contract/tools.json`, the single source of truth for the tool surface:
 
@@ -39,9 +64,18 @@ type, so it passed. It now compares the whole schema, and both runtimes advertis
 the same document.
 
 Arguments are checked against that same schema before anything else happens, by
-`validation.py` / `validation.ts` — twenty lines each over the six JSON Schema
-keywords the contract actually uses, driven by one shared table
-(`tests/fixtures/argument-validation.json`) that both unit suites run. Before
+`validation.py` / `validation.ts` — a short function each over the nine JSON
+Schema keywords the contract actually uses, driven by one shared table
+(`tests/fixtures/argument-validation.json`) that both unit suites run. Three of
+the nine were added after the fact, and each closed a hole: `additionalProperties`
+(no schema forbade extras, so a misspelled *optional* argument was accepted and
+silently changed behaviour — models misspell optional arguments), `enum`
+(`node_class` and `data_type` are fixed sets, and an unknown node class used to
+match nothing and come back as an empty list, indistinguishable from a subtree
+that really is empty), and `minimum` (every numeric argument is floored at zero;
+a negative is never meaningful and used to be silently clamped). The *ceilings*
+stay clamps rather than refusals — they are documented caps on how much work one
+call may ask for, and the result says when one was hit. Before
 that, the Node runtime validated nothing at all (the low-level MCP `Server` does
 not check `arguments` against the advertised `inputSchema`, and the dispatcher
 cast straight off the wire), while the Python runtime validated against the
@@ -330,12 +364,34 @@ part:
 What they share is the decision-making, and it is shared deliberately:
 `OPCUA_RECONNECT_*` and `OPCUA_SESSION_TIMEOUT_MS` mean the same thing on both
 and produce the same waits (`reconnectBudgetMs` / `reconnect_budget_ms` are
-pinned against each other in `tests/unit/test_reconnect.py`), and one list of
-status codes and socket errors — `DEAD_SESSION_MARKERS`, kept in step on both
-sides — decides what is worth reconnecting for. That list is the whole
-distinction between a failure of the *connection* and a failure of the
-*request*: a `BadNodeIdUnknown` would fail identically on a fresh session, so
-retrying it would only hide the real answer.
+pinned against each other in `tests/unit/test_reconnect.py`), and one declaration
+— `contract/tools.json` -> `deadSession` — decides what is worth reconnecting
+for. That decision is the whole distinction between a failure of the *connection*
+and a failure of the *request*: a `BadNodeIdUnknown` would fail identically on a
+fresh session, so retrying it would only hide the real answer.
+
+It used to be 23 hand-transcribed strings matched against the error's rendered
+text, guarded by a test that parametrised over the same constant — so it passed
+by construction and could not see the failure it existed to catch, which is a
+client library rewording a message and silently disabling reconnection. The
+contract now separates three kinds of evidence, and only one of them is prose:
+
+| | What it is | Why it is stable |
+| --- | --- | --- |
+| `statusCodeNames` | 14 OPC UA status codes, by name | Each runtime resolves the name against *its own library's* enum (`ua.StatusCodes`, `StatusCodes`), so a name that stops existing there fails a test rather than never matching again — and the numbers come from the spec, so the two runtimes provably agree |
+| `socketErrors` | 6 errno codes | Fixed by the operating system, not by a library |
+| `phrases` | 3 strings | The fragile part, kept small. One is this project's own wording; the other two are node-opcua prose for a socket that went away without an errno |
+
+Where an error carries a status code, it is matched on the **number**, which a
+release note cannot reword. Text matching is the fallback, and it is the path
+most failures actually take — each tool body re-raises as `ToolError("Failed to
+read node ns=2;i=3: …")`, so by the time an error reaches the dispatcher it is
+prose. The cause chain is walked for exactly that reason.
+
+The check that actually fails when reconnection stops working is none of the
+above: it is the end-to-end test that takes the plant away while the session
+still looks alive, so the failure arrives from *inside* a request, and asserts
+the server says so and works again afterwards.
 
 Whether a failed call may be *repeated* is not the connection layer's to decide
 either. It is settled where the tool is declared, by `contract/tools.json` ->
@@ -376,6 +432,26 @@ the plant was unreachable still holds its startup defaults, and checking them
 first refused `read_opcua_history` as "the server advertises none of: history"
 without ever asking the server. Unknown is not absent. `tools/list` is unchanged
 and still does no network I/O — that distinction is the whole of #83.
+
+**One rebuild per outage, and the backoff outside the lock.** An outage does not
+arrive as one failure; it arrives as every in-flight call failing at once, each
+asking for a rebuild. Two things follow, and both were wrong.
+
+Python held its lock across the whole retry loop, sleeps included, so every
+concurrent call waited out the full budget (7s by default, 32s with
+`OPCUA_RECONNECT_MAX_RETRY=-1`) before it was even told the server was down.
+Serialising the callers was right; making them sit through the sleep was not, and
+the two are separable — `reconnect` now *claims* the attempt under the lock and
+does the teardown, the backoff and the rebind without it. A caller that arrives
+mid-rebuild waits for that attempt and takes its answer, success or failure,
+rather than queueing another: the last of N callers would otherwise wait N
+budgets to be told what the first already knew. `connectPromise` is the same idea
+in the shape JavaScript gives it.
+
+And a caller passes the session id its operation died on. If the connection has
+already moved past it, its need is met and nothing is rebuilt — otherwise the
+callers that arrive *after* a rebuild finishes tear down a session that is
+working and re-attach every subscription on it, once each, for nothing.
 
 A rebuilt session is a *different* session, and an OPC UA subscription belongs to
 the session that created it. So both subscription managers can re-create what

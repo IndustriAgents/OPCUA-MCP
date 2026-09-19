@@ -8,16 +8,33 @@ python-opcua has no reconnection of its own: a ``Client`` whose socket has gone
 raises on every subsequent call, forever. So recovery is this module's whole job,
 and it has two halves:
 
-  * :meth:`OpcuaConnection.connect` retries with exponential backoff, on the
-    settings from ``config.py`` — the same settings, under the same names, that
-    the Node server hands to node-opcua's ``connectionStrategy``.
+  * :meth:`OpcuaConnection.reconnect` throws the client away and opens a new one,
+    retrying with exponential backoff on the settings from ``config.py`` — the
+    same settings, under the same names, that the Node server hands to
+    node-opcua's ``connectionStrategy``.
   * :meth:`OpcuaConnection.run` runs one operation and, if it fails *because the
     connection is gone* rather than because the request was wrong, rebuilds the
     connection and (for an idempotent caller) tries once more.
 
 Everything here blocks: python-opcua is synchronous, so the server calls into it
-through ``asyncio.to_thread``. A lock guards the client, because two tool calls
-may reach for it at once and must not both build one.
+through ``asyncio.to_thread``. Concurrency is therefore real, and the shape of it
+matters more than it looks.
+
+**One rebuild at a time, and the backoff outside the lock.** Two tool calls may
+reach for the connection at once and must not both build one — so ``reconnect``
+*claims* the attempt under the lock, and then does everything else without it.
+The earlier version held the lock across the whole retry loop, sleeps and all,
+which meant every concurrent call waited out the full budget (7s by default, 32s
+with ``OPCUA_RECONNECT_MAX_RETRY=-1``) before it was even told the server was
+down. Serialising the callers was right; making them sit through the sleep was
+not, and the two are separable (issue #111).
+
+A caller that arrives mid-rebuild waits for *that* attempt and takes its answer,
+success or failure. It does not queue a second attempt of its own: every caller
+here wants the same session, N threads each running the full backoff is N times
+the load on a server that is already struggling, and the last of them would wait
+N budgets to be told what the first one already knew. ``connectPromise`` in
+``connection.ts`` is the same idea in the shape JavaScript gives it.
 
 ``connection.ts`` in the Node server is the other implementation of this
 contract. The two differ in how much the client library does for them —
@@ -27,16 +44,17 @@ retry on the same errors, and log the same events.
 
 from __future__ import annotations
 
+import secrets
 import sys
 import threading
 import time
 from collections.abc import Callable
 from typing import TypeVar
 
-from opcua import Client
+from opcua import Client, ua
 
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
-from .contract import NAMESPACE_ARRAY_NODE_ID
+from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID
 from .errors import message
 from .policy import tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
@@ -51,39 +69,35 @@ T = TypeVar("T")
 # it is a patch.
 install_receive_guard()
 
-#: OPC UA status codes and socket errors that mean "the session is gone".
+_DEAD_SESSION = CONTRACT["deadSession"]
+
+#: The OPC UA status codes that mean "the session is gone", by name.
 #:
-#: Matched in the *message*, because by the time an error reaches the dispatcher
-#: it has usually been rewrapped as prose ("Failed to read node ns=2;i=3: ...").
-#: python-opcua renders a status error as ``"<description>"(BadSessionIdInvalid)``,
-#: so the code name is in the text. Every entry names a failure of the connection
-#: rather than of the request, which is what makes retrying on a fresh session
-#: meaningful: a ``BadNodeIdUnknown`` would fail exactly the same way the second
-#: time. Kept in step with ``DEAD_SESSION_MARKERS`` in the Node server.
-DEAD_SESSION_MARKERS = (
-    "BadSessionIdInvalid",
-    "BadSessionClosed",
-    "BadSessionNotActivated",
-    "BadSecureChannelClosed",
-    "BadSecureChannelIdInvalid",
-    "BadServerNotConnected",
-    "BadNotConnected",
-    "BadConnectionClosed",
-    "BadConnectionRejected",
-    "BadDisconnect",
-    "BadNoCommunication",
-    "BadCommunicationError",
-    "BadServerHalted",
-    "BadTcpInternalError",
-    "No OPC UA session available",
-    "socket has been disconnected",
-    "The connection has been rejected",
-    "ECONNREFUSED",
-    "ECONNRESET",
-    "EPIPE",
-    "ETIMEDOUT",
-    "EHOSTUNREACH",
-    "ENETUNREACH",
+#: The contract names them and python-opcua supplies the numbers, so this list
+#: is not a transcription of anything. A name the library stops publishing raises
+#: here, at import, rather than quietly never matching again — which was the real
+#: risk in the hand-written list this replaces, and the one its own test could
+#: not see because it parametrised over the same constant.
+DEAD_SESSION_STATUS_CODES: dict[str, int] = {
+    name: getattr(ua.StatusCodes, name) for name in _DEAD_SESSION["statusCodeNames"]["names"]
+}
+
+#: Failures below OPC UA, which have no status code to carry. Fixed by errno, so
+#: matching them in text is as stable as matching a code.
+SOCKET_ERROR_CODES: tuple[str, ...] = tuple(_DEAD_SESSION["socketErrors"]["codes"])
+
+#: The remainder, matched in the error's rendered text. The only fragile part of
+#: this, and deliberately the smallest: see the contract's own note.
+DEAD_SESSION_PHRASES: tuple[str, ...] = tuple(_DEAD_SESSION["phrases"]["texts"])
+
+#: The same codes as a set, for the one place that asks "is this number one of
+#: them" on every failure.
+_DEAD_SESSION_CODES = frozenset(DEAD_SESSION_STATUS_CODES.values())
+
+#: Everything matched in text, in one tuple, because two of the three groups are
+#: and a caller checking "would this be retried" should not have to know which.
+DEAD_SESSION_MARKERS: tuple[str, ...] = (
+    tuple(DEAD_SESSION_STATUS_CODES) + DEAD_SESSION_PHRASES + SOCKET_ERROR_CODES
 )
 
 #: Socket and timeout failures carry no OPC UA status code, so they are
@@ -99,9 +113,27 @@ _DEAD_SESSION_TYPES = (ConnectionError, TimeoutError, OSError, EOFError)
 def is_connection_error(error: BaseException) -> bool:
     """True when ``error`` says the connection died rather than the request being wrong.
 
+    Three kinds of evidence, strongest first.
+
+    The **status code**, where the error carries one. python-opcua raises
+    ``UaStatusCodeError`` with a numeric ``code``, and a number cannot be
+    reworded by a release note. This is the only check that is not string
+    matching, and it is the one that catches the case that matters most.
+
+    The **type**, for a socket or timeout failure that never reached OPC UA at
+    all and so has no code to carry.
+
+    The **text**, last, for everything that arrives as prose — which by the time
+    an error reaches the dispatcher is most of it, because each tool body
+    re-raises as ``ToolError("Failed to read node ns=2;i=3: …")``. The cause
+    chain is walked for exactly that reason, so a rewrapped status error is still
+    found by its code rather than by its wording.
+
     The Node server's ``isConnectionError`` answers the same question about the
     same failures, so a retry that happens on one runtime happens on the other.
     """
+    if isinstance(error, ua.UaStatusCodeError) and error.code in _DEAD_SESSION_CODES:
+        return True
     if isinstance(error, _DEAD_SESSION_TYPES):
         return True
     text = str(error)
@@ -111,15 +143,41 @@ def is_connection_error(error: BaseException) -> bool:
     return cause is not None and cause is not error and is_connection_error(cause)
 
 
+class _Rebuild:
+    """One attempt to replace the connection, and what came of it.
+
+    Per-attempt rather than kept on the connection, so a caller waiting on a
+    rebuild reads *that* rebuild's outcome. Shared fields would let a second
+    attempt, started the moment the first released its claim, overwrite the
+    answer a waiter had not yet read.
+    """
+
+    __slots__ = ("client", "done", "failure")
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.client: Client | None = None
+        self.failure: BaseException | None = None
+
+
 class OpcuaConnection:
     """The OPC UA client this server talks through, and its recovery."""
 
     def __init__(self, url: str, config: ReconnectConfig | None = None) -> None:
         self._url = url
         self._config = config or reconnect_config()
-        self._lock = threading.RLock()
+        #: Guards ``_client`` and ``_rebuilding``, and nothing else. Deliberately
+        #: a plain ``Lock``: it is never held across a network call or a sleep, so
+        #: there is nothing re-entrant left to support, and a plain lock is one
+        #: that cannot accidentally be held twice by a path that grew a caller.
+        self._lock = threading.Lock()
         self._client: Client | None = None
         self._last_error: str | None = None
+        #: An id for the session currently held; see :attr:`session_id`.
+        self._session: str | None = None
+        #: The rebuild in flight, so concurrent callers join it rather than start
+        #: a second. ``None`` when nothing is being rebuilt.
+        self._rebuilding: _Rebuild | None = None
         #: Called with a *new* client after a dead one was replaced, so that
         #: whatever was bound to the old session can be re-established.
         self.on_client_replaced: Callable[[Client], None] | None = None
@@ -144,41 +202,58 @@ class OpcuaConnection:
         """Why the connection is not up, in the client library's words."""
         return self._last_error
 
-    def connect(self) -> Client:
-        """Connect, retrying with backoff. Raises the last error if none succeeds."""
-        with self._lock:
-            if self._client is not None:
-                return self._client
+    @property
+    def session_id(self) -> str | None:
+        """An id for the session this server holds, or None while it holds none.
 
-            config = security_config()
-            # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
-            for warning in security_warnings(config):
-                print(f"WARNING: {warning}", file=sys.stderr)
+        Not the OPC UA server's own SessionId. python-opcua discards it and
+        node-opcua exposes it, so a field built from it could not mean the same
+        thing on both runtimes — and the audit trail needs a field that does.
+        This is minted here when a session is established, which is what lets a
+        record answer "which of this process's sessions did the call ride on",
+        and so lets two writes either side of an outage be told apart.
 
-            delays = reconnect_delays(self._config)
-            last: BaseException | None = None
-            for attempt in range(len(delays) + 1):
-                try:
-                    client = self._open()
-                except Exception as error:
-                    last = error
-                    self._last_error = str(error)
-                    if attempt < len(delays):
-                        delay = delays[attempt]
-                        print(
-                            f"OPC UA reconnect: attempt {attempt + 1} failed "
-                            f"({error!s}), next try in {delay:g}ms",
-                            file=sys.stderr,
-                        )
-                        time.sleep(delay / 1000)
-                    continue
-                self._client = client
-                self._last_error = None
-                print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
-                return client
+        It is also what stops a burst of concurrent failures each rebuilding the
+        connection in turn: a caller passes the session its operation died on to
+        :meth:`reconnect`, and one that has already been replaced needs no second
+        rebuild.
+        """
+        return self._session
 
-            print(f"Failed to connect to OPC UA server: {last!s}", file=sys.stderr)
-            raise last if last is not None else RuntimeError("No OPC UA session available")
+    def _open_with_backoff(self) -> Client:
+        """One connection, retried with backoff. Raises the last error if none succeeds.
+
+        Holds no lock. The sleeps here are the whole configured budget, and a
+        caller blocked behind them learns nothing it could not have been told at
+        once — see the module docstring.
+        """
+        config = security_config()
+        # Log to stderr: stdout is reserved for the MCP stdio JSON-RPC transport.
+        for warning in security_warnings(config):
+            print(f"WARNING: {warning}", file=sys.stderr)
+
+        delays = reconnect_delays(self._config)
+        last: BaseException | None = None
+        for attempt in range(len(delays) + 1):
+            try:
+                client = self._open()
+            except Exception as error:
+                last = error
+                self._last_error = str(error)
+                if attempt < len(delays):
+                    delay = delays[attempt]
+                    print(
+                        f"OPC UA reconnect: attempt {attempt + 1} failed "
+                        f"({error!s}), next try in {delay:g}ms",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay / 1000)
+                continue
+            print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
+            return client
+
+        print(f"Failed to connect to OPC UA server: {last!s}", file=sys.stderr)
+        raise last if last is not None else RuntimeError("No OPC UA session available")
 
     def _open(self) -> Client:
         """One connection attempt, from a client built fresh for it.
@@ -225,6 +300,7 @@ class OpcuaConnection:
         with self._lock:
             client = self._client
             self._client = None
+            self._session = None
             if client is None:
                 return
             try:
@@ -236,36 +312,95 @@ class OpcuaConnection:
     def ensure_connected(self) -> Client:
         """A live client, connecting if there is not one yet.
 
-        Goes through :meth:`reconnect` rather than :meth:`connect` even for the
-        very first connection, so that whatever holds a client is bound to it by
-        exactly one path — the first session and the fiftieth arrive the same way.
+        Goes through :meth:`reconnect` even for the very first connection, so
+        that whatever holds a client is bound to it by exactly one path — the
+        first session and the fiftieth arrive the same way.
         """
         with self._lock:
             if self._client is not None:
                 return self._client
-            return self.reconnect()
+        return self.reconnect()
 
-    def reconnect(self) -> Client:
+    def reconnect(self, stale: str | None = None) -> Client:
         """Throw the client away and build a new one, whatever state it was in.
 
         The client that comes back holds a *new* session, so anything bound to
         the old one — the subscriptions, above all — is told through
         ``on_client_replaced``.
+
+        ``stale`` is the :attr:`session_id` the caller's operation died on. If
+        the connection has already moved past it, the caller's need is met and
+        the live client is handed back: rebuilding again would tear down a
+        session that is working and re-attach every subscription on it for
+        nothing. Without this, a burst of concurrent failures — which is what an
+        outage looks like from a server serving several calls — rebuilt once per
+        caller in turn.
+
+        One rebuild at a time otherwise. The lock is held only long enough to
+        *claim* the attempt; the teardown, the backoff and the re-establishing
+        all happen without it, so a concurrent caller is not blocked behind a
+        sleep it cannot learn anything from. A caller that arrives mid-rebuild
+        takes that rebuild's answer rather than starting a second (issue #111).
         """
         with self._lock:
-            self.disconnect()
-            client = self.connect()
-            if self.on_client_replaced is not None:
-                try:
-                    self.on_client_replaced(client)
-                except Exception as error:
-                    # Re-establishing what was being monitored must not turn a
-                    # recovered connection back into a failed tool call.
-                    print(
-                        f"Error re-establishing state on the new OPC UA session: {error}",
-                        file=sys.stderr,
-                    )
-            return client
+            if stale is not None and self._client is not None and self._session != stale:
+                return self._client
+            mine = self._rebuilding is None
+            if mine:
+                self._rebuilding = _Rebuild()
+            attempt = self._rebuilding
+
+        if not mine:
+            attempt.done.wait()
+            if attempt.client is not None:
+                return attempt.client
+            # The attempt we waited on failed, and its failure is the answer.
+            # Queueing another here would have every waiter run the whole budget
+            # in turn, so the last of them waits N budgets to be told what the
+            # first one already knew.
+            raise (
+                attempt.failure
+                if attempt.failure is not None
+                else RuntimeError("No OPC UA session available")
+            )
+
+        try:
+            attempt.client = self._open_new_session()
+            return attempt.client
+        except BaseException as error:
+            attempt.failure = error
+            raise
+        finally:
+            with self._lock:
+                self._rebuilding = None
+            # After the claim is released, so a caller that wakes and finds no
+            # client is free to start its own attempt.
+            attempt.done.set()
+
+    def _open_new_session(self) -> Client:
+        """Drop the old client, open a new one, and rebind what held the old.
+
+        The caller has already claimed the attempt, so this is the only thread
+        running it — which is what lets it take no lock while it waits on the
+        network.
+        """
+        self.disconnect()
+        client = self._open_with_backoff()
+        with self._lock:
+            self._client = client
+            self._session = secrets.token_hex(8)
+            self._last_error = None
+        if self.on_client_replaced is not None:
+            try:
+                self.on_client_replaced(client)
+            except Exception as error:
+                # Re-establishing what was being monitored must not turn a
+                # recovered connection back into a failed tool call.
+                print(
+                    f"Error re-establishing state on the new OPC UA session: {error}",
+                    file=sys.stderr,
+                )
+        return client
 
     def run(self, operation: Callable[[], T], may_repeat: bool = True) -> T:
         """Run ``operation`` on a live connection, once more if the session dies.
@@ -285,6 +420,7 @@ class OpcuaConnection:
         the connection and report what it found.
         """
         self.ensure_connected()
+        session = self.session_id
         try:
             return operation()
         except Exception as error:
@@ -295,7 +431,7 @@ class OpcuaConnection:
                 f"OPC UA call failed on a dead session; reconnecting{suffix}",
                 file=sys.stderr,
             )
-            self.reconnect()
+            self.reconnect(stale=session)
             if not may_repeat:
                 raise
             return operation()
@@ -319,6 +455,9 @@ def describe_error(error: BaseException) -> str:
 
 __all__ = [
     "DEAD_SESSION_MARKERS",
+    "DEAD_SESSION_PHRASES",
+    "DEAD_SESSION_STATUS_CODES",
+    "SOCKET_ERROR_CODES",
     "OpcuaConnection",
     "describe_error",
     "is_connection_error",

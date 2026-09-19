@@ -126,7 +126,7 @@ Both servers expose the same thirteen tools, defined once in
 
 | Tool | What it does |
 |---|---|
-| `read_opcua_nodes` | Read one or more nodes — value, data type, status, timestamps |
+| `read_opcua_nodes` | Read one or more nodes — value, data type, status, timestamps, engineering unit and range |
 | `browse_opcua_nodes` | List children, walk a subtree, resolve a browse path, search by name |
 | `write_opcua_nodes` | Write to one or more nodes |
 | `call_opcua_method` | Invoke a method on an object node |
@@ -179,9 +179,19 @@ whether a value can be acted on, and a bare number carries neither:
 read_opcua_nodes  node_ids=["ns=2;i=3", "ns=2;i=12"]
 → { "node_id": "ns=2;i=3", "value": 23.10, "data_type": "Double", "status": "Good",
     "source_timestamp": "2026-09-10T13:15:12.214Z",
-    "server_timestamp": "2026-09-10T13:15:12.214Z" }
-  { "node_id": "ns=2;i=12", "value": true, "data_type": "Boolean", … }
+    "server_timestamp": "2026-09-10T13:15:12.214Z",
+    "engineering": { "unit": "°C", "unit_description": "degree Celsius",
+                     "eu_range": { "low": 0, "high": 150 },
+                     "instrument_range": { "low": -50, "high": 250 } } }
+  { "node_id": "ns=2;i=12", "value": true, "data_type": "Boolean", "engineering": null, … }
 ```
+
+`engineering` is what the plant says the number *means*, read from the node's own
+OPC UA properties: `23.10` cannot be told from °C, PSI or %, and cannot be told
+from a trip. It is `null` for a node that publishes none, which is most of them —
+only an `AnalogItemType` carries it. The range is not only reported: a write
+outside the node's own `EURange` is refused before anything is sent, which is a
+safety bound the equipment declared rather than one a human retyped.
 
 A walk of the address space says whether it finished, so a partial answer can
 never pass for a complete one:
@@ -231,6 +241,7 @@ Both runtimes read the same environment variables:
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id|method_node_id` pairs callable by `operator` |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
+| `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node — see [Bounding the value, not only the node](#bounding-the-value-not-only-the-node) |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
@@ -275,6 +286,41 @@ The policy is enforced again on **every call**, not only when tools are listed �
 an MCP client may hold a stale catalogue, and a hidden tool is a usability
 feature rather than a security boundary. Every control call is also recorded on
 stderr with its targets and its outcome.
+
+### Bounding the value, not only the node
+
+An allowlist says *where* a write may go. It does not say *what* may be written,
+and for the one product category where a wrong number is a physical event that is
+the weaker half: a model that has correctly identified the right setpoint and
+hallucinated `9999` instead of `99.9` is fully allowlisted.
+
+Two bounds now apply.
+
+**The one the plant published.** An OPC UA `AnalogItemType` carries an `EURange` —
+what the value holds in normal operation. Both servers read it, report it on every
+reading, and refuse a write outside it before anything is sent. No configuration:
+the equipment set the bound. Set `OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true` for the
+deployments that write outside normal operation on purpose.
+
+**The one you write.** In a policy file, a `writable_nodes` entry may carry `min`,
+`max`, `enum` or `max_change`:
+
+```json
+{
+  "control": {
+    "writable_nodes": [
+      "nsu=urn:plant:line-a;s=Line1.SpeedSetpoint",
+      { "node": "nsu=urn:plant:line-a;s=Line1.Temperature", "min": 0, "max": 120 },
+      { "node": "nsu=urn:plant:line-a;s=Line1.Mode", "enum": ["AUTO", "MANUAL"] }
+    ]
+  }
+}
+```
+
+A bare node id stays legal. Both bounds apply, so a policy can only ever narrow
+what the equipment already allows. `OPCUA_ALLOWED_WRITE_NODES` is a comma-separated
+list and cannot express a bound — a bounded node needs the file. The full shape is
+in **[SECURITY.md](SECURITY.md#bounding-the-value-not-only-the-node)**.
 
 ### Writing an allowlist that stays correct
 

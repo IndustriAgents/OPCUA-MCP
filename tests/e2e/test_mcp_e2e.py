@@ -50,6 +50,11 @@ NODE = {
     # and then failed a release verify. Write-then-read-back belongs on these.
     "ScratchDouble": "ns=2;i=41",
     "ScratchBoolean": "ns=2;i=42",
+    # The one node that says what its number *means*: an AnalogItemType with
+    # EngineeringUnits (°C), EURange (0 to 150) and InstrumentRange (-50 to 250).
+    # Its id is fixed in the mock rather than assigned in sequence, so adding a
+    # node cannot renumber it out from under this map.
+    "ScratchAnalog": "ns=2;i=90",
 }
 
 # A node id the mock does not have, for the failure-path tests.

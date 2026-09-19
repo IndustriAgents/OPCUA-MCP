@@ -24,6 +24,11 @@ export interface ToolGuard {
   methodPaths?: Array<{ objectPath: string; methodPath: string }>;
   /** A policy flag that must be true; the whole tool is gated on it. */
   flag?: "acknowledgeAlarms";
+  /** Arrays whose elements pair a target with the value aimed at it, so the
+   *  policy can check both together. Node identity is not the whole of a write:
+   *  an allowlisted setpoint that accepts any number is authorised for 9999 as
+   *  readily as for 99.9. */
+  valuePaths?: Array<{ array: string; nodeIdField: string; valueField: string }>;
   /** Extra argument paths the audit record should carry, for a tool whose
    *  targets are not node ids. */
   auditPaths?: string[];
@@ -58,6 +63,14 @@ export const CONTRACT: {
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
   /** Prose for each `ToolSpec.retryPolicy` value; the tools name one of its keys. */
   retryPolicies: Record<string, string>;
+  /** Where a node says what its number means; see node-metadata.ts. */
+  analog: {
+    engineeringUnitsBrowseName: string;
+    euRangeBrowseName: string;
+    instrumentRangeBrowseName: string;
+    enforceEuRangeOnWrite: boolean;
+    maxPropertiesPerRequest: number;
+  };
   diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
   subscriptions: {
     defaultPublishingIntervalMs: number;

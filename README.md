@@ -7,9 +7,9 @@
 [![npm version](https://img.shields.io/npm/v/opcua-mcp-server)](https://www.npmjs.com/package/opcua-mcp-server)
 [![PyPI version](https://img.shields.io/pypi/v/opcua-mcp-server)](https://pypi.org/project/opcua-mcp-server/)
 [![npm downloads](https://img.shields.io/npm/dm/opcua-mcp-server)](https://www.npmjs.com/package/opcua-mcp-server)
-[![CI](https://github.com/midhunxavier/OPCUA-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/midhunxavier/OPCUA-MCP/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/midhunxavier/OPCUA-MCP)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/midhunxavier/OPCUA-MCP?style=social)](https://github.com/midhunxavier/OPCUA-MCP)
+[![CI](https://github.com/IndustriAgents/OPCUA-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/IndustriAgents/OPCUA-MCP/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/IndustriAgents/OPCUA-MCP)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/IndustriAgents/OPCUA-MCP?style=social)](https://github.com/IndustriAgents/OPCUA-MCP)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
 [![Node.js 22.13+](https://img.shields.io/badge/node-22.13+-green.svg)](https://nodejs.org)
@@ -61,7 +61,7 @@ flowchart LR
 ## Quick Start
 
 **Claude Desktop, nothing installed?** Download the `.mcpb` bundle from the
-[latest release](https://github.com/midhunxavier/OPCUA-MCP/releases/latest) and
+[latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest) and
 drag it into **Settings → Extensions**. It carries the server and every
 dependency, Claude Desktop supplies the runtime, and the OPC UA endpoint is a
 field in the settings form — no Node, no Python, no JSON to edit.
@@ -341,7 +341,7 @@ The repo ships a simulated industrial plant — sensors, actuators, methods,
 history and events — so you can try the tools without touching real equipment.
 
 ```bash
-git clone https://github.com/midhunxavier/OPCUA-MCP.git && cd OPCUA-MCP
+git clone https://github.com/IndustriAgents/OPCUA-MCP.git && cd OPCUA-MCP
 uv sync --all-packages
 uv run --no-sync opcua-mock-server     # opc.tcp://localhost:4840/freeopcua/server/
 ```
@@ -395,7 +395,7 @@ conventions. What is planned next is in [ROADMAP.md](ROADMAP.md); changes that
 have landed are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 Results from a real OPC UA server are the most useful thing to send: open a
-[compatibility report](https://github.com/midhunxavier/OPCUA-MCP/issues/new?template=compatibility_report.md)
+[compatibility report](https://github.com/IndustriAgents/OPCUA-MCP/issues/new?template=compatibility_report.md)
 saying which server, which version and which tools worked. Test only on
 equipment you are authorised to use, and keep writes and method calls to a
 simulator or lab.

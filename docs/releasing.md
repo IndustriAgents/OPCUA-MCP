@@ -83,7 +83,7 @@ The old npm name needs a pointer to the new one:
 
 ```bash
 npm deprecate opcua-mcp-npx-server \
-  "Renamed to opcua-mcp-server — https://github.com/midhunxavier/OPCUA-MCP"
+  "Renamed to opcua-mcp-server — https://github.com/IndustriAgents/OPCUA-MCP"
 ```
 
 **Do not unpublish it.** That breaks existing installs, and npm blocks unpublish

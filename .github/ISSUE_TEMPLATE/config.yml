@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question or usage help
-    url: https://github.com/midhunxavier/OPCUA-MCP/discussions
+    url: https://github.com/IndustriAgents/OPCUA-MCP/discussions
     about: Ask about configuration, MCP clients, or connecting to your OPC UA server.
   - name: Model Context Protocol docs
     url: https://modelcontextprotocol.io
     about: Reference for MCP itself — transports, clients, and the tool interface.
   - name: Security vulnerability
-    url: https://github.com/midhunxavier/OPCUA-MCP/security/policy
+    url: https://github.com/IndustriAgents/OPCUA-MCP/security/policy
     about: Report privately. Please do not open a public issue.

@@ -4,7 +4,7 @@ What has actually been exercised, and by what. Everything in the first table is
 derived from the test suite in this repository — the fixtures it starts and the
 assertions it makes — not from a fresh manual run and not from any vendor
 certification. The current result is whatever
-[CI](https://github.com/midhunxavier/OPCUA-MCP/actions/workflows/ci.yml) last
+[CI](https://github.com/IndustriAgents/OPCUA-MCP/actions/workflows/ci.yml) last
 reported on `main`.
 
 Every row below runs against **both** runtimes: each e2e test is parametrised
@@ -44,7 +44,7 @@ permissions of the account you connect with all change the answer.
   with Node 24.
 - **Transport: stdio only.** The client must be able to launch a local stdio MCP
   server, or install the Claude Desktop `.mcpb` bundle. There is no HTTP
-  transport ([#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14)).
+  transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)).
 - Client configurations in [docs/install.md](install.md) are worked
   examples, not a per-client certification matrix. `--install claude-desktop`
   is the only client integration with its own tests.
@@ -62,7 +62,7 @@ That is coverage of *this project's* handling of security, not of interoperation
 with a vendor PKI. The server certificate is still taken from the endpoint
 description and neither pinned nor validated against a trust list — see
 [SECURITY.md](../SECURITY.md) and
-[#45](https://github.com/midhunxavier/OPCUA-MCP/issues/45).
+[#45](https://github.com/IndustriAgents/OPCUA-MCP/issues/45).
 
 ## Tool policy coverage
 
@@ -104,7 +104,7 @@ restart, subscription re-establishment — is **Unverified**.
 ## Report a result
 
 Open a
-[compatibility report](https://github.com/midhunxavier/OPCUA-MCP/issues/new?template=compatibility_report.md).
+[compatibility report](https://github.com/IndustriAgents/OPCUA-MCP/issues/new?template=compatibility_report.md).
 A row moves out of **Unverified** only with a linked report that names the server
 product and version, the package version, the runtime, the MCP client, the
 security and identity settings, and the tools that were called.

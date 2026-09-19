@@ -243,7 +243,7 @@ the bugs and the reason for the merge are the same fix.
   | subscribe_events | `Subscribed to events from node …` | `{node_id, severity_min, buffer_size, replaced}` |
   | acknowledge_alarm | `Acknowledged alarm ns=1;i=1002 (event …)` | `{event_id, condition_id, status}` |
 
-  This closes [#8](https://github.com/midhunxavier/OPCUA-MCP/issues/8): a reading
+  This closes [#8](https://github.com/IndustriAgents/OPCUA-MCP/issues/8): a reading
   now carries its data type, its OPC UA status and both timestamps, because the
   quality and the age are what decide whether a value can be acted on and a bare
   number carries neither.
@@ -256,13 +256,13 @@ the bugs and the reason for the merge are the same fix.
   history family; the read path was outside its reach. It no longer is.
 
 - **`write_opcua_nodes` accepts an explicit `data_type`**, closing
-  [#9](https://github.com/midhunxavier/OPCUA-MCP/issues/9). Without it each node
+  [#9](https://github.com/IndustriAgents/OPCUA-MCP/issues/9). Without it each node
   is read first to learn its type, which costs a round trip and cannot work for a
   **write-only** node — reading it is exactly what such a node refuses. A batch
   that declares every type sends no reads at all.
 
 - **`call_opcua_method` converts arguments to the types the method declares**,
-  closing [#10](https://github.com/midhunxavier/OPCUA-MCP/issues/10). It parsed
+  closing [#10](https://github.com/IndustriAgents/OPCUA-MCP/issues/10). It parsed
   every argument float → int → string and then forced `Double` or `String`, so a
   method expecting a `Boolean` or an `Int32` was called with the wrong type and
   either failed or — worse — acted on a coerced value. The declared types come
@@ -988,10 +988,10 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.1...HEAD
-[0.4.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/midhunxavier/OPCUA-MCP/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/midhunxavier/OPCUA-MCP/releases/tag/v0.1.2
+[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/IndustriAgents/OPCUA-MCP/releases/tag/v0.1.2

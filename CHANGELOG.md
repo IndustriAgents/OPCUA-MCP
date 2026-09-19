@@ -91,6 +91,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than truncated, and `subscribe_opcua_nodes` counts against
   `limits.maxSubscriptions` (200) because it asks a PLC for one subscription per
   node.
+- **`isEphemeralInstall` missed npx caches spelled with forward slashes on
+  Windows** — found by the new cross-platform CI job on its first run. It split
+  the path on the *host's* separator, so a Windows path written with `/` (which
+  Windows accepts, and which `process.argv[1]` may well carry) was one unsplit
+  segment that matched nothing: `--install` would then write the npx cache path
+  into a client config as though it were a real install, and the entry would
+  break the next time the cache was pruned. It now splits on either separator,
+  which is what the Python half already got for free from `Path(...).parts`.
 - **Security: `tmp` path traversal (GHSA-ph9p-34f9-6g65, GHSA-52f5-9888-hmc6).**
   A dev-only transitive dependency, reached through
   `@anthropic-ai/mcpb` → `@inquirer/prompts` → `@inquirer/editor` →

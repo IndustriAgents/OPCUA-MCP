@@ -11,7 +11,7 @@
 
 import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, sep } from "path";
+import { dirname, join } from "path";
 
 import { SERVER_URL } from "./config.js";
 import { VERSION } from "./contract.js";
@@ -68,10 +68,18 @@ export function claudeDesktopConfigPath(
 const EPHEMERAL_SEGMENTS = ["_npx"];
 const EPHEMERAL_PREFIXES = ["dlx-"];
 
-/** True when `path` sits inside an `npx`/`dlx` cache rather than a real install. */
+/** True when `path` sits inside an `npx`/`dlx` cache rather than a real install.
+ *
+ * Split on either separator rather than on the host's `sep`. Windows accepts
+ * both, and a path reaching this function has come from `process.argv[1]` or a
+ * caller — not necessarily from `path.join` — so a forward-slashed Windows path
+ * would have been one segment, matched nothing, and written a cache path into
+ * somebody's config as though it were a real install. The Python half is already
+ * separator-agnostic for free: `Path(...).parts` splits both on Windows.
+ */
 export function isEphemeralInstall(path: string): boolean {
   return path
-    .split(sep)
+    .split(/[\\/]/)
     .some(
       (seg) => EPHEMERAL_SEGMENTS.includes(seg) || EPHEMERAL_PREFIXES.some((p) => seg.startsWith(p))
     );

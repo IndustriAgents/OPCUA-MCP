@@ -84,7 +84,7 @@ jobs:
         working-directory: tests
         run: uv run --no-sync pytest -v -m smoke smoke/test_artifacts.py -k mcpb
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mcpb
           path: packages/server-node/dist/*.mcpb
@@ -170,7 +170,7 @@ jobs:
           cp packages/server-python/dist/opcua-mcp-server-python-* staged/
           ls -l staged
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.os }}
           path: staged/*
@@ -186,7 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true

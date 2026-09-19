@@ -48,9 +48,19 @@ Discover these any time with `browse_opcua_nodes`.
 | Methods / EmergencyStop | `ns=2;i=33` | Method | call |
 | Methods / ResetSystem | `ns=2;i=35` | Method | call |
 | Methods / CalibrateSensors | `ns=2;i=37` | Method | call (1 String arg) |
+| Scratch / ScratchDouble | `ns=2;i=41` | Double | read/write |
+| Scratch / ScratchBoolean | `ns=2;i=42` | Boolean | read/write |
+| Scratch / ScratchAnalog | `ns=2;i=90` | Double, AnalogItemType | read/write |
 
 > Method NodeIds account for the per-method `InputArguments`/`OutputArguments`
 > property nodes. Always browse the `Methods` folder rather than hard-coding.
+
+> The `Scratch` nodes are the writable ones the simulation never touches; every
+> other writable node is an actuator the mock republishes from its own state once
+> a second, so writing one and reading it back races a timer. `ScratchAnalog` is
+> the one node that says what its number *means*: an `AnalogItemType` with
+> `EngineeringUnits` (°C), `EURange` (0 to 150) and `InstrumentRange` (-50 to
+> 250) — which makes it the node to try a write outside the range on.
 
 ---
 
@@ -64,13 +74,28 @@ Read one or more nodes. One call, one round trip, whether it is one node or fift
 ```json
 { "node_id": "ns=2;i=3", "value": 26.13, "data_type": "Double", "status": "Good",
   "source_timestamp": "2026-09-10T13:15:12.214Z",
-  "server_timestamp": "2026-09-10T13:15:12.214Z" }
+  "server_timestamp": "2026-09-10T13:15:12.214Z", "engineering": null }
 { "node_id": "ns=2;i=4", "value": 1010.57, "data_type": "Double", … }
 { "node_id": "ns=2;i=12", "value": false, "data_type": "Boolean", … }
 ```
 The quality and the age come with the value, because they are what decide whether
 it can be acted on: a `status` of `Good` and a `source_timestamp` from four hours
 ago are a stale reading, and a bare number cannot tell you that.
+
+`engineering` is what the plant says the number *means*, read from the node's own
+OPC UA properties (Part 8 §5.3) and cached for the session. `null` for a node that
+publishes none, which is most of them:
+
+```json
+{ "node_id": "ns=2;i=90", "value": 50.0, "data_type": "Double", "status": "Good",
+  "engineering": { "unit": "°C", "unit_description": "degree Celsius",
+                   "eu_range": { "low": 0, "high": 150 },
+                   "instrument_range": { "low": -50, "high": 250 } }, … }
+```
+
+`eu_range` is what the value holds in normal operation, `instrument_range` what
+the device can physically return. The first is not only reported — a write
+outside it is refused before anything is sent.
 
 A node the server rejects is one `Bad…` status among the others, never a failed
 call — one unreadable node must not discard the other forty-nine.

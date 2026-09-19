@@ -40,8 +40,16 @@ from .limits import (
     history_was_clipped,
 )
 from .node_ids import canonical_node_id
+from .node_metadata import AnalogInfo, NodeMetadata
 from .notices import notice
-from .policy import describe_policy, tool_policy, values_at
+from .policy import (
+    ValueBound,
+    as_number,
+    describe_policy,
+    format_number,
+    tool_policy,
+    values_at,
+)
 from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
 from .subscriptions import (
@@ -54,6 +62,11 @@ from .variant_codec import convert_for_variant
 from .version import package_version
 
 _CAPABILITIES: dict[str, Any] = {"history": False, "aggregate_functions": {}}
+
+#: What each node published about its own number, for the life of one session.
+#: Module-level for the same reason `_CAPABILITIES` is, and dropped by `_bind`
+#: for the same reason: a restarted server may not be the same server.
+_NODE_METADATA = NodeMetadata()
 
 
 def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -245,6 +258,10 @@ def _bind(state: dict, client) -> None:
     """
     state["opcua_client"] = client
     SUBSCRIPTIONS.reattach(client)
+    # A new session may be a restarted server, whose nodes are not necessarily
+    # the nodes the old ids named. What each one said about its unit and its
+    # range was true of the session that said it.
+    _NODE_METADATA.forget()
     _probe_capabilities(client)
 
 
@@ -621,7 +638,9 @@ def _data_type_name(variant: Any) -> str | None:
     return None if name in (None, "Null") else str(name)
 
 
-def _node_value_record(node_id: str, data_value: Any) -> dict:
+def _node_value_record(
+    node_id: str, data_value: Any, engineering: AnalogInfo | None = None
+) -> dict:
     """One node's reading as a canonical record (``resultShapes.nodeValues``).
 
     The value goes through the *shared* codec, so a Boolean is ``true`` on both
@@ -641,6 +660,10 @@ def _node_value_record(node_id: str, data_value: Any) -> dict:
         "status": str(status.name) if status is not None else "Good",
         "source_timestamp": format_iso_utc(getattr(data_value, "SourceTimestamp", None)),
         "server_timestamp": format_iso_utc(getattr(data_value, "ServerTimestamp", None)),
+        # What the plant says this number means. null for most nodes, because
+        # only an AnalogItemType publishes it — but on the ones that do it is the
+        # difference between "51.75" and "51.75 °C, normal range 0 to 150".
+        "engineering": engineering.to_json() if engineering else None,
     }
 
 
@@ -715,8 +738,11 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
         values = client.uaclient.get_attributes(
             [node.nodeid for node in nodes], ua.AttributeIds.Value
         )
+        # Two extra round trips on a cold cache for the whole batch, none on a
+        # warm one, and never a reason for the read to fail. See node_metadata.
+        engineering = _NODE_METADATA.for_nodes(client, node_ids)
         return [
-            _node_value_record(node_id, data_value)
+            _node_value_record(node_id, data_value, engineering.get(node_id))
             for node_id, data_value in zip(node_ids, values, strict=True)
         ]
     except Exception as e:
@@ -1143,6 +1169,10 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     if not nodes:
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     client = ctx.request_context.lifespan_context["opcua_client"]
+    policy = tool_policy()
+    bounds = {
+        index: policy.bound_for(str(node.get("node_id", ""))) for index, node in enumerate(nodes)
+    }
     try:
         results: list[dict] = [
             {
@@ -1153,16 +1183,31 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
             for node in nodes
         ]
 
-        # Only the nodes without a declared type need reading, so a batch that
-        # declares every type costs no extra round trip at all.
+        # A node needs its current value read for either of two reasons: its type
+        # was not declared and has to be inferred, or it carries a `max_change`
+        # bound, which is a bound on the *move* and so cannot be judged without
+        # knowing where the node is now. One read covers both.
         inferred = [index for index, node in enumerate(nodes) if not node.get("data_type")]
+        needs_current = sorted(
+            set(inferred)
+            | {
+                index
+                for index, bound in bounds.items()
+                if bound is not None and bound.max_change is not None
+            }
+        )
         current: dict[int, Any] = {}
-        if inferred:
+        if needs_current:
             read = client.uaclient.get_attributes(
-                [client.get_node(nodes[index]["node_id"]).nodeid for index in inferred],
+                [client.get_node(nodes[index]["node_id"]).nodeid for index in needs_current],
                 ua.AttributeIds.Value,
             )
-            current = dict(zip(inferred, read, strict=True))
+            current = dict(zip(needs_current, read, strict=True))
+
+        # Before anything is sent, and raising rather than marking one record:
+        # the whole batch is refused so it can never end up partially applied,
+        # which is the property the identity allowlist already had.
+        check_write_bounds(nodes, bounds, current, client)
 
         write_ids = []
         write_values = []
@@ -1208,8 +1253,120 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
                 results[index]["status"] = str(status.name)
 
         return results
+    except ToolError:
+        # A refusal is already worded the way the contract words it, and it ends
+        # in "Nothing was written". Wrapping it in "Failed to write nodes:" would
+        # bury the reason under a framing that says the plant rejected the value
+        # when in fact this server never sent it.
+        raise
     except Exception as e:
         raise ToolError(error_message("writeFailed", reason=str(e))) from e
+
+
+def _current_number(data_value: Any) -> float | None:
+    """A node's present reading as a number, or None if there is not one to compare."""
+    status = getattr(data_value, "StatusCode", None)
+    if data_value is None or (status is not None and not status.is_good()):
+        return None
+    return as_number(variant_to_json(getattr(data_value, "Value", None)))
+
+
+def check_eu_range(node_id: str, value: Any, info: AnalogInfo | None) -> None:
+    """Refuse a value outside the range the OPC UA server itself published.
+
+    This is the bound that needs no policy file at all, and it is the better one:
+    the plant declared what the node is expected to hold in normal operation
+    (Part 8 §5.3), so nobody has to retype it into a JSON file and keep it in
+    step. An operator's ``min``/``max`` is checked separately, by the policy
+    layer, and both apply — so a policy file can only ever *narrow* what the
+    equipment already allows, never widen it.
+
+    A non-numeric value is left alone: the variant codec is what judges whether a
+    string or a boolean belongs on this node, and it says so better than a range
+    comparison could.
+    """
+    if info is None or info.eu_range is None:
+        return
+    number = as_number(value)
+    if number is None or info.eu_range.contains(number):
+        return
+    raise ToolError(
+        error_message(
+            "valueOutOfRange",
+            value=format_number(number),
+            node_id=node_id,
+            low=format_number(info.eu_range.low),
+            high=format_number(info.eu_range.high),
+            unit=f" {info.unit}" if info.unit else "",
+            source="the OPC UA server's own EURange",
+        )
+    )
+
+
+def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: Any) -> None:
+    """Refuse a move larger than the operator allows in one write.
+
+    Scalars only. An array write has no single "how far did it move", and
+    guessing one — the largest element-wise delta, say — would be a rule nobody
+    could predict from the policy file, so it is refused instead.
+    """
+    present = _current_number(data_value)
+    if present is None:
+        reason = "the node returned no usable value"
+        status = getattr(data_value, "StatusCode", None)
+        if data_value is None:
+            reason = "it could not be read"
+        elif status is not None and not status.is_good():
+            reason = str(status.name)
+        raise ToolError(error_message("currentValueUnreadable", node_id=node_id, reason=reason))
+    wanted = as_number(value)
+    if wanted is None:
+        raise ToolError(
+            error_message("valueNotComparable", node_id=node_id, value=json.dumps(value))
+        )
+    change = abs(wanted - present)
+    if change > bound.max_change:
+        raise ToolError(
+            error_message(
+                "valueChangeTooLarge",
+                node_id=node_id,
+                current=format_number(present),
+                value=format_number(wanted),
+                change=format_number(change),
+                limit=format_number(bound.max_change),
+            )
+        )
+
+
+def check_write_bounds(
+    nodes: list[dict[str, Any]],
+    bounds: dict[int, ValueBound | None],
+    current: dict[int, Any],
+    client: Any,
+) -> None:
+    """Refuse the whole batch if any value is outside what its node may hold.
+
+    Two bounds, from two places, and both apply. The operator's ``min``/``max``
+    and ``enum`` were already checked by the policy layer, before the network was
+    touched at all; what is left here is everything that needed a read — the
+    server's own ``EURange``, and ``max_change``, which is a bound on the move.
+    """
+    node_ids = [str(node.get("node_id", "")) for node in nodes]
+    engineering = (
+        {}
+        if tool_policy().config.allow_out_of_range_writes
+        else _NODE_METADATA.for_nodes(client, node_ids)
+    )
+    for index, node in enumerate(nodes):
+        node_id = node_ids[index]
+        value = node.get("value")
+        # An array write is checked element by element. Writing [0, 9999] to a
+        # node whose range stops at 100 is writing 9999 to it.
+        for element in value if isinstance(value, list) else [value]:
+            check_eu_range(node_id, element, engineering.get(node_id))
+        bound = bounds.get(index)
+        if bound is not None and bound.max_change is not None:
+            check_max_change(node_id, value, bound, current.get(index))
 
 
 def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:

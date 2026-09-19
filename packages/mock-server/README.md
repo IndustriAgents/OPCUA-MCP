@@ -22,6 +22,18 @@ A comprehensive mockup OPC UA server for industrial control systems, featuring r
 - **Conveyor Speed** - Conveyor belt speed percentage (0-100%)
 - **Alarm Active** - System alarm status (Boolean)
 
+### 🧪 **Scratch Variables** (Read/Write, never simulated)
+- **ScratchDouble** (`ns=2;i=41`) and **ScratchBoolean** (`ns=2;i=42`) — written
+  and read back by tests. Every other writable node is an actuator the simulation
+  republishes from its own state once a second, so writing one and reading it back
+  races a timer.
+- **ScratchAnalog** (`ns=2;i=90`) — the one node that says what its number
+  *means*. An OPC UA `AnalogItemType` (Part 8 §5.3) publishing `EngineeringUnits`
+  (°C), `EURange` (0 to 150) and `InstrumentRange` (-50 to 250). The two ranges
+  are deliberately different, so a test can tell which one the MCP servers
+  enforce on a write. Its node id is fixed rather than assigned in sequence, so
+  adding a node above it cannot renumber it.
+
 ### 📊 **System Status** (Mixed)
 - **System Mode** - Operation mode: MANUAL, AUTO, MAINTENANCE (Read/Write)
 - **Emergency Stop** - Emergency stop status (Read/Write)

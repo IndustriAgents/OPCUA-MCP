@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .contract import CONTRACT
@@ -71,14 +72,116 @@ def _load_policy_file(path: str | None) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class ValueBound:
+    """What an allowlisted node may be written, beyond being the right node.
+
+    Node identity was the whole of write authorization, and it is the weakest
+    link in the safety story: a model that correctly identified the right
+    setpoint and hallucinated ``9999`` instead of ``99.9`` was fully authorized.
+    The variant codec range-checks integers and refuses a lossy Int64, but that
+    is *type* safety — ``9999`` is a perfectly good Double.
+
+    ``minimum``, ``maximum`` and ``allowed`` are checked by
+    :meth:`ToolPolicy.authorize`, before the OPC UA network is touched at all.
+    ``max_change`` cannot be: it is a bound on the *move*, so it needs the node's
+    current value, and it is enforced in the write path where that read already
+    happens.
+    """
+
+    minimum: float | None = None
+    maximum: float | None = None
+    #: The only values this node accepts. Numbers, strings or booleans — a
+    #: discrete node is usually the latter two.
+    allowed: tuple[Any, ...] | None = None
+    #: The largest absolute difference from the node's current value one write
+    #: may make.
+    max_change: float | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return (
+            self.minimum is None
+            and self.maximum is None
+            and self.allowed is None
+            and self.max_change is None
+        )
+
+
+_BOUND_KEYS = {"node", "min", "max", "enum", "max_change"}
+
+
+def _value_bound(entry: Any) -> tuple[str, ValueBound]:
+    """One ``writable_nodes`` entry as (node id, bound).
+
+    A bare string stays legal and carries no bound, so every policy file written
+    before this existed keeps working and means exactly what it meant.
+    """
+    if isinstance(entry, str):
+        return entry, ValueBound()
+    if not isinstance(entry, Mapping):
+        raise ValueError(
+            f"writable_nodes entry must be a node id or an object, got {type(entry).__name__}"
+        )
+    unknown = set(entry) - _BOUND_KEYS
+    if unknown:
+        # Loud, because the failure it prevents is silent: an operator who writes
+        # "minimum" instead of "min" believes a bound is in force and none is.
+        raise ValueError(
+            f"Unknown key in a writable_nodes entry: {sorted(unknown)[0]}. "
+            f"Use one of: {', '.join(sorted(_BOUND_KEYS))}"
+        )
+    node = entry.get("node")
+    if not isinstance(node, str) or not node.strip():
+        raise ValueError("A writable_nodes entry must name a node")
+    bound = ValueBound(
+        minimum=_bound_number(entry, "min", node),
+        maximum=_bound_number(entry, "max", node),
+        allowed=_bound_enum(entry, node),
+        max_change=_bound_number(entry, "max_change", node),
+    )
+    if bound.minimum is not None and bound.maximum is not None and bound.minimum > bound.maximum:
+        raise ValueError(f'writable_nodes entry "{node}" has min above max')
+    if bound.max_change is not None and bound.max_change < 0:
+        raise ValueError(f'writable_nodes entry "{node}" has a negative max_change')
+    return node, bound
+
+
+def _bound_number(entry: Mapping[str, Any], key: str, node: str) -> float | None:
+    value = entry.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f'writable_nodes entry "{node}" has a non-numeric {key}')
+    return float(value)
+
+
+def _bound_enum(entry: Mapping[str, Any], node: str) -> tuple[Any, ...] | None:
+    values = entry.get("enum")
+    if values is None:
+        return None
+    if not isinstance(values, list) or not values:
+        raise ValueError(f'writable_nodes entry "{node}" has an empty or non-list enum')
+    return tuple(values)
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     profile: str
     allowed_tools: frozenset[str] | None
     writable_nodes: frozenset[str]
+    #: Per-node value bounds, keyed by the allowlist entry exactly as written.
+    #: Resolved against the live NamespaceArray at check time, the same way the
+    #: identity allowlist is, so an ``nsu=`` entry follows a renumbered server.
+    value_bounds: Mapping[str, ValueBound]
     callable_methods: frozenset[str]
     acknowledge_alarms: bool
     allow_insecure_control: bool
     secure_channel: bool
+    #: Whether a write outside the range the OPC UA server itself published
+    #: (``EURange``) is allowed through. Refused by default: a bound the
+    #: equipment declares is worth more than one a human retyped, and it is the
+    #: only value bound that exists on a deployment with no policy file at all.
+    allow_out_of_range_writes: bool
 
 
 def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
@@ -101,9 +204,21 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     else:
         allowed_tools = None
 
+    # The environment variable is a comma-separated list of node ids and can
+    # carry no bounds; a bounded node needs the policy file. Setting it replaces
+    # the file's list outright rather than merging, as every other override here
+    # does — a half-overridden allowlist is the kind of thing nobody can reason
+    # about at three in the morning.
     writable = _csv(_value(env, "OPCUA_ALLOWED_WRITE_NODES"))
     if writable is None:
         writable = control.get("writable_nodes", [])
+    if not isinstance(writable, list):
+        raise ValueError("OPCUA_POLICY_FILE control.writable_nodes must be a list")
+    bounds: dict[str, ValueBound] = {}
+    for entry in writable:
+        node, bound = _value_bound(entry)
+        bounds[node] = bound
+    writable = list(bounds)
 
     method_env = _csv(_value(env, "OPCUA_ALLOWED_METHODS"))
     if method_env is None:
@@ -127,16 +242,23 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
         "OPCUA_ALLOW_INSECURE_CONTROL",
         bool(file.get("allow_insecure_control", False)),
     )
+    allow_out_of_range = _boolean(
+        _value(env, "OPCUA_ALLOW_OUT_OF_RANGE_WRITES"),
+        "OPCUA_ALLOW_OUT_OF_RANGE_WRITES",
+        bool(file.get("allow_out_of_range_writes", False)),
+    )
     security_policy = _value(env, "OPCUA_SECURITY_POLICY") or "None"
 
     return PolicyConfig(
         profile=profile,
         allowed_tools=allowed_tools,
         writable_nodes=frozenset(writable),
+        value_bounds=MappingProxyType(bounds),
         callable_methods=frozenset(method_env),
         acknowledge_alarms=acknowledge,
         allow_insecure_control=allow_insecure,
         secure_channel=security_policy.lower() != "none",
+        allow_out_of_range_writes=allow_out_of_range,
     )
 
 
@@ -163,6 +285,85 @@ def values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
         return values_at(nested, rest) if isinstance(nested, Mapping) else []
     value = arguments.get(head)
     return [value] if isinstance(value, str) else []
+
+
+def pairs_at(arguments: Mapping[str, Any], spec: Mapping[str, str]) -> list[tuple[str, Any]]:
+    """Every (node id, value) a ``valuePaths`` declaration selects, element-wise.
+
+    Unlike :func:`values_at`, which flattens because it only has to *collect*
+    ids, this has to keep each target with the value aimed at it: a batch write
+    is a list of independent (where, what) pairs and checking them crosswise
+    would authorise a value against the wrong node's bound.
+
+    An element carrying no node id yields nothing. That is not a hole — the node
+    id is ``required`` by the contract schema and the identity allowlist has
+    already refused a write whose target cannot be located.
+    """
+    items = arguments.get(spec["array"])
+    if not isinstance(items, list):
+        return []
+    found: list[tuple[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        node_id = item.get(spec["nodeIdField"])
+        if isinstance(node_id, str):
+            found.append((node_id, item.get(spec["valueField"])))
+    return found
+
+
+def as_number(value: Any) -> float | None:
+    """``value`` as a number for comparison, or None if it is not one.
+
+    A string is parsed, because the write path accepts one for a numeric node
+    and parses it — ``"42.5"`` reaches the plant as 42.5, so a bound that did not
+    look inside the string would be trivially bypassed by quoting the number.
+
+    A boolean is not a number here even though Python says it is. ``True`` is not
+    1 to an operator writing a bound, and letting it compare as one is the same
+    coercion the typed-argument work removed from method calls.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def format_number(value: float) -> str:
+    """A number as a refusal should read it: 100 rather than 100.0.
+
+    ``format_number`` in ``policy.ts`` is the other half, and the two must agree
+    character for character — the refusals they build are compared by
+    ``tests/e2e/test_runtime_differential.py``.
+    """
+    if value == float("inf"):
+        return "infinity"
+    if value == float("-inf"):
+        return "-infinity"
+    if float(value).is_integer() and abs(value) < 1e16:
+        return str(int(value))
+    return repr(float(value))
+
+
+def _same_json_value(value: Any, candidate: Any) -> bool:
+    """Whether a written value is one of an ``enum`` entry.
+
+    Booleans and numbers are kept apart deliberately (``True`` is not 1), and a
+    numeric string matches a numeric entry, because the write path parses it and
+    the plant sees the number.
+    """
+    if isinstance(value, bool) or isinstance(candidate, bool):
+        return value is candidate
+    if isinstance(candidate, (int, float)):
+        number = as_number(value)
+        return number is not None and number == float(candidate)
+    return value == candidate
 
 
 class ToolPolicy:
@@ -288,6 +489,13 @@ class ToolPolicy:
             for node_id in found:
                 self._require_writable(node_id)
 
+        # And what is being written, not only where. Node identity was the whole
+        # of write authorization, and a model that correctly identified the right
+        # setpoint and hallucinated 9999 instead of 99.9 was fully authorized.
+        for spec in guard.get("valuePaths", []):
+            for node_id, value in pairs_at(arguments, spec):
+                self._require_value_allowed(node_id, value)
+
         for pair in guard.get("methodPaths", []):
             objects = values_at(arguments, pair["objectPath"])
             methods = values_at(arguments, pair["methodPath"])
@@ -349,6 +557,77 @@ class ToolPolicy:
         wanted = self._resolve(node_id)
         if wanted is None or wanted not in self._resolved_set(self.config.writable_nodes):
             raise PermissionError(message("nodeNotWritable", node_id=node_id))
+
+    def bound_for(self, node_id: str) -> ValueBound | None:
+        """The operator's value bound for ``node_id``, or None if it has none.
+
+        Resolved rather than compared literally, for the same reason
+        :meth:`_require_writable` is: ``nsu=…;i=5`` and ``ns=2;i=5`` are the same
+        node on a server that publishes that URI at index 2, and a bound that
+        only matched one spelling would be a bound an operator believes is in
+        force and is not.
+
+        Public because the write path needs it too: ``max_change`` is a bound on
+        the *move*, so it can only be checked against the node's current value,
+        which is a read and does not belong in the authorization layer.
+        """
+        wanted = self._resolve(node_id)
+        if wanted is None:
+            return None
+        for entry, bound in self.config.value_bounds.items():
+            if not bound.is_empty and self._resolve(entry) == wanted:
+                return bound
+        return None
+
+    def _require_value_allowed(self, node_id: str, value: Any) -> None:
+        """Check one write against the operator's bound for its target.
+
+        Everything here is decidable without touching the network, which is what
+        keeps it in the authorization layer: a refusal happens before a single
+        byte is sent, so a batch can never end up partially applied — the same
+        property the identity allowlist already had.
+        """
+        bound = self.bound_for(node_id)
+        if bound is None:
+            return
+        # An array write is checked element by element. Writing [0, 9999] to a
+        # bounded node is writing 9999 to it.
+        for element in value if isinstance(value, list) else [value]:
+            self._check_one(node_id, element, bound)
+
+    def _check_one(self, node_id: str, value: Any, bound: ValueBound) -> None:
+        if bound.allowed is not None and not any(
+            _same_json_value(value, candidate) for candidate in bound.allowed
+        ):
+            raise PermissionError(
+                message(
+                    "valueNotAllowed",
+                    value=json.dumps(value),
+                    node_id=node_id,
+                    allowed=", ".join(json.dumps(item) for item in bound.allowed),
+                )
+            )
+        if bound.minimum is None and bound.maximum is None:
+            return
+        number = as_number(value)
+        if number is None:
+            raise PermissionError(
+                message("valueNotComparable", node_id=node_id, value=json.dumps(value))
+            )
+        low = bound.minimum if bound.minimum is not None else float("-inf")
+        high = bound.maximum if bound.maximum is not None else float("inf")
+        if not low <= number <= high:
+            raise PermissionError(
+                message(
+                    "valueOutOfRange",
+                    value=format_number(number),
+                    node_id=node_id,
+                    low=format_number(low),
+                    high=format_number(high),
+                    unit="",
+                    source="the operator policy",
+                )
+            )
 
 
 @lru_cache(maxsize=1)

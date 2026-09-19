@@ -92,7 +92,12 @@ outcome than "it could not do that".
   "profile": "operator",
   "allowed_tools": ["read_opcua_nodes", "write_opcua_nodes", "call_opcua_method"],
   "control": {
-    "writable_nodes": ["nsu=urn:plant:line-a;s=Line1.SpeedSetpoint"],
+    "writable_nodes": [
+      "nsu=urn:plant:line-a;s=Line1.SpeedSetpoint",
+      { "node": "nsu=urn:plant:line-a;s=Line1.Temperature", "min": 0, "max": 120 },
+      { "node": "nsu=urn:plant:line-a;s=Line1.Mode", "enum": ["AUTO", "MANUAL"] },
+      { "node": "nsu=urn:plant:line-a;s=Line1.Pressure", "max_change": 0.5 }
+    ],
     "callable_methods": [
       { "object_id": "nsu=urn:plant:line-a;s=Line1", "method_id": "nsu=urn:plant:line-a;s=Line1.Reset" }
     ],
@@ -103,6 +108,55 @@ outcome than "it could not do that".
 
 Point `OPCUA_POLICY_FILE` at it. Environment variables override the file, so a
 deployment can ship one policy and narrow it per host.
+
+### Bounding the value, not only the node
+
+Node identity is not the whole of a write. A model that has correctly identified
+the right setpoint and hallucinated `9999` instead of `99.9` is fully authorised
+by an allowlist — and for the one product category where a wrong number is a
+physical event, that was the weakest link in this document.
+
+Two bounds now apply, and they are not alternatives:
+
+**The one the plant already published.** An OPC UA `AnalogItemType` carries an
+`EURange`: the range Part 8 §5.3 defines as what the value holds *in normal
+operation*. Both servers read it, report it on every reading (`engineering` in
+`resultShapes.nodeValues`), and **refuse a write outside it before anything is
+sent**. This needs no policy file and no configuration: the equipment set the
+bound, which beats one a human retyped into JSON and has to keep in step.
+`OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true` turns it off for the deployments —
+commissioning, forcing a value during a test — that have to write outside normal
+operation on purpose.
+
+**The one the operator writes.** A `writable_nodes` entry may be an object
+instead of a bare node id:
+
+| Key | Means |
+|---|---|
+| `min` / `max` | Inclusive bounds. Either may be omitted for an open end |
+| `enum` | The only values this node accepts. Numbers, strings or booleans |
+| `max_change` | The largest move one write may make from the node's current value |
+
+A bare string stays legal and carries no bound, so a policy file written before
+this existed means exactly what it meant.
+
+Three properties worth knowing about them:
+
+- **Both apply, so the policy can only ever narrow.** A `max` above the server's
+  `EURange` does not widen anything; the write still has to satisfy both.
+- **`min`, `max` and `enum` are checked before the network is touched.** They are
+  decidable from the call alone, so a refusal happens with nothing sent —
+  the same property the identity allowlist has. `max_change` is a bound on the
+  *move*, so it needs the node's current value and is checked in the write path;
+  a node that cannot be read cannot carry one.
+- **A batch is still all-or-nothing.** One out-of-bounds value rejects the whole
+  call, exactly as one forbidden target does.
+
+A bound is resolved against the live NamespaceArray like everything else here, so
+write it `nsu=…` for the same reason the allowlist is written that way. A
+malformed entry — `"minimum"` for `"min"`, a `min` above its `max` — is refused at
+startup rather than ignored: an operator who believes a bound is in force and has
+none finds out when a write that should have been refused reaches the plant.
 
 **Write the allowlist with `nsu=<namespace-uri>;…`, not `ns=<index>;…`.** A
 namespace *index* is that node's position in the server's NamespaceArray for the

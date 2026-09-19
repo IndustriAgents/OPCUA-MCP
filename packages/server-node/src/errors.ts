@@ -20,6 +20,17 @@ export const TEMPLATES: Record<string, string> = Object.fromEntries(
   Object.entries(CONTRACT.errors).filter(([key]) => !key.startsWith("$"))
 ) as Record<string, string>;
 
+/** A refusal this server has already worded from the contract.
+ *
+ * Marked so the layers above can tell it from a failure that came back *from*
+ * the OPC UA server. `write_opcua_nodes` wraps anything that goes wrong in
+ * "Failed to write nodes: …", which is right for a status code the plant
+ * returned and wrong for a value this server declined to send — that framing
+ * says the plant rejected it, when the point of the refusal is that nothing
+ * reached the plant at all. Python's `ToolError` plays the same part there.
+ */
+export class ContractRefusal extends Error {}
+
 /** One contract error message with its placeholders filled in.
  *
  * An unknown key throws rather than returning something placeholder-shaped: a

@@ -417,6 +417,12 @@
     "minBufferSize": 1,
     "maxBufferSize": 1000
   },
+  "transport": {
+    "$comment": "Bounds on what the OPC UA server on the other end may send us, advertised in the OPC UA Hello and enforced on receipt. CVE-2022-25304 is a missing limit on the number of chunks one message may be split into: python-opcua appends every intermediate chunk to a list with nothing counting them, so a hostile or compromised server can stream chunks until the client runs out of memory. The advisory has no fixed version and will not get one — python-opcua is unmaintained, and the same advisory names asyncua. Both runtimes therefore advertise these bounds and, because advertising only binds a server that chooses to obey, enforce them on what actually arrives. maxChunkCount * maxChunkSize is the largest message either runtime will assemble: 1024 * 64KiB = 64MiB, which is far above any real OPC UA response and far below a memory-exhaustion attack. See SECURITY.md.",
+    "maxChunkCount": 1024,
+    "maxChunkSize": 65536,
+    "maxMessageSize": 67108864
+  },
   "limits": {
     "$comment": "Bounds on how much one call may ask for, here rather than written out in each runtime. Like traversal's caps these are refusals rather than tuning knobs: browse was bounded from the start because an unbounded walk of a plant address space is a request that never returns, and the same was true of a raw history read over a year of 100ms data, of a batch read with no length, and of a subscribe that asks a PLC for one subscription per node with nothing counting them. maxHistoryValues is also what num_values: 0 now means — 'as many as allowed', not 'every reading in the range'.",
     "maxNodesPerRead": 500,

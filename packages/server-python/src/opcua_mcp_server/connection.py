@@ -40,8 +40,16 @@ from .contract import NAMESPACE_ARRAY_NODE_ID
 from .errors import message
 from .policy import tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
+from .transport_limits import install_receive_guard
 
 T = TypeVar("T")
+
+# Bound what a server may send before any client exists. python-opcua reassembles
+# a chunked message into a list with nothing counting it, so a server that never
+# terminates the message exhausts this process (CVE-2022-25304, no fixed version,
+# unmaintained library). See transport_limits.py for what the guard does and why
+# it is a patch.
+install_receive_guard()
 
 #: OPC UA status codes and socket errors that mean "the session is gone".
 #:

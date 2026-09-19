@@ -52,6 +52,7 @@ import {
 } from "./subscriptions.js";
 import { ToolPolicy, toolPolicy, valuesAt } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
+import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
 const ROOT_FOLDER = "ns=0;i=84";
@@ -319,6 +320,7 @@ function auditDecision(
   name: string,
   args: Record<string, unknown>,
   decision: "allowed" | "denied" | "failed" | "completed",
+  callId: string,
   reason?: string
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
@@ -327,6 +329,9 @@ function auditDecision(
     JSON.stringify({
       event: "opcua_mcp_policy",
       timestamp: new Date().toISOString(),
+      // Second, so it is next to the timestamp in the line an operator reads and
+      // can be grepped for to pull one call's whole story out of a shipped log.
+      call_id: callId,
       profile: policy.config.profile,
       tool: name,
       decision,
@@ -334,6 +339,24 @@ function auditDecision(
       ...(reason ? { reason } : {}),
     })
   );
+}
+
+/** An id for one tool call, to tie its audit lines together.
+ *
+ * Every control call writes two lines — `allowed` before it, then `completed` or
+ * `failed` after — and without this there was nothing linking them. Both runtimes
+ * serve calls concurrently, so two overlapping writes produced four interleaved
+ * lines and no way to say which pairs; where the targets happened to match (the
+ * same node written twice) they were not even distinguishable by content. For a
+ * trail whose purpose is "which control call reached the plant and did it land",
+ * that was the one missing field.
+ *
+ * Random rather than a counter: it never needs to be meaningful or ordered, only
+ * unique within a process, and a counter would invite reading it as a total. The
+ * Python half uses `secrets.token_hex(8)`, which is the same sixteen hex digits.
+ */
+export function newCallId(): string {
+  return randomBytes(8).toString("hex");
 }
 
 export class OpcuaTools {
@@ -556,6 +579,7 @@ export class OpcuaTools {
   /** Serve a tools/call request: authorize it, then run it on a live session. */
   async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
     const { name, arguments: args } = request.params;
+    const callId = newCallId();
     let authorized = false;
 
     try {
@@ -578,13 +602,14 @@ export class OpcuaTools {
       try {
         this.policy.authorize(name, args ?? {});
         authorized = true;
-        auditDecision(this.policy, name, args ?? {}, "allowed");
+        auditDecision(this.policy, name, args ?? {}, "allowed", callId);
       } catch (error) {
         auditDecision(
           this.policy,
           name,
           args ?? {},
           "denied",
+          callId,
           error instanceof Error ? error.message : String(error)
         );
         throw error;
@@ -623,13 +648,13 @@ export class OpcuaTools {
       // different facts, and the gap between them is where a control call that
       // reached the plant and then failed lives — which is the one an operator
       // most needs to find afterwards.
-      auditDecision(this.policy, name, args ?? {}, "completed");
+      auditDecision(this.policy, name, args ?? {}, "completed", callId);
       return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
-      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", reason);
+      if (authorized) auditDecision(this.policy, name, args ?? {}, "failed", callId, reason);
       // No "Error: " prefix. `isError` already says it is one, and the Python
       // runtime returns the bare message — so prefixing here made every failure
       // read two ways depending on which runtime a client had started.

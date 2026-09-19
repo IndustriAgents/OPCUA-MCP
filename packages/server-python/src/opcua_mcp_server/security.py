@@ -24,6 +24,8 @@ from cryptography import x509
 from opcua import Client, ua
 from opcua.crypto import security_policies, uacrypto
 
+from .transport_limits import advertise_limits
+
 #: Policies this runtime can negotiate — the four both runtimes share.
 POLICIES = ("None", "Basic128Rsa15", "Basic256", "Basic256Sha256")
 
@@ -333,6 +335,10 @@ def create_client(url: str) -> Client:
     talk to the server. Call it off the event loop.
     """
     client = Client(url)
+    # Before anything is sent: these go out in the Hello, and python-opcua's own
+    # defaults are 0, which tells the server this client will accept a message of
+    # any size in any number of chunks.
+    advertise_limits(client)
     config = security_config()
 
     certificate_uri = (

@@ -43,6 +43,15 @@ Which servers and operations the test suite exercises, and which are only
 reported by users, is set out in
 **[docs/compatibility.md](docs/compatibility.md)**.
 
+**One process talks to one endpoint.** `OPCUA_SERVER_URL` is read once at
+startup, every tool targets it, and the only transport is stdio — so the server
+runs beside the MCP client that started it, and each client gets its own OPC UA
+session. That is the right shape for an engineer at a workstation, which is what
+this is built for. A site with five PLCs runs five entries in the client config,
+and if OPC UA sessions are a licensed resource on your equipment, count on one
+per client per endpoint. What it would take to be a shared plant-wide gateway
+instead is set out in the [roadmap](ROADMAP.md#considered-and-set-aside).
+
 ```mermaid
 flowchart LR
     A["AI client<br/>(Claude Desktop / Code / Cursor)"] -->|MCP over stdio| B["OPC UA MCP Server<br/>(Python or Node)"]

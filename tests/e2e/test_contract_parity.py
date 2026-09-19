@@ -14,6 +14,7 @@ Run as part of the normal suite:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 
 import pytest
@@ -43,10 +44,18 @@ EXPECTED = {
 AGGREGATE_ONLY_PARAMS = {"aggregate_function", "processing_interval"}
 
 
-def _expected_props_required(spec: dict) -> tuple[set[str], set[str]]:
-    """The contract's schema for `spec`, minus what this mock cannot support."""
-    props, required = _props_required(spec["inputSchema"])
-    return props - AGGREGATE_ONLY_PARAMS, required - AGGREGATE_ONLY_PARAMS
+def _expected_schema(spec: dict) -> dict:
+    """The contract's input schema for `spec`, minus what this mock cannot support.
+
+    A deep copy, because the aggregate-only arguments are removed from it: this
+    mock advertises no aggregate functions, so neither runtime may offer them.
+    """
+    schema = copy.deepcopy(spec["inputSchema"])
+    for argument in AGGREGATE_ONLY_PARAMS:
+        schema.get("properties", {}).pop(argument, None)
+        if argument in schema.get("required", []):
+            schema["required"].remove(argument)
+    return schema
 
 
 # Resources are not capability-gated: both servers advertise all of them always.
@@ -118,40 +127,6 @@ def assert_matches_result_shape(records: list[dict], shape_name: str, context: s
             )
 
 
-def _props_required(schema: dict) -> tuple[set, set]:
-    schema = schema or {}
-    return set(schema.get("properties", {})), set(schema.get("required", []))
-
-
-def _declared_types(schema: dict) -> dict[str, set]:
-    """Each property's advertised JSON-Schema type(s), for those that declare any.
-
-    Compared across runtimes because the *type* is as much a part of the wire
-    contract as the name: the Python server derives its schema from the function
-    annotations, so an `int` where the contract says `number` both advertises a
-    different schema and makes the SDK reject an input the Node server accepts.
-
-    A set rather than one name, because `MCPServer` renders an optional
-    `T | None` parameter as `anyOf: [{type: T}, {type: "null"}]` and not as a
-    bare `type`. The contract declares the type of the *value*; "or null" is
-    just how one runtime spells "you may omit this". Properties neither side
-    types are skipped rather than guessed at.
-    """
-    types = {}
-    for name, spec in (schema or {}).get("properties", {}).items():
-        names = set()
-        declared = spec.get("type")
-        if declared is not None:
-            names |= {declared} if isinstance(declared, str) else set(declared)
-        for branch in [*spec.get("anyOf", []), *spec.get("oneOf", [])]:
-            branch_type = branch.get("type")
-            if branch_type is not None:
-                names |= {branch_type} if isinstance(branch_type, str) else set(branch_type)
-        if names:
-            types[name] = names
-    return types
-
-
 @pytest.fixture(params=["python", "node"])
 def impl_params(request, opcua_server):
     impl = request.param
@@ -172,10 +147,16 @@ async def test_servers_match_contract(impl_params):
         f"missing={set(EXPECTED) - set(advertised)} extra={set(advertised) - set(EXPECTED)}"
     )
 
-    # 2) Description + parameter parity per tool. Descriptions must match exactly
-    #    (both servers source them from the contract). Schemas are compared by
-    #    property names + required set to tolerate FastMCP vs node-opcua schema
-    #    representation differences while still catching real parameter drift.
+    # 2) Description + schema parity per tool, compared *whole*.
+    #
+    #    This used to compare property names, the required set and each property's
+    #    declared type, which is what let the real divergence through: the Python
+    #    server derived its schema from the function signature, so every parameter
+    #    description in the contract and every nested structure was missing from
+    #    it — `write_opcua_nodes.nodes` advertised as "an array of object" against
+    #    a contract naming `node_id`, `value` and the fifteen legal `data_type`
+    #    spellings. Top-level names matched, so it passed. Both runtimes now
+    #    advertise the contract's own schema, so the assertion is equality.
     for name, spec in EXPECTED.items():
         tool = advertised[name]
         assert tool.description == spec["description"], (
@@ -184,26 +165,9 @@ async def test_servers_match_contract(impl_params):
         # `inputSchema` on the wire, `input_schema` on the SDK's model. Read the
         # attribute directly rather than via `getattr(..., {})`, so another rename
         # in the SDK fails here instead of quietly comparing against an empty set.
-        want_props, want_req = _expected_props_required(spec)
-        got_props, got_req = _props_required(tool.input_schema or {})
-        assert got_props == want_props, (
-            f"{impl}/{name}: params {got_props} != contract {want_props}"
+        assert tool.input_schema == _expected_schema(spec), (
+            f"{impl}/{name}: advertised inputSchema differs from the contract's"
         )
-        assert got_req == want_req, f"{impl}/{name}: required {got_req} != contract {want_req}"
-
-        # Types too. Without this, `buffer_size: int` on the Python side passed
-        # while advertising `integer` against the contract's `number` — and
-        # rejected a `7.9` the Node server happily truncated.
-        want_types = _declared_types(spec["inputSchema"])
-        got_types = _declared_types(tool.input_schema or {})
-        for prop, wanted in want_types.items():
-            if prop in AGGREGATE_ONLY_PARAMS:
-                continue
-            offered = got_types.get(prop, set())
-            assert wanted <= offered, (
-                f"{impl}/{name}.{prop}: advertises {sorted(offered)}, "
-                f"which does not cover the contract's {sorted(wanted)}"
-            )
 
         if shape_name := spec.get("resultShape"):
             assert tool.output_schema == {

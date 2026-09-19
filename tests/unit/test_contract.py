@@ -8,7 +8,9 @@ actually advertised; these checks are on the file itself and run in milliseconds
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -364,3 +366,119 @@ def test_a_shallow_path_yields_the_bundled_copy_rather_than_raising():
 
 def test_the_real_contract_is_loadable_from_this_checkout():
     assert load_contract()["tools"]
+
+
+# --- the error surface ------------------------------------------------------
+
+
+ERROR_TEMPLATES = {k: v for k, v in CONTRACT["errors"].items() if not k.startswith("$")}
+ERROR_IDS = sorted(ERROR_TEMPLATES)
+
+
+@pytest.mark.parametrize("key", ERROR_IDS)
+def test_error_template_is_a_non_empty_sentence(key):
+    template = ERROR_TEMPLATES[key]
+    assert isinstance(template, str) and template.strip(), f"errors.{key} is empty"
+    # `{` and `}` only ever delimit a placeholder here: both runtimes substitute
+    # by pattern, so a stray brace would be silently left in an operator's face.
+    assert template.count("{") == template.count("}"), f"errors.{key} has an unbalanced brace"
+
+
+@pytest.mark.parametrize("key", ERROR_IDS)
+def test_error_template_is_used_by_both_runtimes(key):
+    """Every template is reached from both servers, or it is dead wording.
+
+    A template only one runtime uses is the divergence this block was added to
+    remove, reintroduced one key at a time.
+    """
+    python_sources = " ".join(
+        path.read_text()
+        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").glob("*.py")
+    )
+    node_sources = " ".join(
+        path.read_text() for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
+    )
+    assert f'"{key}"' in python_sources, f"errors.{key} is never used by the Python server"
+    assert f'"{key}"' in node_sources, f"errors.{key} is never used by the Node server"
+
+
+def _python_string_literals(path: Path) -> list[str]:
+    """Every string constant in a Python file that is not a docstring.
+
+    Parsed rather than grepped: the first version of this check was a substring
+    scan and it flagged the *docstring* that explains the bug, which is precisely
+    the kind of false positive that gets a useful test deleted.
+    """
+    tree = ast.parse(path.read_text())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+def _typescript_string_literals(path: Path) -> list[str]:
+    """Every quoted or backticked run in a TypeScript file, comments removed.
+
+    Crude next to a parser, and enough: block comments and `//` lines are what
+    carry the prose that would otherwise look like an inlined message.
+    """
+    text = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.DOTALL)
+    text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+    matches = re.findall(r"\"([^\"\n]*)\"|'([^'\n]*)'|`([^`]*)`", text)
+    return [group for match in matches for group in match if group]
+
+
+#: Fragments that must only ever reach a client through contract.errors. Each was
+#: a literal in both runtimes before the errors block existed.
+SHARED_MESSAGE_FRAGMENTS = (
+    "Failed to read nodes",
+    "Failed to write nodes",
+    "No such subscription",
+    "is disabled by OPCUA_PROFILE",
+    "is not writable under the operator policy",
+)
+
+
+def test_no_runtime_still_carries_its_own_copy_of_a_message():
+    """The literals the errors block replaced must not grow back.
+
+    Checked as source rather than by behaviour because that is how they came back
+    last time: a message is easy to inline again while every test still passes,
+    and the framing divergence this closes — one runtime saying "Error executing
+    tool X: ..." where the other said the bare sentence — was invisible for
+    exactly that reason.
+    """
+    sources = [
+        (path, _python_string_literals(path))
+        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").glob("*.py")
+        if path.name != "errors.py"
+    ] + [
+        (path, _typescript_string_literals(path))
+        for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
+        if path.name != "errors.ts"
+    ]
+
+    offenders = [
+        f"{path.name}: {literal!r}"
+        for path, literals in sources
+        for literal in literals
+        for fragment in SHARED_MESSAGE_FRAGMENTS
+        if fragment in literal
+    ]
+    assert not offenders, (
+        f"these messages are inlined again instead of coming from contract.errors: {offenders}"
+    )

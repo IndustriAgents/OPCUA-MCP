@@ -37,6 +37,7 @@ from opcua import Client
 
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
 from .contract import NAMESPACE_ARRAY_NODE_ID
+from .errors import message
 from .policy import tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
 
@@ -291,10 +292,7 @@ def not_connected_message(url: str, reason: str) -> str:
     one, and it names `get_server_status`, because that is the one tool that
     still answers while the connection is down.
     """
-    return (
-        f"Not connected to the OPC UA server at {url}: {reason}. "
-        f"Call get_server_status for details."
-    )
+    return message("notConnected", url=url, reason=reason)
 
 
 def describe_error(error: BaseException) -> str:

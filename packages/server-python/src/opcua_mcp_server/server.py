@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from opcua import Node, ua
 
@@ -30,6 +30,7 @@ from .connection import (
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
+from .errors import message as error_message
 from .node_ids import canonical_node_id
 from .policy import describe_policy, tool_policy, values_at
 from .records import history_records, scalar_to_json, variant_to_json
@@ -39,6 +40,7 @@ from .subscriptions import (
     unknown_subscription_message,
     unknown_subscriptions_message,
 )
+from .validation import validate_arguments
 from .variant_codec import convert_for_variant
 from .version import package_version
 
@@ -108,6 +110,37 @@ def _audit_decision(name: str, arguments: dict[str, Any], decision: str, reason:
     if reason:
         record["reason"] = reason
     print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
+
+
+#: What ``Tool.run`` puts in front of a ToolError raised inside a tool body.
+_SDK_TOOL_ERROR_PREFIX = "Error executing tool "
+
+
+def _without_sdk_prefix(name: str, error: BaseException) -> BaseException:
+    """A tool failure worded as the contract words it, not as the SDK frames it.
+
+    ``Tool.run`` wraps every anticipated failure as
+    ``Error executing tool <name>: <message>``. The Node server has no such
+    wrapper, so the same refusal reached a model as two different sentences —
+    "No such subscription: sub-1" there and "Error executing tool
+    unsubscribe_opcua_nodes: No such subscription: sub-1" here. No test compared
+    them, because the differential suite only checked that a failure *was* a
+    failure. ``contract/tools.json`` -> ``errors`` now words both, and this is
+    what stops the SDK re-framing one of them.
+
+    ``UnexpectedToolError`` is left exactly as it is: its message deliberately
+    carries nothing but the tool name, because the original was a crash and is
+    withheld from the client on purpose.
+    """
+    if isinstance(error, UnexpectedToolError) or not isinstance(error, ToolError):
+        return error
+    prefix = f"{_SDK_TOOL_ERROR_PREFIX}{name}: "
+    text = str(error)
+    if not text.startswith(prefix):
+        return error
+    unwrapped = ToolError(text[len(prefix) :])
+    unwrapped.__cause__ = error.__cause__
+    return unwrapped
 
 
 #: The one connection the tools, the lifespan and tools/list share. Module-level
@@ -228,39 +261,42 @@ def _capabilities_met(spec: dict) -> bool:
     return not required or bool(set(required) & _available_capabilities())
 
 
-def _advertised_schema(schema: dict, spec: dict) -> dict:
-    """A tool's input schema as advertised, with capability-gated properties removed.
+def _advertised_schema(spec: dict) -> dict:
+    """A tool's input schema as advertised: the contract's own, capability-gated.
 
-    Capability gating moved down a level when the history and aggregate tools
-    merged: ``read_opcua_history`` is advertised whenever the server reports
+    The contract's schema, not the one ``MCPServer`` derives from the function
+    signature. The derived one carries no per-argument descriptions at all and
+    flattens every nested structure — ``write_opcua_nodes`` advertised its
+    ``nodes`` argument as "an array of object" against a contract that names
+    ``node_id``, ``value`` and the fifteen legal ``data_type`` spellings. Tool
+    descriptions matched across the two runtimes while the parameter
+    documentation a model needs in order to *call* the tool did not, and the
+    parity test compared only top-level property names, so it passed.
+
+    The derived schema remains what ``MCPServer`` validates the call against;
+    it is strictly looser than this one, and :func:`validation.validate_arguments`
+    applies the contract's own constraints before either of them sees the call.
+
+    Capability gating then removes what this particular server cannot honour:
+    ``read_opcua_history`` is advertised whenever the server reports
     HistoricalAccess, and its ``aggregate_function`` argument appears only if the
-    server also advertises aggregates — with that server's *own* function list
-    named in the description. An argument the server cannot honour is therefore
-    not merely documented as unsupported; it is not offered, which is the same
-    property tool-level gating had and strictly more informative, because the
-    list is the live one.
+    server also advertises aggregates — carrying that server's *own* function
+    list in its description, which is strictly more informative than documenting
+    the argument as unsupported, because the list is the live one.
     """
-    properties = (schema or {}).get("properties") or {}
+    schema = copy.deepcopy(spec["inputSchema"])
+    properties = schema.get("properties") or {}
     if "aggregate_function" not in properties:
         return schema
 
-    advertised = copy.deepcopy(schema)
     functions = _CAPABILITIES["aggregate_functions"]
     if not functions:
-        advertised["properties"].pop("aggregate_function", None)
-        advertised["properties"].pop("processing_interval", None)
-        return advertised
+        properties.pop("aggregate_function", None)
+        properties.pop("processing_interval", None)
+        return schema
 
-    # The base text comes from the contract, not from this schema: FastMCP builds
-    # the schema from the function *signature*, which carries no per-argument
-    # descriptions at all, so there would otherwise be nothing to append the live
-    # function list to — and the model would be told an aggregate exists without
-    # being told which ones.
-    base = spec["inputSchema"]["properties"]["aggregate_function"]["description"]
-    advertised["properties"]["aggregate_function"]["description"] = (
-        f"{base}, one of: {', '.join(functions)}"
-    )
-    return advertised
+    properties["aggregate_function"]["description"] += f", one of: {', '.join(functions)}"
+    return schema
 
 
 class PolicyMCPServer(MCPServer):
@@ -297,7 +333,7 @@ class PolicyMCPServer(MCPServer):
                     update={
                         "annotations": annotations,
                         "output_schema": output_schema,
-                        "input_schema": _advertised_schema(tool.input_schema, spec),
+                        "input_schema": _advertised_schema(spec),
                     }
                 )
             )
@@ -306,14 +342,23 @@ class PolicyMCPServer(MCPServer):
     async def call_tool(self, name, arguments, context=None):
         arguments = arguments or {}
         try:
+            spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
+            if spec is None:
+                raise ValueError(error_message("unknownTool", tool=name))
+            # Shape before permission: a call that does not match the contract is
+            # not a call this server can reason about, and the policy layer reads
+            # the very arguments being checked here to decide what a write is
+            # aimed at. `MCPServer` would validate later, against the looser
+            # signature-derived schema, and word it differently from the Node
+            # runtime; this is the contract's own schema on both.
+            validate_arguments(name, spec["inputSchema"], arguments)
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             tool_policy().authorize(name, arguments)
             _audit_decision(name, arguments, "allowed")
-            spec = next(tool for tool in CONTRACT["tools"] if tool["name"] == name)
             if not _capabilities_met(spec):
                 raise ToolError(
-                    f"OPC UA server advertises none of: {', '.join(spec['capabilities'])}"
+                    error_message("capabilityMissing", capabilities=", ".join(spec["capabilities"]))
                 )
         except (PermissionError, ValueError) as exc:
             _audit_decision(name, arguments, "denied", str(exc))
@@ -326,8 +371,9 @@ class PolicyMCPServer(MCPServer):
         try:
             result = await self._run_tool(name, arguments, context, spec)
         except Exception as error:
-            _audit_decision(name, arguments, "failed", describe_error(error))
-            raise
+            reported = _without_sdk_prefix(name, error)
+            _audit_decision(name, arguments, "failed", describe_error(reported))
+            raise reported from error.__cause__
         _audit_decision(name, arguments, "completed")
         return result
 
@@ -451,7 +497,7 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
             raised as a `ToolError`.
     """
     if not node_ids:
-        raise ToolError("read_opcua_nodes requires a non-empty node_ids array")
+        raise ToolError(error_message("emptyArray", tool="read_opcua_nodes", argument="node_ids"))
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         nodes = [client.get_node(node_id) for node_id in node_ids]
@@ -463,7 +509,7 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
             for node_id, data_value in zip(node_ids, values, strict=True)
         ]
     except Exception as e:
-        raise ToolError(f"Failed to read nodes: {e!s}") from e
+        raise ToolError(error_message("readFailed", reason=str(e))) from e
 
 
 def read_opcua_history(
@@ -497,10 +543,10 @@ def read_opcua_history(
             )
             return history_records(values)
         except Exception as e:
-            raise ToolError(f"Failed to read history of node {node_id}: {e!s}") from e
+            raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
 
     if start_time is None:
-        raise ToolError("read_opcua_history requires start_time when aggregate_function is given")
+        raise ToolError(error_message("aggregateNeedsStart"))
 
     aggregate_functions = _CAPABILITIES["aggregate_functions"]
     # Both runtimes reject an unsupported function with the same sentence, so the
@@ -527,7 +573,7 @@ def read_opcua_history(
 
         return history_records(result.HistoryData.DataValues)
     except Exception as e:
-        raise ToolError(f"Failed to read history of node {node_id}: {e!s}") from e
+        raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
 
 
 # Registered once; tools/list gates it using the capabilities read from the
@@ -854,7 +900,7 @@ def browse_opcua_nodes(
             _fill_variable_detail(client, found)
         return _object_result({"nodes": found, "truncated": truncated, "inspected": inspected})
     except Exception as e:
-        raise ToolError(f"Failed to browse {root}: {e!s}") from e
+        raise ToolError(error_message("browseFailed", node_id=root, reason=str(e))) from e
 
 
 # --- writing ---------------------------------------------------------------------
@@ -877,7 +923,7 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
             as a `ToolError`.
     """
     if not nodes:
-        raise ToolError("write_opcua_nodes requires a non-empty nodes array")
+        raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         results: list[dict] = [
@@ -945,7 +991,7 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
 
         return results
     except Exception as e:
-        raise ToolError(f"Failed to write nodes: {e!s}") from e
+        raise ToolError(error_message("writeFailed", reason=str(e))) from e
 
 
 def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:
@@ -1044,7 +1090,12 @@ def call_opcua_method(
         )
     except Exception as e:
         raise ToolError(
-            f"Failed to call method {method_node_id} on object {object_node_id}: {e!s}"
+            error_message(
+                "methodFailed",
+                method_node_id=method_node_id,
+                object_node_id=object_node_id,
+                reason=str(e),
+            )
         ) from e
 
 
@@ -1066,7 +1117,9 @@ async def subscribe_opcua_nodes(
             ``resultShapes.subscriptionRecords``.
     """
     if not node_ids:
-        raise ToolError("subscribe_opcua_nodes requires a non-empty node_ids array")
+        raise ToolError(
+            error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
+        )
     records = []
     for node_id in node_ids:
         # `ToolError`, not a bare exception: the SDK forwards a ToolError's
@@ -1084,7 +1137,7 @@ async def subscribe_opcua_nodes(
                 )
             )
         except Exception as e:
-            raise ToolError(f"Failed to subscribe to node {node_id}: {e!s}") from e
+            raise ToolError(error_message("subscribeFailed", node_id=node_id, reason=str(e))) from e
     return records
 
 
@@ -1118,7 +1171,9 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str]) -> list[dict]:
             be read one last time.
     """
     if not subscription_ids:
-        raise ToolError("unsubscribe_opcua_nodes requires a non-empty subscription_ids array")
+        raise ToolError(
+            error_message("emptyArray", tool="unsubscribe_opcua_nodes", argument="subscription_ids")
+        )
     active = {record["subscription_id"] for record in SUBSCRIPTIONS.list()}
     unknown = [entry for entry in subscription_ids if entry not in active]
     if unknown:
@@ -1181,7 +1236,9 @@ def subscribe_events(
     try:
         replaced = _EVENTS.subscribe(client, node_id, severity_min, buffer_size)
     except Exception as e:
-        raise ToolError(f"Failed to subscribe to events from node {node_id}: {e!s}") from e
+        raise ToolError(
+            error_message("eventSubscribeFailed", node_id=node_id, reason=str(e))
+        ) from e
     return _object_result(
         {
             "node_id": canonical_node_id(node_id),
@@ -1206,9 +1263,7 @@ def read_events(
     """
     drained = _EVENTS.drain(node_id, limit or events.DEFAULTS["readLimit"])
     if drained is None:
-        raise ToolError(
-            f"Not subscribed to events from node {node_id}. Call subscribe_events first."
-        )
+        raise ToolError(error_message("notSubscribedToEvents", node_id=node_id))
     records, _remaining, dropped, size = drained
     content = [TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
     if dropped:
@@ -1235,7 +1290,7 @@ def list_active_alarms(
     try:
         alarms = events.list_active_alarms(client, node_id, timeout_seconds)
     except Exception as e:
-        raise ToolError(f"Failed to list active alarms from node {node_id}: {e!s}") from e
+        raise ToolError(error_message("alarmsFailed", node_id=node_id, reason=str(e))) from e
     _EVENTS.remember(alarms)
     return alarms
 
@@ -1255,16 +1310,15 @@ def acknowledge_alarm(
     """
     condition = condition_id or _EVENTS.condition_for(event_id)
     if not condition:
-        raise ToolError(
-            f'Unknown event_id "{event_id}". Call list_active_alarms first, or pass the '
-            "condition_id of the alarm to acknowledge."
-        )
+        raise ToolError(error_message("unknownEventId", event_id=event_id))
 
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         events.acknowledge_alarm(client, condition, event_id, comment)
     except Exception as e:
-        raise ToolError(f"Failed to acknowledge alarm {condition}: {e!s}") from e
+        raise ToolError(
+            error_message("acknowledgeFailed", condition_id=condition, reason=str(e))
+        ) from e
     return _object_result(
         {
             "event_id": event_id,

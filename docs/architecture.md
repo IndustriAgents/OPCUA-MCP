@@ -24,7 +24,27 @@ That interchangeability is not maintained by discipline. It is maintained by
 | | How it uses the contract |
 |---|---|
 | **Node** | Builds its `tools/list` response directly from it. `npm run build` copies it to `build/contract.json` so the npm package is self-contained. |
-| **Python** | Reads tool descriptions and capability node IDs from it. Input schemas are derived by `MCPServer` from the function signatures, and checked against the contract by a test. |
+| **Python** | Builds its `tools/list` response from it too. `MCPServer` still derives a schema from each function signature — that is what it validates the call against — but what is *advertised* is the contract's own. |
+
+For a while the Python half was weaker than that, and it cost exactly what you
+would expect. Its advertised schemas were the signature-derived ones, which
+carry no per-argument descriptions and flatten every nested structure:
+`write_opcua_nodes` offered its `nodes` argument as "an array of object" against
+a contract that names `node_id`, `value` and the fifteen legal `data_type`
+spellings. Tool *descriptions* matched across the runtimes; the parameter
+documentation a model needs in order to call the tool did not. The parity test
+compared top-level property names, `required`, and each property's declared
+type, so it passed. It now compares the whole schema, and both runtimes advertise
+the same document.
+
+Arguments are checked against that same schema before anything else happens, by
+`validation.py` / `validation.ts` — twenty lines each over the six JSON Schema
+keywords the contract actually uses, driven by one shared table
+(`tests/fixtures/argument-validation.json`) that both unit suites run. Before
+that, the Node runtime validated nothing at all (the low-level MCP `Server` does
+not check `arguments` against the advertised `inputSchema`, and the dispatcher
+cast straight off the wire), while the Python runtime validated against the
+looser signature-derived schema and worded the refusal its own way.
 
 The contract also pins what the tools *return*. **Every** tool names a shape
 from `resultShapes` — ten of the seventeen named none until 0.4.0, and for those
@@ -45,9 +65,28 @@ flat records, so a client that learned one misread the other.
 
 `tests/e2e/test_contract_parity.py` starts both servers and asserts each
 advertises exactly the contract's applicable tools, with matching descriptions
-and parameter sets, and that what each actually returns satisfies the declared
-`resultShape`. `tests/unit/test_contract.py` checks the contract file itself is
-well-formed.
+and byte-identical input schemas, and that what each actually returns satisfies
+the declared `resultShape`. `tests/unit/test_contract.py` checks the contract
+file itself is well-formed.
+
+### Failures are part of the surface too
+
+`resultShapes` pins what a tool returns when it works. Nothing pinned what it
+returns when it does not, and the two runtimes had drifted: the Node server
+wrapped every failure as `Error: <message>`, and the Python SDK wraps a
+`ToolError` raised inside a tool body as `Error executing tool <name>: <message>`
+— so one refusal reached a model as three different sentences depending on which
+runtime and which code path produced it. The differential suite compared
+*substrings*, which is how it survived being looked at.
+
+`contract/tools.json` -> `errors` is now the wording, `errors.py` / `errors.ts`
+only substitute into it, and neither runtime adds a frame of its own: `isError`
+already says it is an error. `test_runtime_differential.py` drives a table of
+failing calls through both servers and asserts the full text is equal. That
+table is also what found the two behavioural differences behind the wording —
+the Node runtime never re-checked capability gating at invocation time, and its
+`read_opcua_history` reported "requires start_time" as a failure to *read* a node
+it had not touched.
 
 **Adding a tool** therefore means editing the contract, adding the per-tool logic
 in each runtime, and adding a test — see [CONTRIBUTING.md](../CONTRIBUTING.md).
@@ -111,6 +150,10 @@ method allowlists, and validates every member of a batch before the OPC UA call.
 unless the OPC UA channel is secured or a conspicuous lab-only override is set.
 An optional versioned JSON policy makes the same rules deployable through normal
 configuration management; environment variables can narrow or override it.
+
+Capability is re-checked at invocation time as well, for the same reason policy
+is: a client may hold a `tools/list` from when the server still reported
+HistoricalAccess.
 
 Tool visibility is the intersection of policy and server capability:
 
@@ -262,17 +305,20 @@ green, so both are built and driven over MCP in `tests/smoke/`. See
 ## Layout
 
 ```
-contract/tools.json          single source of truth for the tool + resource surface
+contract/tools.json          single source of truth for the tool + resource surface,
+                             including every failure message and result shape
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records
                              · subscriptions · events · connection
-                             · diagnostics · version · install · cli · server
+                             · diagnostics · errors · validation
+                             · version · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
                              · subscriptions · events · connection
-                             · diagnostics · tools · install · index · sea
+                             · diagnostics · errors · validation
+                             · tools · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
 packages/mock-server/        simulated PLC/sensors (:4840, no aggregates)

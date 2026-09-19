@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import CONTRACT
+from .errors import message
 from .node_ids import namespace_uri_form, resolve_node_id
 
 PROFILES = ("observe", "operator", "full")
@@ -260,11 +261,9 @@ class ToolPolicy:
         arguments = arguments or {}
         tool = self._tools.get(name)
         if tool is None:
-            raise ValueError(f"Unknown tool: {name}")
+            raise ValueError(message("unknownTool", tool=name))
         if not self.is_visible(tool):
-            raise PermissionError(
-                f'Tool "{name}" is disabled by OPCUA_PROFILE={self.config.profile}'
-            )
+            raise PermissionError(message("toolDisabled", tool=name, profile=self.config.profile))
         if self.config.profile != "operator":
             return
 
@@ -275,9 +274,7 @@ class ToolPolicy:
         if not guard:
             if tool["accessClass"] in {"read", "monitor"}:
                 return
-            raise PermissionError(
-                f'Tool "{name}" declares no policy guard, so it cannot be authorized'
-            )
+            raise PermissionError(message("guardMissing", tool=name))
 
         for path in guard.get("nodeIdPaths", []):
             found = values_at(arguments, path)
@@ -319,7 +316,11 @@ class ToolPolicy:
                 or f"{wanted_object}|{wanted_method}" not in allowed
             ):
                 raise PermissionError(
-                    f"Method {objects[0]}|{methods[0]} is not allowed by the operator policy"
+                    message(
+                        "methodNotAllowed",
+                        object_node_id=objects[0],
+                        method_node_id=methods[0],
+                    )
                 )
 
     def _resolve(self, node_id: str) -> str | None:
@@ -347,7 +348,7 @@ class ToolPolicy:
     def _require_writable(self, node_id: str) -> None:
         wanted = self._resolve(node_id)
         if wanted is None or wanted not in self._resolved_set(self.config.writable_nodes):
-            raise PermissionError(f"Node {node_id} is not writable under the operator policy")
+            raise PermissionError(message("nodeNotWritable", node_id=node_id))
 
 
 @lru_cache(maxsize=1)

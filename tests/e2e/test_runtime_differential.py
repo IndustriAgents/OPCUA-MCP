@@ -184,25 +184,134 @@ async def test_a_rejected_node_is_reported_the_same_way_by_both(both):
     assert results["python"][0]["status"] == results["node"][0]["status"]
 
 
-async def test_the_same_failure_is_worded_the_same_way_by_both(both):
-    """Error text is a client-visible surface too, and no shape covers it.
+# Failing calls, and the whole sentence each must be refused with.
+#
+# This is the half of the surface that had no differential coverage at all. The
+# successful results are pinned by `resultShapes`, so the shapes could not drift;
+# nothing pinned a failure, and the framing had drifted years ago — the Node
+# runtime prefixed every message with "Error: " and the Python one did not, so a
+# model saw a different sentence depending on which runtime its client had
+# started. The old version of this test compared *substrings* for exactly that
+# reason, which is what let the prefix survive being looked at.
+#
+# `contract/tools.json` -> `errors` now words all of it, so the assertion is
+# equality on the full text. Only messages this server composes are here: where a
+# client library's own rejection is interpolated (`{reason}`), the two libraries
+# legitimately word the same OPC UA status differently.
+DIFFERENTIAL_FAILURES = [
+    (
+        "a browse path that does not resolve",
+        "browse_opcua_nodes",
+        {"browse_path": "/Objects/NoSuchThing"},
+        'browse_path "/Objects/NoSuchThing" does not resolve: no child "NoSuchThing" '
+        "under ns=0;i=85",
+    ),
+    (
+        "a required argument left out",
+        "read_opcua_nodes",
+        {},
+        "read_opcua_nodes requires node_ids",
+    ),
+    (
+        "an empty batch read",
+        "read_opcua_nodes",
+        {"node_ids": []},
+        "read_opcua_nodes requires a non-empty node_ids array",
+    ),
+    (
+        "one node id sent bare instead of as a list",
+        "read_opcua_nodes",
+        {"node_ids": NODE["Temperature"]},
+        "read_opcua_nodes argument node_ids must be an array of strings",
+    ),
+    (
+        "a write entry with no value",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ValvePosition"]}]},
+        "write_opcua_nodes requires nodes[0].value",
+    ),
+    (
+        "a write batch sent as one object",
+        "write_opcua_nodes",
+        {"nodes": {"node_id": NODE["ValvePosition"], "value": 1}},
+        "write_opcua_nodes argument nodes must be an array of objects",
+    ),
+    (
+        "a depth that is not a number",
+        "browse_opcua_nodes",
+        {"depth": "deep"},
+        "browse_opcua_nodes argument depth must be an integer",
+    ),
+    (
+        "an aggregate read with no start time",
+        "read_opcua_history",
+        {"node_id": NODE["Temperature"], "aggregate_function": "Average"},
+        "read_opcua_history requires start_time when aggregate_function is given",
+    ),
+    (
+        "cancelling a subscription that was never made",
+        "unsubscribe_opcua_nodes",
+        {"subscription_ids": ["sub-does-not-exist"]},
+        "No such subscription: sub-does-not-exist",
+    ),
+    (
+        "cancelling several subscriptions that were never made",
+        "unsubscribe_opcua_nodes",
+        {"subscription_ids": ["sub-a", "sub-b"]},
+        "No such subscriptions: sub-a, sub-b. Nothing was cancelled.",
+    ),
+    (
+        "an empty cancel",
+        "unsubscribe_opcua_nodes",
+        {"subscription_ids": []},
+        "unsubscribe_opcua_nodes requires a non-empty subscription_ids array",
+    ),
+    (
+        "reading events without subscribing first",
+        "read_events",
+        {"node_id": "ns=0;i=2253"},
+        "Not subscribed to events from node ns=0;i=2253. Call subscribe_events first.",
+    ),
+    (
+        "acknowledging an alarm nobody reported",
+        "acknowledge_alarm",
+        {"event_id": "nope"},
+        'Unknown event_id "nope". Call list_active_alarms first, or pass the condition_id '
+        "of the alarm to acknowledge.",
+    ),
+    (
+        "a tool that is not in the contract",
+        "read_opcua_tags",
+        {},
+        "Unknown tool: read_opcua_tags",
+    ),
+]
 
-    Not every message can match — each client library words the underlying
-    rejection its own way — but the sentence *this* server adds must, because
-    that part is ours.
-    """
+
+@pytest.mark.parametrize(
+    ("name", "tool", "arguments", "expected"),
+    DIFFERENTIAL_FAILURES,
+    ids=[case[0] for case in DIFFERENTIAL_FAILURES],
+)
+async def test_both_runtimes_word_the_same_failure_identically(
+    both, name, tool, arguments, expected
+):
+    """Both servers must refuse the same call with the same sentence, exactly."""
     failures = {}
     for impl, params in both.items():
         async with connect(params) as session:
-            result = await session.call_tool(
-                "browse_opcua_nodes", {"browse_path": "/Objects/NoSuchThing"}
-            )
-        assert result.is_error, f"{impl}: an unresolvable path must fail"
-        failures[impl] = text_of(result)
+            result = await session.call_tool(tool, arguments)
+        assert result.is_error, f"{impl}: {name} must fail, got {text_of(result)!r}"
+        failures[impl] = text_of(result).strip()
 
-    for impl, text in failures.items():
-        assert 'browse_path "/Objects/NoSuchThing" does not resolve' in text, f"{impl}: {text!r}"
-        assert 'no child "NoSuchThing"' in text, f"{impl}: {text!r}"
+    assert failures["python"] == failures["node"], (
+        f"{name} is worded differently by the two runtimes:\n"
+        f"python: {failures['python']!r}\n"
+        f"node:   {failures['node']!r}"
+    )
+    assert failures["python"] == expected, (
+        f"{name}: both runtimes say {failures['python']!r}, contract says {expected!r}"
+    )
 
 
 def test_every_tool_family_is_represented():

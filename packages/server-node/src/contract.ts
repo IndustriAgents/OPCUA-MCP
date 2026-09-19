@@ -80,6 +80,8 @@ export const CONTRACT: {
     };
     fields: Array<{ key: string; path: string }>;
   };
+  /** Message templates for every failure a tool call can return; see errors.ts. */
+  errors: Record<string, string>;
   resources: Array<{
     uri: string;
     name: string;

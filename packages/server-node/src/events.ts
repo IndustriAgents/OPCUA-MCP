@@ -22,6 +22,10 @@ import {
   Variant,
   coerceNodeId,
   constructEventFilter,
+  HistoryReadRequest,
+  HistoryReadValueId,
+  ReadEventDetails,
+  resolveNodeId,
 } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
@@ -294,6 +298,80 @@ export class EventSubscriptions {
  * timeout), and tears it down again — deliberately independent of whatever
  * `subscribe_events` may or may not have running.
  */
+/** Events the server stored, for a range that has already passed (#117).
+ *
+ * `subscribe_events` only sees what arrives after it subscribes, so nothing
+ * could answer "what fired in the ten minutes before the line stopped" — by the
+ * time anyone asks, the events are gone. OPC UA Part 11 §6.5.2 defines
+ * `ReadEventDetails` for exactly that, and a server that historises its events
+ * already holds the answer.
+ *
+ * The select clauses are `buildEventFilter()`, the same ones the live
+ * subscription sends, and the decoding is `toEventRecord`, the same decoder. A
+ * historical alarm has to come back as the *same record* as a live one, or the
+ * two are not comparable and an agent has to learn two shapes.
+ *
+ * Severity is filtered here rather than in a where clause, as the live path
+ * does, so a server that mishandles a ContentFilter cannot silently drop events
+ * on us.
+ *
+ * `performMessageTransaction` rather than a convenience wrapper because
+ * node-opcua offers none for event history that lets the filter be supplied —
+ * `readHistoryValue` is for values, and the ergonomic event helpers construct
+ * their own select clauses, which is exactly what must not happen here.
+ */
+export async function readEventHistory(
+  session: ClientSession,
+  nodeId: string,
+  startTime: Date,
+  endTime: Date,
+  numValues: number,
+  severityMin: number
+): Promise<EventRecord[]> {
+  const request = new HistoryReadRequest({
+    historyReadDetails: new ReadEventDetails({
+      numValuesPerNode: numValues,
+      startTime,
+      endTime,
+      filter: buildEventFilter(),
+    }),
+    timestampsToReturn: TimestampsToReturn.Both,
+    releaseContinuationPoints: false,
+    nodesToRead: [new HistoryReadValueId({ nodeId: resolveNodeId(nodeId) })],
+  });
+
+  const response: any = await new Promise((resolve, reject) =>
+    (session as any).performMessageTransaction(request, (error: Error | null, result: unknown) =>
+      error ? reject(error) : resolve(result)
+    )
+  );
+
+  const result = response.results?.[0];
+  if (!result) throw new Error("Read event history failed");
+  if (result.statusCode !== StatusCodes.Good) {
+    throw new Error(`Read event history failed with status: ${result.statusCode.name}`);
+  }
+
+  const events = result.historyData?.events ?? [];
+  return events
+    .map((event: { eventFields: Variant[] }) => toEventRecord(event.eventFields))
+    .filter((record: EventRecord) => severityAtLeast(record, severityMin));
+}
+
+/** Whether one record clears the severity floor.
+ *
+ * An event carrying no severity is kept unless a floor was actually asked for:
+ * dropping it on a default call would lose events for saying nothing, and
+ * keeping it on an explicit `severity_min` would answer a question about
+ * urgency with an event that has no urgency. 0 is "no floor", as it is for
+ * `subscribe_events`.
+ */
+function severityAtLeast(record: EventRecord, severityMin: number): boolean {
+  const severity = record.severity;
+  if (typeof severity !== "number") return severityMin <= 0;
+  return severity >= severityMin;
+}
+
 export async function listActiveAlarms(
   session: ClientSession,
   nodeId: string,

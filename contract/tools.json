@@ -703,6 +703,12 @@
       "browseName": "AccessHistoryDataCapability",
       "check": "readBooleanTrue"
     },
+    "historyEvents": {
+      "$comment": "Part 11 \u00a75.4's HistoryServerCapabilities. A separate node from AccessHistoryDataCapability and a separate answer: storing values and storing events are different features, and a server commonly does one and not the other. Note that this node is genuinely absent from some servers' namespace 0 rather than present-and-false \u2014 python-opcua is one \u2014 which reads the same way here and should: a server that cannot say it keeps event history is one whose event history nobody should go looking for.",
+      "nodeId": "ns=0;i=11194",
+      "browseName": "AccessHistoryEventsCapability",
+      "check": "readBooleanTrue"
+    },
     "aggregate": {
       "nodeId": "ns=0;i=2997",
       "browseName": "AggregateFunctions",
@@ -736,6 +742,7 @@
     "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. The connection has been rebuilt \u2014 read the targets back to see what happened before sending it again.",
     "browseFailed": "Failed to browse {node_id}: {reason}",
     "historyFailed": "Failed to read history of node {node_id}: {reason}",
+    "eventHistoryFailed": "Failed to read event history of node {node_id}: {reason}",
     "methodFailed": "Failed to call method {method_node_id} on object {object_node_id}: {reason}",
     "subscribeFailed": "Failed to subscribe to node {node_id}: {reason}",
     "eventSubscribeFailed": "Failed to subscribe to events from node {node_id}: {reason}",
@@ -891,6 +898,50 @@
           }
         },
         "required": ["node_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_event_history",
+      "accessClass": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "retryPolicy": "resend",
+      "capabilities": [
+        "historyEvents"
+      ],
+      "resultShape": "eventRecords",
+      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Offered only when the server advertises AccessHistoryEventsCapability; storing values and storing events are separate features and many servers do one without the other. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The notifier node whose stored events to read. Defaults to the Server object 'ns=0;i=2253', which is where most servers collect events. This is the same node subscribe_events takes."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the time range, ISO-8601 ('2026-09-09T12:00:00Z'). A naive timestamp is read as UTC. Defaults to one hour before `end_time`."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the time range, ISO-8601. Defaults to now (UTC)."
+          },
+          "num_values": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Maximum number of events to return, capped at 5000. 0 (the default) means as many as that cap allows, not every event in the range — an alarm burst can be tens of thousands of events, and asking for all of them is a request that never returns."
+          },
+          "severity_min": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Keep only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event. Filtered here rather than by the server, exactly as subscribe_events does, so a server that mishandles a filter cannot silently drop events."
+          }
+        },
+        "required": [],
         "additionalProperties": false
       }
     },

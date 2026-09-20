@@ -493,6 +493,27 @@ export class OpcuaConnection {
    * way and for the same reason.
    */
   async accessHistoryDataCapability(on?: ClientSession): Promise<boolean> {
+    return await this.booleanCapability("history", on);
+  }
+
+  /** Whether the server reports that it historises *events*.
+   *
+   * A different node and a different answer from `accessHistoryDataCapability`:
+   * Part 11 §5.4 lets a server keep values without keeping events, and most do.
+   * The node is commonly absent rather than present-and-false — python-opcua's
+   * server has no ns=0;i=11194 at all — which reads the same way here, and
+   * should: a server that cannot say it keeps event history is one whose event
+   * history nobody should go looking for.
+   */
+  async accessHistoryEventsCapability(on?: ClientSession): Promise<boolean> {
+    return await this.booleanCapability("historyEvents", on);
+  }
+
+  /** One `readBooleanTrue` capability node, by its name in the contract. */
+  private async booleanCapability(
+    name: "history" | "historyEvents",
+    on?: ClientSession
+  ): Promise<boolean> {
     // Best-effort: never let an optional capability probe break tools/list. A
     // transient OPC UA outage should still leave the core tools advertised.
     try {
@@ -501,10 +522,10 @@ export class OpcuaConnection {
         await this.ensureConnection();
         session = this.session!;
       }
-      const dataValue = await session.readVariableValue(CONTRACT.capabilities.history.nodeId);
+      const dataValue = await session.readVariableValue(CONTRACT.capabilities[name].nodeId);
       return dataValue.statusCode === StatusCodes.Good && dataValue.value?.value === true;
     } catch (error) {
-      console.error("accessHistoryDataCapability probe failed:", error);
+      console.error(`${CONTRACT.capabilities[name].browseName} probe failed:`, error);
       return false;
     }
   }

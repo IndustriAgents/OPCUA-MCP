@@ -281,6 +281,64 @@ class _RefreshHandler:
             self.conditions.append(record)
 
 
+def read_event_history(
+    client,
+    node_id: str,
+    start,
+    end,
+    num_values: int,
+    severity_min: int,
+) -> list[dict]:
+    """Events the server stored, for a range that has already passed (#117).
+
+    ``subscribe_events`` only sees what arrives after it subscribes, so nothing
+    could answer "what fired in the ten minutes before the line stopped" — by
+    the time anyone asks, the events are gone. OPC UA Part 11 §6.5.2 defines
+    ``ReadEventDetails`` for exactly that, and a server that historises its
+    events already holds the answer.
+
+    The low-level ``history_read_events`` rather than python-opcua's
+    ``Node.read_event_history``, which builds its own filter from the event type
+    and decodes into its ``Event`` object. Both would break the one property
+    that matters here: a historical alarm has to come back as the *same record*
+    as a live one, or the two are not comparable and an agent has to learn two
+    shapes. Sending :func:`event_filter` and decoding with :func:`event_record`
+    is what makes them identical — the same select clauses, in the same order,
+    through the same decoder.
+
+    Severity is filtered here rather than in a where clause, as the live path
+    does, so a server that mishandles a ContentFilter cannot silently drop
+    events on us.
+    """
+    details = ua.ReadEventDetails()
+    details.StartTime = start
+    details.EndTime = end
+    details.NumValuesPerNode = num_values
+    details.Filter = event_filter()
+
+    result = client.get_node(node_id).history_read_events(details)
+    if not result.StatusCode.is_good():
+        raise ValueError(f"Read event history failed with status: {result.StatusCode.name}")
+
+    records = [event_record(event.EventFields) for event in result.HistoryData.Events]
+    return [record for record in records if _severity_at_least(record, severity_min)]
+
+
+def _severity_at_least(record: dict, severity_min: int) -> bool:
+    """Whether one record clears the severity floor.
+
+    An event carrying no severity is kept unless a floor was actually asked for:
+    dropping it on a default call would lose events for saying nothing, and
+    keeping it on an explicit ``severity_min`` would answer a question about
+    urgency with an event that has no urgency. 0 is "no floor", as it is for
+    ``subscribe_events``.
+    """
+    severity = record.get("severity")
+    if not isinstance(severity, (int, float)):
+        return severity_min <= 0
+    return severity >= severity_min
+
+
 def list_active_alarms(client, node_id: str, timeout_seconds: float) -> list[dict]:
     """The conditions the server is retaining right now, via ConditionRefresh.
 

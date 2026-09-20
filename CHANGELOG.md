@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`read_event_history`: look backwards at an alarm burst** (#117).
+  `subscribe_events` only sees what arrives after it subscribes, which is the
+  right shape for watching a plant and the wrong shape for the question people
+  actually ask — what fired overnight, what happened in the ten minutes before
+  the line stopped. By the time anyone asks, those events are gone. OPC UA Part
+  11 §6.5.2 answers it with `ReadEventDetails`, and a server that historises its
+  events already holds what is being asked for. The records are the same ones
+  `read_events` returns, deliberately: both paths send the same select clauses
+  and run the same decoder, so an alarm looks identical whether it was watched
+  live or recovered afterwards. Gated on `AccessHistoryEventsCapability`
+  (`ns=0;i=11194`), which is a different node and a different answer from the one
+  `read_opcua_history` uses — Part 11 §5.4 lets a server keep values without
+  keeping events. The bundled mock learned to keep its events so both sides of
+  that gate are covered against real servers: python-opcua stores nothing unless
+  the event source declares `GeneratesEvent`, and has no
+  `AccessHistoryEventsCapability` node at all until one is created.
 - **A browse now says what each node *is*** (#120). A browse record named a node,
   its class and its parent, which is enough to walk an address space and not
   enough to understand one: every alarm, every pump and every folder came back as

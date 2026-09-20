@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -23,7 +23,11 @@ from opcua import Node, ua
 from . import events
 from .aggregates import validate_aggregate_function
 from .audit import AUDIT_FILE_ENV, AuditSink, describe_audit, operator_id
-from .capabilities import client_aggregate_functions, client_supports_history
+from .capabilities import (
+    client_aggregate_functions,
+    client_supports_history,
+    client_supports_history_events,
+)
 from .config import SERVER_URL, describe_reconnect, reconnect_config
 from .connection import (
     OpcuaConnection,
@@ -64,7 +68,11 @@ from .validation import validate_arguments
 from .variant_codec import convert_for_variant
 from .version import package_version
 
-_CAPABILITIES: dict[str, Any] = {"history": False, "aggregate_functions": {}}
+_CAPABILITIES: dict[str, Any] = {
+    "history": False,
+    "history_events": False,
+    "aggregate_functions": {},
+}
 
 #: What each node published about its own number, for the life of one session.
 #: Module-level for the same reason `_CAPABILITIES` is, and dropped by `_bind`
@@ -298,16 +306,25 @@ def _probe_capabilities(client) -> bool:
     Best-effort by design: any failure yields "not supported" rather than an
     error, because an optional capability must never break `tools/list`.
     """
-    before = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
+
+    def snapshot():
+        return (
+            _CAPABILITIES["history"],
+            _CAPABILITIES["history_events"],
+            tuple(sorted(_CAPABILITIES["aggregate_functions"])),
+        )
+
+    before = snapshot()
     _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
+    _CAPABILITIES["history_events"] = _probe(client_supports_history_events, client, False)
     _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
-    after = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
-    return before != after
+    return before != snapshot()
 
 
 def _forget_capabilities() -> None:
     """Drop what was probed, because the session it was true of is gone."""
     _CAPABILITIES["history"] = False
+    _CAPABILITIES["history_events"] = False
     _CAPABILITIES["aggregate_functions"] = {}
 
 
@@ -380,6 +397,7 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(connection.disconnect)
         _CAPABILITIES["history"] = False
+        _CAPABILITIES["history_events"] = False
         _CAPABILITIES["aggregate_functions"] = {}
         _CONNECTION = None
 
@@ -389,6 +407,8 @@ def _available_capabilities() -> set[str]:
     available = set()
     if _CAPABILITIES["history"]:
         available.add("history")
+    if _CAPABILITIES["history_events"]:
+        available.add("historyEvents")
     if _CAPABILITIES["aggregate_functions"]:
         available.add("aggregate")
     return available
@@ -865,6 +885,43 @@ def read_opcua_history(
 # lifecycle's active session. This avoids network I/O during import and prevents
 # startup from opening throwaway OPC UA sessions.
 read_opcua_history = mcp.tool(description=DESC["read_opcua_history"])(read_opcua_history)
+
+
+@mcp.tool(description=DESC["read_event_history"])
+def read_event_history(
+    ctx: Context,
+    node_id: str = events.DEFAULT_NOTIFIER,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    num_values: int = 0,
+    severity_min: int = events.DEFAULTS["severityMin"],
+) -> list[dict]:
+    """
+    Read the events the server stored, for a range that has already passed.
+
+    ``subscribe_events`` only sees what arrives after it subscribes, so it
+    cannot answer what fired before anyone was watching. This reads the server's
+    own event archive instead, and returns the same records, so an alarm looks
+    identical whether it was seen live or recovered afterwards.
+
+    Returns:
+        list[dict]: One record per event, shaped by the shared
+            ``resultShapes.eventRecords`` in ``contract/tools.json``.
+    """
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
+    # An hour back, rather than the epoch: a range nobody bounded should be the
+    # recent past, not the whole archive. `read_opcua_history` defaults the same
+    # way and for the same reason.
+    start = parse_iso_datetime(start_time) or end - timedelta(hours=1)
+    # The same cap as a raw value read, and a refusal rather than a knob: an
+    # alarm burst is tens of thousands of events, and "all of them" is a request
+    # that never returns.
+    wanted = history_values(num_values)
+    try:
+        return events.read_event_history(client, node_id, start, end, wanted, severity_min)
+    except Exception as e:
+        raise ToolError(error_message("eventHistoryFailed", node_id=node_id, reason=str(e))) from e
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.

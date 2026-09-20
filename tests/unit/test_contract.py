@@ -245,9 +245,24 @@ def test_the_event_family_shares_one_result_shape():
 
 
 def test_the_history_family_shares_one_result_shape():
-    """The divergence in #23 was two tools, both servers; one tool now covers all."""
+    """The divergence in #23 was two tools, both servers; one tool now covers all.
+
+    Two capability-gated tools since #117, and the *reason* they are two is the
+    thing worth pinning: reading stored values and reading stored events are
+    gated on different nodes (a server may historise one and not the other) and
+    answer in different shapes. A value history is `historyRecords`; an event
+    history has to be `eventRecords`, because an alarm recovered from the
+    archive must be the same record as one seen live or an agent has to learn
+    two shapes for one thing. A single tool whose result shape depended on an
+    argument is exactly what `resultShape` cannot express, which is why folding
+    this into `read_opcua_history` the way `aggregate_function` folded in would
+    have been the wrong merge.
+    """
     history_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["capabilities"]}
-    assert history_family == {"read_opcua_history": "historyRecords"}
+    assert history_family == {
+        "read_opcua_history": "historyRecords",
+        "read_event_history": "eventRecords",
+    }
 
 
 def test_every_tool_declares_a_result_shape():
@@ -291,9 +306,17 @@ def test_the_tool_surface_stays_consolidated():
     (`events.actions`) and run one implementation, so there is no second copy of
     the operation to drift. They are two entry points only because renaming
     `acknowledge_alarm` would break every existing caller for no functional gain.
+
+    15 since #117 added `read_event_history`, and the same rule applies to it.
+    It shares the select clauses and the decoder with the live event path
+    (`event_filter` / `event_record`), so there is no second definition of what
+    an event record is — which is the divergence that would matter, not the tool
+    count. It is not folded into `read_opcua_history` because the two are gated
+    on different capability nodes and answer in different shapes; see
+    `test_the_history_family_shares_one_result_shape`.
     """
     names = {tool["name"] for tool in TOOLS}
-    assert len(TOOLS) == 14, sorted(names)
+    assert len(TOOLS) == 15, sorted(names)
     for retired in (
         "read_opcua_node",
         "read_multiple_opcua_nodes",

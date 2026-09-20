@@ -43,6 +43,7 @@ import {
   alarmAction,
   droppedEventsMessage,
   listActiveAlarms,
+  readEventHistory,
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
@@ -562,6 +563,10 @@ export class OpcuaTools {
     return this.conn.accessHistoryDataCapability(on);
   }
 
+  private accessHistoryEventsCapability(on?: ClientSession): Promise<boolean> {
+    return this.conn.accessHistoryEventsCapability(on);
+  }
+
   /** Read what the connected OPC UA server can do, off the session we already have.
    *
    * Never connects. Both probes run against a live session or not at all, so a
@@ -579,6 +584,7 @@ export class OpcuaTools {
       return available;
     }
     const historyOk = await this.accessHistoryDataCapability(session);
+    const historyEventsOk = await this.accessHistoryEventsCapability(session);
     this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions(session);
 
     // A tool gated on capabilities is offered when the server reports *any* of
@@ -586,6 +592,7 @@ export class OpcuaTools {
     // still answer an aggregate read, and gating it on `history` alone would
     // hide the one thing such a server is good at.
     if (historyOk) available.add("history");
+    if (historyEventsOk) available.add("historyEvents");
     if (this.aggregateFunctions.length > 0) available.add("aggregate");
     this.capabilities = available;
     return available;
@@ -954,6 +961,15 @@ export class OpcuaTools {
           numValues: (args.num_values as number) || 0,
           aggregateFunction: args.aggregate_function as string | undefined,
           processingInterval: (args.processing_interval as number) || 0,
+        });
+
+      case "read_event_history":
+        return await this.readEventHistory({
+          nodeId: (args.node_id as string) || DEFAULT_NOTIFIER,
+          start: args.start_time as string | undefined,
+          end: args.end_time as string | undefined,
+          numValues: (args.num_values as number) || 0,
+          severityMin: (args.severity_min as number) || EVENT_DEFAULTS.severityMin,
         });
 
       case "write_opcua_nodes":
@@ -1817,6 +1833,48 @@ export class OpcuaTools {
       });
     }
     return result;
+  }
+
+  /** `read_event_history`: the events the server kept, for a range already past.
+   *
+   * `subscribe_events` only sees what arrives after it subscribes, so it cannot
+   * answer what fired before anyone was watching. This reads the server's own
+   * event archive instead, and returns the same records, so an alarm looks
+   * identical whether it was seen live or recovered afterwards.
+   */
+  private async readEventHistory(request: {
+    nodeId: string;
+    start?: string;
+    end?: string;
+    numValues: number;
+    severityMin: number;
+  }) {
+    const { nodeId } = request;
+    const end = toDate(request.end) ?? new Date();
+    // An hour back, rather than the epoch: a range nobody bounded should be the
+    // recent past, not the whole archive. `read_opcua_history` defaults the same
+    // way and for the same reason.
+    const start = toDate(request.start) ?? new Date(end.getTime() - 60 * 60 * 1000);
+    // The same cap as a raw value read, and a refusal rather than a knob: an
+    // alarm burst is tens of thousands of events, and "all of them" is a request
+    // that never returns.
+    const wanted = historyValues(request.numValues);
+
+    try {
+      const events = await readEventHistory(
+        this.requireSession(),
+        nodeId,
+        start,
+        end,
+        wanted,
+        request.severityMin
+      );
+      return eventResult(events);
+    } catch (error) {
+      throw new Error(
+        message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) })
+      );
+    }
   }
 
   private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {

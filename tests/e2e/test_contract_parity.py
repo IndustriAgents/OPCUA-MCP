@@ -23,9 +23,12 @@ from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, 
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 
-# The bundled mock server enables history but advertises no aggregate functions,
-# so a tool is applicable here if it needs nothing or accepts "history".
-_MOCK_CAPS = {"history"}
+# The bundled mock server enables value history and, since #117, event history,
+# but advertises no aggregate functions — so a tool is applicable here if it
+# needs nothing or accepts one of those two. Keeping this in step with the mock
+# is the point: a capability the mock gained and this set did not would show up
+# as a tool "extra" to the contract, which is how the gate gets noticed.
+_MOCK_CAPS = {"history", "historyEvents"}
 EXPECTED = {
     t["name"]: t
     for t in CONTRACT["tools"]
@@ -225,6 +228,7 @@ def tool_calls(method_node_id: str) -> list[tuple[str, dict]]:
         ("read_opcua_nodes", {"node_ids": [NODE["Temperature"], NODE["Pressure"]]}),
         ("browse_opcua_nodes", {"depth": 2, "include_values": True}),
         ("read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 3}),
+        ("read_event_history", {"num_values": 3}),
         ("write_opcua_nodes", {"nodes": [{"node_id": NODE["ValvePosition"], "value": 42.5}]}),
         (
             "call_opcua_method",

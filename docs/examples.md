@@ -501,6 +501,10 @@ Added for issue #4, and not capability-gated either: any OPC UA server has a
 Server object that events are raised from, and one that raises none simply has
 none to hand over. Alarms are the same machinery with a condition attached.
 
+The one exception is `read_event_history`, which *is* gated — keeping an archive
+of past events is optional in a way that raising them is not, and a server that
+does not keep one has nothing to read rather than nothing to report.
+
 ### `subscribe_events`
 Start collecting events. Returns immediately — the subscription runs in the
 background, because MCP has no way for the server to push one at you.
@@ -537,6 +541,38 @@ last block — prose, not a record — says how many events were lost and what t
 raise. The mock raises exactly this when its alarm state
 changes — write `true` to `ns=2;i=25` to see it, and to `ns=2;i=26` to clear it.
 > Prompt: *"Anything happen since we last looked?"*
+
+### `read_event_history`
+Events the server stored, for a range that has already passed. `subscribe_events`
+only sees what arrives *after* it subscribes, so it cannot answer "what fired
+overnight" — by the time anyone asks, those events are gone. This reads them back
+out of the server's own archive instead.
+```json
+{ "start_time": "2026-09-12T08:00:00Z", "end_time": "2026-09-12T09:00:00Z",
+  "severity_min": 500 }
+```
+```json
+{ "event_id": "ZDAzNzVmNzlhYzM0NDNjMWI3MzdhMmJhMmRmNzFiN2E=",
+  "event_type": "ns=0;i=2041", "source_node": "ns=2;i=1",
+  "source_name": "IndustrialControlSystem", "time": "2026-09-12T08:36:07.280Z",
+  "message": "Alarm active: emergency stop", "severity": 700,
+  "condition_id": null, "condition_name": null,
+  "active": null, "acked": null, "retain": null }
+```
+> Prompt: *"What alarms fired in the hour before the line stopped last night?"*
+
+The same records as `read_events`, deliberately — an alarm looks identical
+whether it was watched live or recovered afterwards, because both paths send the
+same select clauses and run the same decoder. Every argument is optional: the
+range defaults to the last hour, and the notifier to the Server object. The
+result is capped at 5000 events; an alarm burst can be far more than that, and
+asking for all of them is a request that never returns.
+
+Offered only when the server advertises `AccessHistoryEventsCapability`
+(`ns=0;i=11194`). That is a different node and a different answer from the one
+`read_opcua_history` is gated on: OPC UA Part 11 §5.4 lets a server keep values
+without keeping events, and most do.
+> Prompt: *"Show me everything that happened between 2am and 3am."*
 
 ### `list_active_alarms`
 The alarms the server is retaining right now — active, unacknowledged, or both.

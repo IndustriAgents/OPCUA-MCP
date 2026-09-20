@@ -38,7 +38,11 @@ REQUIRED_OBSERVE_TOOLS = {
     "list_active_alarms",
 }
 
-OPTIONAL_OBSERVE_TOOLS = {"read_opcua_history"}
+#: Present only when the connected server advertises the capability behind them,
+#: which is why they are optional rather than required. Both are reads, and
+#: reading what already happened is the most observe-only thing there is — an
+#: observe deployment is exactly where "what fired overnight" gets asked.
+OPTIONAL_OBSERVE_TOOLS = {"read_opcua_history", "read_event_history"}
 
 
 def observe_params(impl: str, url: str) -> StdioServerParameters:

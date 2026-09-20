@@ -140,13 +140,16 @@ Both servers expose the same fourteen tools, defined once in
 | `acknowledge_alarm` | Acknowledge one of them, with a comment |
 | `act_on_alarm` | Confirm, annotate or shelve an alarm — the rest of the operator workflow |
 | `read_opcua_history` † | Historical values, raw or summarised by a server-side aggregate |
+| `read_event_history` † | Events the server stored, for a range that has already passed |
 
 † **Capability-gated.** `read_opcua_history` appears only when the connected
 server advertises historical access (`AccessHistoryDataCapability`) or aggregates
 (a non-empty `AggregateFunctions` folder). Its `aggregate_function` argument
 appears only with the latter, and its description then lists the functions that
-server actually offers. What a server cannot do is not on the menu, rather than
-failing at call time.
+server actually offers. `read_event_history` is gated separately, on
+`AccessHistoryEventsCapability` — keeping values and keeping events are
+different features and a server commonly does one without the other. What a
+server cannot do is not on the menu, rather than failing at call time.
 
 **One tool per operation, not one per arity.** Reading one node and reading fifty
 is the same request with a longer list, so it is one tool and one code path.

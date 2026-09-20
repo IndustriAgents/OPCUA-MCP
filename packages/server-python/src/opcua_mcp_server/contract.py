@@ -60,6 +60,7 @@ def load_contract() -> dict:
 CONTRACT = load_contract()
 DESC = {t["name"]: t["description"] for t in CONTRACT["tools"]}
 HISTORY_NODE_ID = CONTRACT["capabilities"]["history"]["nodeId"]
+HISTORY_EVENTS_NODE_ID = CONTRACT["capabilities"]["historyEvents"]["nodeId"]
 AGGREGATE_NODE_ID = CONTRACT["capabilities"]["aggregate"]["nodeId"]
 
 #: The standard nodes `get_server_status` reads, from the contract for the same

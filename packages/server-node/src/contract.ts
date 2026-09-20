@@ -85,6 +85,10 @@ export const CONTRACT: {
     defaultBufferSize: number;
     minBufferSize: number;
     maxBufferSize: number;
+    /** Prose for each deadband kind and trigger; see subscriptions.ts. */
+    deadbandTypes: Record<string, string>;
+    dataChangeTriggers: Record<string, string>;
+    defaultDataChangeTrigger: string;
   };
   traversal: {
     rootNodeId: string;
@@ -100,6 +104,12 @@ export const CONTRACT: {
     conditionTypeNodeId: string;
     conditionRefreshMethodNodeId: string;
     acknowledgeMethodNodeId: string;
+    /** What each alarm action calls, and what it takes; see events.ts. */
+    shelvingStateBrowseName: string;
+    actions: Record<
+      string,
+      { browseName: string; methodNodeId: string; on: string; takes: string }
+    >;
     refreshStartEventTypeNodeId: string;
     refreshEndEventTypeNodeId: string;
     defaults: {

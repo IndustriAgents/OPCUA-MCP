@@ -276,7 +276,7 @@ def test_every_declared_shape_exists_and_every_shape_is_used():
 
 
 def test_the_tool_surface_stays_consolidated():
-    """13 tools, and the single/batch pairs are gone.
+    """The single/batch pairs are gone and stay gone.
 
     Not a count for its own sake. Each merged pair was the same operation written
     twice per runtime — four copies — which is *why* the batch read reported
@@ -284,9 +284,16 @@ def test_the_tool_surface_stays_consolidated():
     continuation points on only one (#75). Re-splitting them would reopen the
     ground those bugs grew in, so the shape of the surface is asserted rather
     than left to review.
+
+    14 since #119 added `act_on_alarm`. That is a new capability rather than a
+    re-split, and it is held to the same rule the merges were: it and
+    `acknowledge_alarm` resolve their method through one table
+    (`events.actions`) and run one implementation, so there is no second copy of
+    the operation to drift. They are two entry points only because renaming
+    `acknowledge_alarm` would break every existing caller for no functional gain.
     """
     names = {tool["name"] for tool in TOOLS}
-    assert len(TOOLS) == 13, sorted(names)
+    assert len(TOOLS) == 14, sorted(names)
     for retired in (
         "read_opcua_node",
         "read_multiple_opcua_nodes",

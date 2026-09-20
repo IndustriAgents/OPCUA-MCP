@@ -25,6 +25,7 @@ import {
 } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
+import { message } from "./errors.js";
 import { variantToJson } from "./records.js";
 import { notice } from "./notices.js";
 
@@ -371,14 +372,74 @@ async function callConditionRefresh(session: ClientSession, subscriptionId: numb
   return callResult.statusCode;
 }
 
-/**
- * Acknowledge one condition instance.
+/** What each alarm action calls, and what it takes, from the contract.
  *
- * The method is called on the condition itself. Part 9 allows a server not to
- * expose condition instances in its address space at all, in which case the
- * Acknowledge method of AcknowledgeableConditionType is called with the condition
- * as the object — so that well-known method id is the fallback here, exactly as
- * `events.py` does it.
+ * One table rather than a branch per action: `acknowledge_alarm` and
+ * `act_on_alarm` are the same operation with a different method id, and the
+ * surface carries them separately only because renaming the first would break
+ * every caller.
+ */
+interface ActionSpec {
+  browseName: string;
+  methodNodeId: string;
+  on: string;
+  takes: string;
+}
+
+export const ACTIONS: Record<string, ActionSpec> = Object.fromEntries(
+  Object.entries(EVENTS.actions).filter(([name]) => !name.startsWith("$"))
+) as Record<string, ActionSpec>;
+
+/** Call one Part 9 §5.5 method on one condition instance.
+ *
+ * *Which* object the method hangs off is the action's own business — see `on` in
+ * the table above — and Part 9 allows a server not to expose condition instances
+ * in its address space at all, in which case the type's own method is called with
+ * the condition as the object. That well-known id is the fallback here, exactly
+ * as `events.py` does it.
+ */
+export async function alarmAction(
+  session: ClientSession,
+  conditionId: string,
+  eventId: string,
+  action: string,
+  comment = "",
+  durationMs: number | null = null
+) {
+  const spec = ACTIONS[action];
+  // Which object the method hangs off. The acknowledge family are methods of the
+  // condition's own type; the shelving ones are methods of
+  // ShelvedStateMachineType and hang off the condition's ShelvingState component
+  // instead. Calling one on the wrong object does not fail cleanly — the server
+  // resolves a *different* method of the right name's neighbour and answers
+  // BadArgumentsMissing or BadTooManyArguments.
+  const objectId =
+    spec.on === "condition" ? conditionId : await shelvingStateId(session, conditionId);
+  const methodId = await actionMethodId(session, objectId, spec);
+
+  let inputArguments: Variant[] = [];
+  if (spec.takes === "eventIdAndComment") {
+    inputArguments = [
+      new Variant({ dataType: DataType.ByteString, value: Buffer.from(eventId, "base64") }),
+      new Variant({
+        dataType: DataType.LocalizedText,
+        value: new LocalizedText({ text: comment }),
+      }),
+    ];
+  } else if (spec.takes === "duration") {
+    // Duration is a Double of milliseconds in OPC UA, not a struct.
+    inputArguments = [new Variant({ dataType: DataType.Double, value: durationMs ?? 0 })];
+  }
+
+  const result = await session.call({ objectId, methodId, inputArguments });
+  return result.statusCode;
+}
+
+/** Acknowledge one condition instance. The first stage of Part 9's handshake.
+ *
+ * Kept as its own name because `acknowledge_alarm` is a tool callers already
+ * have; the work is `alarmAction`'s, so there is only ever one implementation to
+ * drift.
  */
 export async function acknowledgeAlarm(
   session: ClientSession,
@@ -386,35 +447,57 @@ export async function acknowledgeAlarm(
   eventId: string,
   comment: string
 ) {
-  const statusCode = await session.call({
-    objectId: conditionId,
-    methodId: await acknowledgeMethodId(session, conditionId),
-    inputArguments: [
-      new Variant({ dataType: DataType.ByteString, value: Buffer.from(eventId, "base64") }),
-      new Variant({
-        dataType: DataType.LocalizedText,
-        value: new LocalizedText({ text: comment }),
-      }),
-    ],
-  });
-  return statusCode.statusCode;
+  return alarmAction(session, conditionId, eventId, "acknowledge", comment);
 }
 
-/** The condition's own Acknowledge method, or the type's when it has none. */
-async function acknowledgeMethodId(session: ClientSession, conditionId: string): Promise<string> {
+/** The condition's own method, or its type's well-known one when it has none.
+ *
+ * Part 9 allows a server not to expose condition instances in its address space
+ * at all, in which case the type's method is called with the condition as the
+ * object — which is what the fallback is for.
+ */
+async function actionMethodId(
+  session: ClientSession,
+  objectId: string,
+  spec: { browseName: string; methodNodeId: string }
+): Promise<string> {
+  const found = await childByBrowseName(session, objectId, spec.browseName);
+  return found ?? spec.methodNodeId;
+}
+
+/** The condition's ShelvingState, or throw saying this server has none.
+ *
+ * ShelvingState is optional in Part 9, and a server without it is still
+ * conformant — so this is a refusal to word rather than a bug to hide. Falling
+ * back to the type node would be worse than useless: shelving is per-instance
+ * state, and a call against the type would either fail obscurely or change
+ * something nobody asked about.
+ */
+async function shelvingStateId(session: ClientSession, conditionId: string): Promise<string> {
+  const found = await childByBrowseName(session, conditionId, EVENTS.shelvingStateBrowseName);
+  if (found) return found;
+  throw new Error(message("shelvingNotSupported", { condition_id: conditionId }));
+}
+
+/** One forward reference of `parentId` by browse name, or null. */
+async function childByBrowseName(
+  session: ClientSession,
+  parentId: string,
+  browseName: string
+): Promise<string | null> {
   try {
     const browseResult = await session.browse({
-      nodeId: coerceNodeId(conditionId),
+      nodeId: coerceNodeId(parentId),
       browseDirection: 0, // Forward
       resultMask: 63, // Everything, BrowseName included
     });
     for (const reference of browseResult.references ?? []) {
-      if (reference.browseName.name === "Acknowledge") {
+      if (reference.browseName.name === browseName) {
         return reference.nodeId.toString();
       }
     }
   } catch (error) {
-    console.error(`Could not browse ${conditionId} for its Acknowledge method:`, error);
+    console.error(`Could not browse ${parentId} for ${browseName}:`, error);
   }
-  return EVENTS.acknowledgeMethodNodeId;
+  return null;
 }

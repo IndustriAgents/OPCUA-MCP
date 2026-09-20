@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`act_on_alarm`: the rest of the operator workflow** (#119). `acknowledge_alarm`
+  implemented the first half of OPC UA Part 9 §5.5's acknowledge→confirm handshake
+  and nothing else, so an agent could say "I have seen this" and then had no way to
+  say "I have dealt with it", to leave a note, or to do what an operator actually
+  does with a chattering nuisance alarm. The new tool adds `confirm`, `comment`,
+  `shelve`, `shelveFor` (self-limiting: the alarm returns whether or not anyone
+  remembers to unshelve it) and `unshelve`. It is a second tool rather than a
+  rename because merging would break every existing caller, but the two share one
+  implementation and resolve their method through one table, which is the property
+  the 17→13 consolidation was about. Suppress, Enable/Disable, Reset and Silence
+  are deliberately out: they configure the alarm system rather than respond to an
+  alarm, and an agent switching an alarm off is not a feature.
+- **Subscriptions can filter where the values are** (#118). `subscribe_opcua_nodes`
+  took three timing arguments and no filter, so a noisy analogue tag filled the
+  default 20-record ring with sensor jitter in about a second — the agent read it
+  back, saw nothing but noise, and had spent one of the server's 200
+  subscriptions to get it. `deadband_type` (`none`/`absolute`/`percent`),
+  `deadband_value` and `data_change_trigger` now pass OPC UA Part 4 §7.22's
+  `DataChangeFilter` through to the monitored item, so the discarded values never
+  leave the server. `percent` is a percentage of the node's `EURange`, which is
+  why this composes with #110; a node publishing no range is refused rather than
+  quietly given an absolute deadband. The default trigger is `statusValue`, not
+  OPC UA's own `status`, and a request that asks for nothing special sends no
+  filter at all. Every record reports the filter in force.
 - **`OPCUA_AUDIT_FILE`: somewhere durable for the control audit trail to go**
   (#113). It only ever went to stderr, which for a stdio subprocess launched by
   an MCP client is that client's rotating log — not a compliance artifact, not

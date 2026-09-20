@@ -198,6 +198,10 @@ UNEXERCISED = {
     # Needs a live condition instance to acknowledge; the alarms mock has one and
     # `test_events_e2e.py` drives it there.
     "acknowledge_alarm": "needs a live condition — covered by test_events_e2e.py",
+    # The same, and for the same reason: confirming, commenting and shelving all
+    # need a condition instance to act on, and the shelving half additionally
+    # needs one whose type declares ShelvingState.
+    "act_on_alarm": "needs a live condition — covered by test_events_e2e.py",
     # The bundled mock implements no Alarms & Conditions, so ConditionRefresh
     # answers BadNothingToDo on *both* runtimes — identically, which is itself
     # parity, just not of a result shape. `test_events_e2e.py` runs it against

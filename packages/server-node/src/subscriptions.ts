@@ -15,7 +15,10 @@ import {
   ClientMonitoredItem,
   ClientSession,
   ClientSubscription,
+  DataChangeFilter,
+  DataChangeTrigger,
   DataValue,
+  DeadbandType,
   StatusCodes,
   TimestampsToReturn,
 } from "node-opcua-client";
@@ -44,6 +47,9 @@ export interface SubscriptionRecord {
   sampling_interval: number;
   buffer_size: number;
   change_count: number;
+  deadband_type: string;
+  deadband_value: number;
+  data_change_trigger: string;
   changes: HistoryRecord[];
 }
 
@@ -53,6 +59,57 @@ export interface SubscribeOptions {
   bufferSize?: number;
 }
 
+/** What a subscription reports, beyond how often it looks.
+ *
+ * Point a subscription at a noisy analogue tag with no deadband and the default
+ * 20-record ring fills with sensor jitter in about a second: the agent reads it
+ * back, sees nothing but noise, and has spent one of the server's subscriptions
+ * to get it. This is OPC UA's own answer (Part 4 §7.22) rather than filtering
+ * after the fact — the values never leave the server, so it costs no bandwidth
+ * and no buffer.
+ */
+export interface SubscriptionFilter {
+  deadbandType: string;
+  deadbandValue: number;
+  trigger: string;
+}
+
+/** The deadband kinds the contract names, mapped onto node-opcua's enum.
+ *
+ * The names are the contract's, the numbers are the library's, and the numbering
+ * is fixed by OPC UA Part 4 §7.22 — so the Python half maps the same names onto
+ * its own library and the two provably agree without either transcribing a
+ * number.
+ */
+export const DEADBAND_TYPES: Record<string, DeadbandType> = {
+  none: DeadbandType.None,
+  absolute: DeadbandType.Absolute,
+  percent: DeadbandType.Percent,
+};
+
+/** The same, for what counts as a change worth reporting. */
+export const DATA_CHANGE_TRIGGERS: Record<string, DataChangeTrigger> = {
+  status: DataChangeTrigger.Status,
+  statusValue: DataChangeTrigger.StatusValue,
+  statusValueTimestamp: DataChangeTrigger.StatusValueTimestamp,
+};
+
+/** Not OPC UA's default, which is `Status`. An agent that asked to watch a value
+ *  and was told only about status transitions would have been given something
+ *  nobody asks for. */
+export const DEFAULT_DATA_CHANGE_TRIGGER = LIMITS.defaultDataChangeTrigger;
+
+export const DEFAULT_FILTER: SubscriptionFilter = {
+  deadbandType: "none",
+  deadbandValue: 0,
+  trigger: DEFAULT_DATA_CHANGE_TRIGGER,
+};
+
+/** True when a filter asks for nothing the server would not do anyway. */
+export function isDefaultFilter(filter: SubscriptionFilter): boolean {
+  return filter.deadbandType === "none" && filter.trigger === DEFAULT_DATA_CHANGE_TRIGGER;
+}
+
 interface Entry {
   id: string;
   nodeId: string;
@@ -60,6 +117,7 @@ interface Entry {
   samplingInterval: number;
   bufferSize: number;
   changeCount: number;
+  filter: SubscriptionFilter;
   changes: HistoryRecord[];
   subscription: ClientSubscription | null;
   monitoredItem: ClientMonitoredItem | null;
@@ -101,6 +159,74 @@ export function resolveOptions(options: SubscribeOptions): {
   return { publishingInterval, samplingInterval, bufferSize };
 }
 
+/** The filter a subscribe request resolves to, or throw if it cannot.
+ *
+ * Validation the contract's own schema cannot express: the `enum` keyword
+ * refuses an unknown name, but "a deadband needs a size" is a relationship
+ * *between* two arguments. Refused rather than defaulted to zero, which would be
+ * a deadband that filters nothing while reporting that one is in force — the
+ * caller would read a buffer full of jitter and conclude the tag was noisier
+ * than their threshold, which it may not be.
+ */
+export function resolveFilter(options: {
+  deadbandType?: string | null;
+  deadbandValue?: number | null;
+  dataChangeTrigger?: string | null;
+}): SubscriptionFilter {
+  const deadbandType = options.deadbandType ?? "none";
+  if (!(deadbandType in DEADBAND_TYPES)) {
+    throw new Error(
+      message("notAllowedValue", {
+        tool: "subscribe_opcua_nodes",
+        argument: "deadband_type",
+        allowed: Object.keys(DEADBAND_TYPES)
+          .map((name) => JSON.stringify(name))
+          .join(", "),
+        value: JSON.stringify(deadbandType),
+      })
+    );
+  }
+  const trigger = options.dataChangeTrigger ?? DEFAULT_DATA_CHANGE_TRIGGER;
+  if (!(trigger in DATA_CHANGE_TRIGGERS)) {
+    throw new Error(
+      message("notAllowedValue", {
+        tool: "subscribe_opcua_nodes",
+        argument: "data_change_trigger",
+        allowed: Object.keys(DATA_CHANGE_TRIGGERS)
+          .map((name) => JSON.stringify(name))
+          .join(", "),
+        value: JSON.stringify(trigger),
+      })
+    );
+  }
+  if (deadbandType === "none") {
+    return { deadbandType: "none", deadbandValue: 0, trigger };
+  }
+  if (options.deadbandValue === undefined || options.deadbandValue === null) {
+    throw new Error(message("deadbandNeedsValue", { deadband_type: deadbandType }));
+  }
+  return {
+    deadbandType,
+    deadbandValue: orDefault(options.deadbandValue, 0),
+    trigger,
+  };
+}
+
+/** One `DataChangeFilter`, or null when the defaults are what is wanted.
+ *
+ * Null rather than a filter that asks for the defaults: a server is entitled to
+ * reject a filter it does not implement, and there is no reason to risk that for
+ * a subscription that wanted nothing special.
+ */
+function monitoringFilter(filter: SubscriptionFilter): DataChangeFilter | null {
+  if (isDefaultFilter(filter)) return null;
+  return new DataChangeFilter({
+    trigger: DATA_CHANGE_TRIGGERS[filter.trigger],
+    deadbandType: DEADBAND_TYPES[filter.deadbandType],
+    deadbandValue: filter.deadbandValue,
+  });
+}
+
 /** The message both runtimes give for an ID that is not (or no longer) active. */
 export function unknownSubscriptionMessage(id: string): string {
   return message("unknownSubscription", { subscription_id: id });
@@ -138,7 +264,8 @@ export class SubscriptionManager {
   async subscribe(
     session: ClientSession,
     nodeId: string,
-    options: SubscribeOptions = {}
+    options: SubscribeOptions = {},
+    filter: SubscriptionFilter = DEFAULT_FILTER
   ): Promise<SubscriptionRecord> {
     const { publishingInterval, samplingInterval, bufferSize } = resolveOptions(options);
 
@@ -155,6 +282,7 @@ export class SubscriptionManager {
       samplingInterval,
       bufferSize,
       changeCount: 0,
+      filter: filter ?? DEFAULT_FILTER,
       changes: [],
       subscription: null,
       monitoredItem: null,
@@ -202,6 +330,7 @@ export class SubscriptionManager {
    */
   private async attach(session: ClientSession, entry: Entry): Promise<void> {
     const { nodeId, publishingInterval, samplingInterval, bufferSize } = entry;
+    const filter = monitoringFilter(entry.filter);
 
     const subscription = await session.createSubscription2({
       requestedPublishingInterval: publishingInterval,
@@ -218,7 +347,16 @@ export class SubscriptionManager {
     try {
       const monitoredItem = await subscription.monitor(
         { nodeId, attributeId: AttributeIds.Value },
-        { samplingInterval, discardOldest: true, queueSize: bufferSize },
+        {
+          samplingInterval,
+          discardOldest: true,
+          queueSize: bufferSize,
+          // Attached at creation rather than afterwards: modifying the item
+          // later would leave a window in which the unfiltered one is already
+          // delivering, which on the noisy tag this exists for is exactly the
+          // burst nobody wanted.
+          ...(filter ? { filter } : {}),
+        },
         TimestampsToReturn.Both
       );
       // node-opcua reports a rejected item through the create result rather than
@@ -297,6 +435,12 @@ function toRecord(entry: Entry): SubscriptionRecord {
     sampling_interval: entry.samplingInterval,
     buffer_size: entry.bufferSize,
     change_count: entry.changeCount,
+    // The filter in force, reported for the same reason the intervals are: a
+    // caller reading a suspiciously quiet buffer needs to know whether it asked
+    // for that.
+    deadband_type: entry.filter.deadbandType,
+    deadband_value: entry.filter.deadbandValue,
+    data_change_trigger: entry.filter.trigger,
     changes: [...entry.changes],
   };
 }

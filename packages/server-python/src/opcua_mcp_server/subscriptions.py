@@ -24,6 +24,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from opcua import ua
+
 from .contract import CONTRACT
 from .errors import message
 from .records import history_record
@@ -38,6 +40,50 @@ MIN_PUBLISHING_INTERVAL = _LIMITS["minPublishingIntervalMs"]
 DEFAULT_BUFFER_SIZE = _LIMITS["defaultBufferSize"]
 MIN_BUFFER_SIZE = _LIMITS["minBufferSize"]
 MAX_BUFFER_SIZE = _LIMITS["maxBufferSize"]
+
+#: The deadband kinds the contract names, mapped onto python-opcua's enum. The
+#: names are the contract's, the numbers are the library's, and the numbering is
+#: fixed by OPC UA Part 4 §7.22 — so the Node half maps the same names onto its
+#: own library and the two provably agree without either transcribing a number.
+DEADBAND_TYPES: dict[str, int] = {
+    "none": ua.DeadbandType.None_,
+    "absolute": ua.DeadbandType.Absolute,
+    "percent": ua.DeadbandType.Percent,
+}
+
+#: The same, for what counts as a change worth reporting.
+DATA_CHANGE_TRIGGERS: dict[str, int] = {
+    "status": ua.DataChangeTrigger.Status,
+    "statusValue": ua.DataChangeTrigger.StatusValue,
+    "statusValueTimestamp": ua.DataChangeTrigger.StatusValueTimestamp,
+}
+
+#: Not OPC UA's default, which is `Status`. An agent that asked to watch a value
+#: and was told only about status transitions would have been given something
+#: nobody asks for.
+DEFAULT_DATA_CHANGE_TRIGGER = _LIMITS["defaultDataChangeTrigger"]
+
+
+@dataclass(frozen=True)
+class Filter:
+    """What a subscription reports, beyond how often it looks.
+
+    Point a subscription at a noisy analogue tag with no deadband and the default
+    20-record ring fills with sensor jitter in about a second: the agent reads it
+    back, sees nothing but noise, and has spent one of the server's subscriptions
+    to get it. This is OPC UA's own answer (Part 4 §7.22) rather than filtering
+    after the fact — the values never leave the server, so it costs no bandwidth
+    and no buffer.
+    """
+
+    deadband_type: str = "none"
+    deadband_value: float = 0.0
+    trigger: str = DEFAULT_DATA_CHANGE_TRIGGER
+
+    @property
+    def is_default(self) -> bool:
+        """True when this asks for nothing the server would not do anyway."""
+        return self.deadband_type == "none" and self.trigger == DEFAULT_DATA_CHANGE_TRIGGER
 
 
 def resolve_options(
@@ -60,6 +106,53 @@ def resolve_options(
         max(int(_number(buffer_size, DEFAULT_BUFFER_SIZE)), MIN_BUFFER_SIZE), MAX_BUFFER_SIZE
     )
     return publishing, sampling, size
+
+
+def resolve_filter(
+    deadband_type: str | None,
+    deadband_value: float | None,
+    data_change_trigger: str | None,
+) -> Filter:
+    """The filter a subscribe request resolves to, or raise if it cannot.
+
+    Validation the contract's own schema cannot express: the `enum` keyword
+    refuses an unknown name, but "a deadband needs a size" is a relationship
+    *between* two arguments. Refused rather than defaulted to zero, which would
+    be a deadband that filters nothing while reporting that one is in force —
+    the caller would read a buffer full of jitter and conclude the tag was
+    noisier than their threshold, which it may not be.
+    """
+    kind = deadband_type or "none"
+    if kind not in DEADBAND_TYPES:
+        raise ValueError(
+            message(
+                "notAllowedValue",
+                tool="subscribe_opcua_nodes",
+                argument="deadband_type",
+                allowed=", ".join(f'"{name}"' for name in DEADBAND_TYPES),
+                value=f'"{kind}"',
+            )
+        )
+    trigger = data_change_trigger or DEFAULT_DATA_CHANGE_TRIGGER
+    if trigger not in DATA_CHANGE_TRIGGERS:
+        raise ValueError(
+            message(
+                "notAllowedValue",
+                tool="subscribe_opcua_nodes",
+                argument="data_change_trigger",
+                allowed=", ".join(f'"{name}"' for name in DATA_CHANGE_TRIGGERS),
+                value=f'"{trigger}"',
+            )
+        )
+    if kind == "none":
+        return Filter(deadband_type="none", deadband_value=0.0, trigger=trigger)
+    if deadband_value is None:
+        raise ValueError(message("deadbandNeedsValue", deadband_type=kind))
+    return Filter(
+        deadband_type=kind,
+        deadband_value=_number(deadband_value, 0.0),
+        trigger=trigger,
+    )
 
 
 def _number(value: Any, fallback: float) -> float:
@@ -111,6 +204,7 @@ class _Entry:
     publishing_interval: float
     sampling_interval: float
     buffer_size: int
+    data_filter: Filter = field(default_factory=Filter)
     subscription: Any = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     change_count: int = 0
@@ -131,8 +225,31 @@ class _Entry:
                 "sampling_interval": self.sampling_interval,
                 "buffer_size": self.buffer_size,
                 "change_count": self.change_count,
+                # The filter in force, reported for the same reason the intervals
+                # are: a caller reading a suspiciously quiet buffer needs to know
+                # whether it asked for that.
+                "deadband_type": self.data_filter.deadband_type,
+                "deadband_value": self.data_filter.deadband_value,
+                "data_change_trigger": self.data_filter.trigger,
                 "changes": list(self.changes),
             }
+
+
+def _monitoring_filter(data_filter: Filter) -> Any:
+    """One ``DataChangeFilter``, or None when the defaults are what is wanted.
+
+    None rather than a filter that asks for the defaults: a server is entitled to
+    reject a filter it does not implement, and there is no reason to risk that for
+    a subscription that wanted nothing special. This is also why the trigger is
+    only sent when it differs from what this server treats as its default.
+    """
+    if data_filter.is_default:
+        return None
+    request = ua.DataChangeFilter()
+    request.Trigger = DATA_CHANGE_TRIGGERS[data_filter.trigger]
+    request.DeadbandType = DEADBAND_TYPES[data_filter.deadband_type]
+    request.DeadbandValue = data_filter.deadband_value
+    return request
 
 
 class _DataChangeHandler:
@@ -182,6 +299,7 @@ class SubscriptionManager:
         publishing_interval: float | None = None,
         sampling_interval: float | None = None,
         buffer_size: int | None = None,
+        data_filter: Filter | None = None,
     ) -> dict:
         """Start monitoring ``node_id``, returning the new subscription's record."""
         if self._client is None:
@@ -201,6 +319,7 @@ class SubscriptionManager:
             publishing_interval=publishing,
             sampling_interval=sampling,
             buffer_size=size,
+            data_filter=data_filter or Filter(),
             changes=deque(maxlen=size),
         )
         self._attach(self._client, entry)
@@ -264,7 +383,26 @@ class SubscriptionManager:
         subscription = client.create_subscription(publishing, _DataChangeHandler(entry))
 
         try:
-            handle = subscription.subscribe_data_change(node, queuesize=size)
+            monitoring_filter = _monitoring_filter(entry.data_filter)
+            if monitoring_filter is None:
+                handle = subscription.subscribe_data_change(node, queuesize=size)
+            else:
+                # `_subscribe` is `subscribe_data_change` with the one parameter
+                # that wrapper does not pass on. python-opcua offers no public way
+                # to attach a general DataChangeFilter when the item is created —
+                # `deadband_monitor` hardcodes the trigger, and
+                # `modify_monitored_item` can only express an absolute deadband —
+                # and attaching one afterwards would leave a window in which the
+                # unfiltered item is already delivering. The reach is confined to
+                # this branch, and `test_subscriptions.py` asserts the method
+                # still exists on the real class, so a library change fails loudly
+                # instead of silently dropping the filter.
+                handle = subscription._subscribe(
+                    node,
+                    ua.AttributeIds.Value,
+                    mfilter=monitoring_filter,
+                    queuesize=size,
+                )
             if sampling != publishing:
                 # python-opcua hardcodes a monitored item's SamplingInterval to
                 # the subscription's publishing interval, so an independent

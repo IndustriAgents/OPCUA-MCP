@@ -278,6 +278,18 @@
             "type": "number",
             "description": "Total data changes received since subscribing, including any discarded by the buffer. An OPC UA server sends the node's current value as the first change, so this reaches 1 without the value having moved."
           },
+          "deadband_type": {
+            "type": "string",
+            "description": "The deadband in force: 'none', 'absolute' or 'percent'. Reported for the same reason the intervals are — a caller reading a suspiciously quiet buffer needs to know whether it asked for that."
+          },
+          "deadband_value": {
+            "type": "number",
+            "description": "The deadband's size, in engineering units or percent of EURange as `deadband_type` says. 0 when there is no deadband."
+          },
+          "data_change_trigger": {
+            "type": "string",
+            "description": "What this subscription counts as a change: 'status', 'statusValue' or 'statusValueTimestamp'."
+          },
           "changes": {
             "type": "array",
             "description": "The retained changes, oldest first, at most `buffer_size` of them. Each is a record of the shape defined by \"historyRecords\": { value, timestamp, status }."
@@ -290,10 +302,37 @@
           "sampling_interval",
           "buffer_size",
           "change_count",
+          "deadband_type",
+          "deadband_value",
+          "data_change_trigger",
           "changes"
         ],
         "additionalProperties": false
       }
+    },
+    "alarmAction": {
+      "$comment": "One object, returned as a single MCP text content block. Deliberately the same shape as \"acknowledgement\" plus the action taken: the two tools do the same kind of thing to the same kind of target, and an agent that has learned to read one answer should not have to learn another. They are separate tools only because merging them would rename `acknowledge_alarm` out from under every existing caller for no functional gain \u2014 see the tool's own description.",
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "The event_id that identified the condition, echoed back."
+        },
+        "condition_id": {
+          "type": ["string", "null"],
+          "description": "The condition instance acted on, canonically spelled. null when the caller supplied none and none could be recovered from the buffered event."
+        },
+        "action": {
+          "type": "string",
+          "description": "The action taken: 'confirm', 'comment', 'shelve', 'shelveFor' or 'unshelve'. Echoed because 'shelve' and 'shelveFor' are one argument apart and the record should say which one happened."
+        },
+        "status": {
+          "type": "string",
+          "description": "OPC UA status code name the server answered the call with. 'Good' means it accepted the action."
+        }
+      },
+      "required": ["event_id", "condition_id", "action", "status"],
+      "additionalProperties": false
     },
     "serverStatus": {
       "$comment": "A single object rather than a list of records: `get_server_status` returns one text content block carrying it as JSON, and {\"result\": {...}} as structured content. Every field is always present. A field this server could not read — because the connection is down, or the OPC UA server does not expose it — is null, and `namespaces` is then empty; `connected` and `error` say which of those happened.",
@@ -429,6 +468,52 @@
     "conditionTypeNodeId": "ns=0;i=2782",
     "conditionRefreshMethodNodeId": "ns=0;i=3875",
     "acknowledgeMethodNodeId": "ns=0;i=9111",
+    "shelvingStateBrowseName": "ShelvingState",
+    "actions": {
+      "$comment": "The rest of the operator workflow Part 9 \u00a75.5 defines. `acknowledge_alarm` implemented the first half of a two-stage handshake and nothing else, so an agent could see an alarm and say it had seen it \u2014 and then had no way to confirm it, annotate it, or do the thing an operator actually does with a chattering nuisance alarm. Each entry names the method to call on the condition instance, with the well-known method of its type as the fallback for a server that does not expose condition instances in its address space (Part 9 allows that, which is why `acknowledge_alarm` already falls back the same way). Deliberately absent: Suppress, Enable/Disable, Reset and Silence. Those configure the alarm system rather than respond to an alarm, and an agent switching an alarm off is not a feature. `on` says which object the method is called on: `condition` for the acknowledge family, which are methods of the condition's own type, and `shelvingState` for the three shelving ones, which are methods of ShelvedStateMachineType and so hang off the condition's ShelvingState component rather than off the condition. Getting that wrong is not a subtle failure \u2014 the server answers BadArgumentsMissing or BadTooManyArguments, because the method it resolves is a *different* method of the right name's neighbour.",
+      "acknowledge": {
+        "browseName": "Acknowledge",
+        "methodNodeId": "ns=0;i=9111",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "The first stage of the handshake, and what `acknowledge_alarm` does. Here as well so both tools resolve their method through one table: the two are the same operation with a different method id, and the surface only carries them separately because renaming `acknowledge_alarm` would break every caller for no functional gain."
+      },
+      "confirm": {
+        "browseName": "Confirm",
+        "methodNodeId": "ns=0;i=9113",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "The second stage of Part 9's acknowledge\u2192confirm handshake: the operator has not merely seen the alarm but dealt with it. A server only offers it on a condition whose type declares ConfirmedState."
+      },
+      "comment": {
+        "browseName": "AddComment",
+        "methodNodeId": "ns=0;i=9029",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "Attach a note to a condition without changing its state. A method of ConditionType itself, so every condition has it."
+      },
+      "shelve": {
+        "browseName": "OneShotShelve",
+        "methodNodeId": "ns=0;i=2948",
+        "on": "shelvingState",
+        "takes": "nothing",
+        "description": "Shelve the alarm until it returns to normal. What an operator does with a chattering nuisance alarm, and a natural agent action \u2014 'this level switch has cycled 40 times in an hour, shelve it'."
+      },
+      "shelveFor": {
+        "browseName": "TimedShelve",
+        "methodNodeId": "ns=0;i=2949",
+        "on": "shelvingState",
+        "takes": "duration",
+        "description": "The same, for a fixed time. Self-limiting, which is a rare and welcome property in an agent-invokable control action: the alarm comes back whether or not anyone remembers to unshelve it."
+      },
+      "unshelve": {
+        "browseName": "Unshelve",
+        "methodNodeId": "ns=0;i=2947",
+        "on": "shelvingState",
+        "takes": "nothing",
+        "description": "Put a shelved alarm back on the board."
+      }
+    },
     "refreshStartEventTypeNodeId": "ns=0;i=2787",
     "refreshEndEventTypeNodeId": "ns=0;i=2788",
     "defaults": {
@@ -459,7 +544,20 @@
     "minPublishingIntervalMs": 50,
     "defaultBufferSize": 20,
     "minBufferSize": 1,
-    "maxBufferSize": 1000
+    "maxBufferSize": 1000,
+    "deadbandTypes": {
+      "$comment": "OPC UA Part 4 \u00a77.22's DataChangeFilter, by the names the specification gives it. Point a subscription at a noisy analogue tag without one and the default 20-record ring fills with sensor jitter in about a second \u2014 the agent reads it back and sees nothing but noise, having spent one of the server's subscriptions to get it. `percent` is defined *against the node's EURange*, which is why this composes with `analog`: the unit work lands once and pays twice. Each runtime maps these names onto its own library's DeadbandType enum, whose numbering is fixed by the specification, so the two provably agree.",
+      "none": "Report every change the server samples. The default, and what this server did before there was a choice.",
+      "absolute": "Report a change only when it differs from the last reported value by more than `deadband_value`, in the node's own engineering units.",
+      "percent": "The same, with `deadband_value` read as a percentage of the node's EURange. Requires the node to publish one; a node that does not is refused rather than silently treated as absolute."
+    },
+    "dataChangeTriggers": {
+      "$comment": "What counts as a change worth reporting, also Part 4 \u00a77.22. The OPC UA default is `status`, which is *not* this server's: an agent that asked to watch a value and was told only about status transitions would have been given something nobody asks for. `statusValue` is the useful default and the one a deadband filters on. `statusValueTimestamp` additionally reports a re-sample that changed nothing but the timestamp, which is how to tell 'the value is steady' from 'the value stopped updating' \u2014 a distinction that matters on a plant and cannot be drawn from the other two.",
+      "status": "Only when the OPC UA status code changes.",
+      "statusValue": "When the status or the value changes. The default here.",
+      "statusValueTimestamp": "When the status, the value or the source timestamp changes."
+    },
+    "defaultDataChangeTrigger": "statusValue"
   },
   "transport": {
     "$comment": "Bounds on what the OPC UA server on the other end may send us, advertised in the OPC UA Hello and enforced on receipt. CVE-2022-25304 is a missing limit on the number of chunks one message may be split into: python-opcua appends every intermediate chunk to a list with nothing counting them, so a hostile or compromised server can stream chunks until the client runs out of memory. The advisory has no fixed version and will not get one — python-opcua is unmaintained, and the same advisory names asyncua. Both runtimes therefore advertise these bounds and, because advertising only binds a server that chooses to obey, enforce them on what actually arrives. maxChunkCount * maxChunkSize is the largest message either runtime will assemble: 1024 * 64KiB = 64MiB, which is far above any real OPC UA response and far below a memory-exhaustion attack. See SECURITY.md.",
@@ -586,7 +684,13 @@
     "subscribeFailed": "Failed to subscribe to node {node_id}: {reason}",
     "eventSubscribeFailed": "Failed to subscribe to events from node {node_id}: {reason}",
     "alarmsFailed": "Failed to list active alarms from node {node_id}: {reason}",
+    "shelvingNotSupported": "Condition {condition_id} has no ShelvingState, so this server cannot shelve it. ShelvingState is optional in OPC UA Part 9 \u2014 acknowledge or comment on the alarm instead, or ask the plant's integrator to enable shelving.",
+    "alarmActionFailed": "Failed to {action} alarm {condition_id}: {reason}",
+    "shelveDurationNotAllowed": "act_on_alarm only takes shelve_duration_ms with action \"shelveFor\"; got \"{action}\". Use \"shelveFor\" to shelve for a set time, or drop the duration to shelve until the alarm clears.",
+    "shelveForNeedsDuration": "act_on_alarm requires shelve_duration_ms with action \"shelveFor\". Use action \"shelve\" to shelve until the alarm returns to normal instead.",
     "acknowledgeFailed": "Failed to acknowledge alarm {condition_id}: {reason}",
+    "deadbandNeedsValue": "subscribe_opcua_nodes requires deadband_value when deadband_type is \"{deadband_type}\"",
+    "percentDeadbandNeedsRange": "A percent deadband is a percentage of node {node_id}'s EURange, and it publishes none. Use deadband_type \"absolute\" with a value in engineering units, or read the node to see what it reports.",
     "aggregateNeedsStart": "read_opcua_history requires start_time when aggregate_function is given",
     "notSubscribedToEvents": "Not subscribed to events from node {node_id}. Call subscribe_events first.",
     "unknownEventId": "Unknown event_id \"{event_id}\". Call list_active_alarms first, or pass the condition_id of the alarm to acknowledge.",
@@ -914,6 +1018,21 @@
             "type": "integer",
             "minimum": 0,
             "description": "How many of the most recent changes to retain per subscription; older ones are discarded. Default 20, clamped to 1..1000."
+          },
+          "deadband_type": {
+            "type": "string",
+            "enum": ["none", "absolute", "percent"],
+            "description": "Filter out changes too small to be worth reporting (OPC UA Part 4 §7.22). 'none' (the default) reports every change the server samples, which on a noisy analogue tag fills the buffer with sensor jitter in about a second. 'absolute' compares against `deadband_value` in the node's own engineering units. 'percent' reads `deadband_value` as a percentage of the node's EURange, and needs the node to publish one."
+          },
+          "deadband_value": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How far the value must move to be reported, in engineering units for 'absolute' and in percent of EURange for 'percent'. Ignored when `deadband_type` is 'none' or unset; required when it is not."
+          },
+          "data_change_trigger": {
+            "type": "string",
+            "enum": ["status", "statusValue", "statusValueTimestamp"],
+            "description": "What counts as a change. 'statusValue' (the default) reports a change of value or of OPC UA status. 'status' reports only status transitions — useful for watching a tag go bad without caring what it reads. 'statusValueTimestamp' also reports a re-sample that changed nothing but the timestamp, which is how to tell 'the value is steady' from 'the value stopped updating'."
           }
         },
         "required": ["node_ids"],
@@ -1027,6 +1146,49 @@
           }
         },
         "required": ["event_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "act_on_alarm",
+      "accessClass": "alarm-action",
+      "guard": {
+        "$comment": "Gated as a whole by the same acknowledge_alarms flag as acknowledge_alarm, and for the same reason: a condition id is discovered at runtime from list_active_alarms and cannot be enumerated in a policy file ahead of time. `action` is in auditPaths because 'shelved the fire alarm' and 'left a comment on the fire alarm' are different facts and the record has to say which.",
+        "flag": "acknowledgeAlarms",
+        "auditPaths": ["condition_id", "event_id", "action"]
+      },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+      "retryPolicy": "uncertainOutcome",
+      "capabilities": [],
+      "resultShape": "alarmAction",
+      "description": "Confirm, annotate or shelve an alarm — the rest of the operator workflow that acknowledge_alarm starts. 'confirm' is the second stage of OPC UA's acknowledge→confirm handshake: not merely 'I have seen this' but 'I have dealt with it'. 'comment' attaches a note without changing the alarm's state. 'shelve' silences a chattering nuisance alarm until it returns to normal, and 'shelveFor' does the same for a set number of milliseconds, after which it comes back whether or not anyone remembers to unshelve it. 'unshelve' puts it back on the board immediately. Every action is visible to every other client on the server, and none of them clears the underlying condition. Disabled unless the deployment policy explicitly allows it. Separate from acknowledge_alarm only because merging the two would rename it out from under every existing caller; they take the same arguments and answer in the same shape.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The 'event_id' of the event that reported the alarm, exactly as returned (base64). Must be a *current* one: every condition state change is its own event with its own EventId, so after acknowledging an alarm, re-read list_active_alarms for the id the acknowledgement produced before confirming it. A stale id is answered 'BadEventIdUnknown'."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["acknowledge", "confirm", "comment", "shelve", "shelveFor", "unshelve"],
+            "description": "What to do. 'acknowledge' is exactly what acknowledge_alarm does, here so one tool can do the whole workflow. 'confirm' needs a condition whose type declares ConfirmedState; 'shelve', 'shelveFor' and 'unshelve' need one that declares ShelvingState. A server that offers neither refuses the call rather than silently doing nothing."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Note to record with the action, e.g. why it is being shelved. Used by 'confirm' and 'comment'; ignored by the shelving actions, which OPC UA gives no comment argument."
+          },
+          "shelve_duration_ms": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How long to shelve for, in milliseconds. Required with action 'shelveFor' and refused with any other — 'shelve' means 'until the alarm clears', and accepting a duration there would silently ignore it."
+          },
+          "condition_id": {
+            "type": "string",
+            "description": "NodeId of the condition instance to act on. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
+          }
+        },
+        "required": ["event_id", "action"],
         "additionalProperties": false
       }
     }

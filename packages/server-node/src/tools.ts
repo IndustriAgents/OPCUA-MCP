@@ -39,7 +39,7 @@ import {
   EVENT_DEFAULTS,
   EventRecord,
   EventSubscriptions,
-  acknowledgeAlarm,
+  alarmAction,
   droppedEventsMessage,
   listActiveAlarms,
 } from "./events.js";
@@ -48,8 +48,10 @@ import { toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
 import {
   SubscribeOptions,
+  SubscriptionFilter,
   SubscriptionManager,
   SubscriptionRecord,
+  resolveFilter,
   unknownSubscriptionsMessage,
 } from "./subscriptions.js";
 import {
@@ -963,11 +965,19 @@ export class OpcuaTools {
         );
 
       case "subscribe_opcua_nodes":
-        return await this.subscribeOpcuaNodes(args.node_ids as string[], {
-          publishingInterval: args.publishing_interval as number | undefined,
-          samplingInterval: args.sampling_interval as number | undefined,
-          bufferSize: args.buffer_size as number | undefined,
-        });
+        return await this.subscribeOpcuaNodes(
+          args.node_ids as string[],
+          {
+            publishingInterval: args.publishing_interval as number | undefined,
+            samplingInterval: args.sampling_interval as number | undefined,
+            bufferSize: args.buffer_size as number | undefined,
+          },
+          resolveFilter({
+            deadbandType: args.deadband_type as string | undefined,
+            deadbandValue: args.deadband_value as number | undefined,
+            dataChangeTrigger: args.data_change_trigger as string | undefined,
+          })
+        );
 
       case "unsubscribe_opcua_nodes":
         return await this.unsubscribeOpcuaNodes(args.subscription_ids as string[]);
@@ -995,9 +1005,20 @@ export class OpcuaTools {
         );
 
       case "acknowledge_alarm":
-        return await this.acknowledgeAlarm(
+        return await this.actOnAlarm(
           args.event_id as string,
+          "acknowledge",
           (args.comment as string) ?? "",
+          null,
+          args.condition_id as string | undefined
+        );
+
+      case "act_on_alarm":
+        return await this.actOnAlarm(
+          args.event_id as string,
+          args.action as string,
+          (args.comment as string) ?? "",
+          (args.shelve_duration_ms as number | undefined) ?? null,
           args.condition_id as string | undefined
         );
 
@@ -1613,7 +1634,11 @@ export class OpcuaTools {
 
   // --- data-change subscriptions -------------------------------------------
 
-  private async subscribeOpcuaNodes(nodeIds: string[], options: SubscribeOptions) {
+  private async subscribeOpcuaNodes(
+    nodeIds: string[],
+    options: SubscribeOptions,
+    filter: SubscriptionFilter
+  ) {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(
         message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
@@ -1634,13 +1659,27 @@ export class OpcuaTools {
       );
     }
     const session = this.requireSession();
+
+    if (filter.deadbandType === "percent") {
+      // A percent deadband is a percentage *of the node's EURange*, so a node
+      // that publishes none cannot have one. Checked here, before a single
+      // subscription is created, so a batch is refused whole rather than leaving
+      // some nodes monitored and some not.
+      const engineering = await this.metadata.forNodes(session, nodeIds);
+      for (const nodeId of nodeIds) {
+        if (!engineering.get(nodeId)?.eu_range) {
+          throw new Error(message("percentDeadbandNeedsRange", { node_id: nodeId }));
+        }
+      }
+    }
+
     const records: SubscriptionRecord[] = [];
     for (const nodeId of nodeIds) {
       // Named per node, as the Python runtime words it: a batch that fails on
       // its fourth node should say which one, not report the library's own
       // phrasing for whichever call happened to throw.
       try {
-        records.push(await this.subs.subscribe(session, nodeId, options));
+        records.push(await this.subs.subscribe(session, nodeId, options, filter));
       } catch (error) {
         throw new Error(
           message("subscribeFailed", { node_id: nodeId, reason: describeError(error) })
@@ -1735,30 +1774,75 @@ export class OpcuaTools {
     return eventResult(alarms);
   }
 
-  private async acknowledgeAlarm(eventId: string, comment: string, conditionId?: string) {
+  /** Both alarm tools, through one implementation.
+   *
+   * `acknowledge_alarm` is `act_on_alarm` with the action fixed, so there is only
+   * ever one copy of "find the condition, resolve the method, call it, report the
+   * status" to drift — the property the 17→13 consolidation was about, held to
+   * here rather than assumed.
+   *
+   * The refusal wording is the one difference: `acknowledge_alarm` has said
+   * `acknowledgeFailed` since it existed, and changing that would break a caller
+   * matching on it for no gain.
+   */
+  private async actOnAlarm(
+    eventId: string,
+    action: string,
+    comment: string,
+    durationMs: number | null,
+    conditionId?: string
+  ) {
+    // A relationship between two arguments, which the contract's own schema
+    // cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
+    // on any other action would silently ignore it. Refusing says which action
+    // the caller probably meant.
+    if (action === "shelveFor" && durationMs === null) {
+      throw new Error(message("shelveForNeedsDuration"));
+    }
+    if (action !== "shelveFor" && durationMs !== null) {
+      throw new Error(message("shelveDurationNotAllowed", { action }));
+    }
+
     const condition = conditionId || this.events.conditionFor(eventId);
     if (!condition) {
       throw new Error(message("unknownEventId", { event_id: eventId }));
     }
 
+    const failed = (reason: string) =>
+      new Error(
+        action === "acknowledge"
+          ? message("acknowledgeFailed", { condition_id: condition, reason })
+          : message("alarmActionFailed", { action, condition_id: condition, reason })
+      );
+
     let statusCode;
     try {
-      statusCode = await acknowledgeAlarm(this.requireSession(), condition, eventId, comment);
-    } catch (error) {
-      throw new Error(
-        message("acknowledgeFailed", { condition_id: condition, reason: describeError(error) })
+      statusCode = await alarmAction(
+        this.requireSession(),
+        condition,
+        eventId,
+        action,
+        comment,
+        durationMs
       );
+    } catch (error) {
+      throw failed(describeError(error));
     }
     if (statusCode !== StatusCodes.Good) {
-      throw new Error(
-        message("acknowledgeFailed", { condition_id: condition, reason: statusCode.name })
-      );
+      throw failed(statusCode.name);
     }
 
-    return objectResult({
+    const record: Record<string, unknown> = {
       event_id: eventId,
       condition_id: canonicalNodeId(condition),
       status: statusCode.name,
-    });
+    };
+    // `acknowledge_alarm` answers with the shape it always has; `act_on_alarm`
+    // adds the action, because 'shelve' and 'shelveFor' are one argument apart
+    // and the record should say which one happened.
+    if (action !== "acknowledge") {
+      return objectResult({ ...record, action, status: statusCode.name });
+    }
+    return objectResult(record);
   }
 }

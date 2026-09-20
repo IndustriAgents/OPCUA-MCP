@@ -343,7 +343,9 @@ Start watching one or more nodes. Each gets its own subscription record and id.
 ```json
 { "subscription_id": "sub-1", "node_id": "ns=2;i=3",
   "publishing_interval": 500, "sampling_interval": 500,
-  "buffer_size": 20, "change_count": 0, "changes": [] }
+  "buffer_size": 20, "change_count": 0,
+  "deadband_type": "none", "deadband_value": 0,
+  "data_change_trigger": "statusValue", "changes": [] }
 ```
 
 | Argument | Default | Meaning |
@@ -352,10 +354,27 @@ Start watching one or more nodes. Each gets its own subscription record and id.
 | `publishing_interval` | `1000` | How often (ms) the OPC UA server publishes queued changes. Clamped to at least 50. |
 | `sampling_interval` | `0` | How often (ms) it samples the node. `0` means "sample at `publishing_interval`", and the record reports the rate actually in force. A shorter interval queues several readings per publish. |
 | `buffer_size` | `20` | How many of the most recent changes to retain. Clamped to 1..1000; older changes are discarded. |
+| `deadband_type` | `none` | `absolute` reports a change only when it moves further than `deadband_value` in engineering units; `percent` reads that value as a percentage of the node's `EURange`. |
+| `deadband_value` | — | Required when `deadband_type` is not `none`. Refused if omitted rather than defaulted to zero, which would be a deadband that filters nothing. |
+| `data_change_trigger` | `statusValue` | `status` reports only OPC UA status transitions; `statusValueTimestamp` also reports a re-sample that changed nothing but the timestamp. |
+
+**Filter a noisy tag at the server, not here.** Without a deadband the default
+20-record ring fills with sensor jitter in about a second, and the agent reads
+back nothing but noise. The discarded values never leave the OPC UA server, so
+this costs no bandwidth and no buffer:
+
+```json
+{ "node_ids": ["ns=2;i=90"], "deadband_type": "percent", "deadband_value": 2 }
+```
+
+> A percent deadband is a percentage of the node's `EURange`, so it needs a node
+> that publishes one — `ns=2;i=90` on the mock does, 0 to 150, making 2% three
+> degrees. A node that publishes none is refused rather than quietly given an
+> absolute deadband.
 
 > An OPC UA server sends the node's **current value** as the first change, so
 > `change_count` reaches 1 without the value having moved.
-> Prompt: *"Watch the temperature sensor."*
+> Prompt: *"Watch the temperature sensor, but only tell me about moves over half a degree."*
 
 ### `list_subscriptions`
 Every active subscription and what it has collected since.
@@ -366,6 +385,8 @@ Every active subscription and what it has collected since.
 { "subscription_id": "sub-1", "node_id": "ns=2;i=3",
   "publishing_interval": 500, "sampling_interval": 500,
   "buffer_size": 20, "change_count": 4,
+  "deadband_type": "none", "deadband_value": 0,
+  "data_change_trigger": "statusValue",
   "changes": [
     { "value": 25.33, "timestamp": "2026-09-12T08:24:11.478Z", "status": "Good" },
     { "value": 26.05, "timestamp": "2026-09-12T08:24:12.481Z", "status": "Good" },
@@ -507,6 +528,37 @@ the underlying condition: `active` stays `true` until the plant says otherwise.
 Pass `condition_id` explicitly for an event that came from somewhere other than
 this server's own `read_events` / `list_active_alarms`.
 > Prompt: *"Acknowledge the high-temperature alarm, note that I'm on it."*
+
+### `act_on_alarm`
+The rest of the operator workflow: confirm, annotate or shelve.
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAI=", "action": "confirm",
+  "comment": "cooler restarted, temperature falling" }
+```
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAI=", "condition_id": "ns=1;i=1002",
+  "action": "confirm", "status": "Good" }
+```
+
+| `action` | What it does |
+|---|---|
+| `acknowledge` | Exactly what `acknowledge_alarm` does, so one tool can drive the whole workflow. |
+| `confirm` | The second stage of the handshake: not "I have seen this" but "I have dealt with it". Needs a condition whose type declares `ConfirmedState`. |
+| `comment` | Attach a note without changing the alarm's state. Every condition supports it. |
+| `shelve` | Silence a chattering alarm until it returns to normal. |
+| `shelveFor` | The same for `shelve_duration_ms` milliseconds, after which it comes back on its own. |
+| `unshelve` | Put it back on the board immediately. |
+
+> **Use a *current* `event_id`.** Every condition state change is its own event
+> with its own `EventId`, so after acknowledging an alarm, re-read
+> `list_active_alarms` for the id the acknowledgement produced before confirming
+> it. A stale id is answered `BadEventIdUnknown`.
+
+> `shelve_duration_ms` belongs to `shelveFor` and is refused on any other action —
+> `shelve` means "until the alarm clears", and accepting a duration there would
+> silently ignore it.
+
+> Prompt: *"That level switch has cycled 40 times in an hour. Shelve it for half an hour."*
 
 The record shape above is defined once, in `../contract/tools.json` under
 `resultShapes.eventRecords`, with the OPC UA browse path behind each field in

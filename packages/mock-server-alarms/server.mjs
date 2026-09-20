@@ -67,7 +67,12 @@ const alarm = namespace.instantiateExclusiveLimitAlarm(
     conditionName: "HighTemperatureAlarm",
     conditionSource: temperature,
     inputNode: temperature,
-    optionals: ["ConfirmedState", "Confirm"],
+    // ConfirmedState/Confirm make the acknowledge→confirm handshake real, and
+    // ShelvingState makes the three shelve methods exist — without them a server
+    // is still conformant and `act_on_alarm` has nothing to call, which is
+    // exactly the case its refusals are worded for. Both are optional in Part 9,
+    // so a mock that omitted them would leave half of #119 untestable.
+    optionals: ["ConfirmedState", "Confirm", "ShelvingState"],
     highLimit: HIGH_LIMIT,
     highHighLimit: HIGH_HIGH_LIMIT,
   },

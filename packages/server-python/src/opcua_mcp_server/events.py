@@ -30,6 +30,7 @@ from typing import Any
 from opcua import ua
 
 from .contract import EVENTS
+from .errors import message
 from .notices import notice
 from .records import variant_to_json
 
@@ -317,35 +318,103 @@ def list_active_alarms(client, node_id: str, timeout_seconds: float) -> list[dic
             subscription.delete()
 
 
-def acknowledge_alarm(client, condition_id: str, event_id: str, comment: str) -> None:
-    """Acknowledge one condition instance.
+#: What each alarm action calls, and what it takes, from the contract. One table
+#: rather than a branch per action: `acknowledge_alarm` and `act_on_alarm` are
+#: the same operation with a different method id, and the surface carries them
+#: separately only because renaming the first would break every caller.
+ACTIONS = {name: spec for name, spec in EVENTS["actions"].items() if not name.startswith("$")}
 
-    The method is called on the condition itself. Part 9 allows a server not to
-    expose condition instances in its address space at all, in which case the
-    Acknowledge method of AcknowledgeableConditionType is called with the
-    condition as the object — so that well-known method id is the fallback here,
+
+def alarm_action(
+    client,
+    condition_id: str,
+    event_id: str,
+    action: str,
+    comment: str = "",
+    duration_ms: float | None = None,
+) -> None:
+    """Call one Part 9 §5.5 method on one condition instance.
+
+    *Which* object the method hangs off is the action's own business — see
+    ``on`` below — and Part 9 allows a server not to expose condition instances
+    in its address space at all, in which case the type's own method is called
+    with the condition as the object. That well-known id is the fallback here,
     exactly as ``events.ts`` does it.
 
     Raises whatever python-opcua raises for a non-Good status, which the caller
     turns into the message the model sees.
     """
+    spec = ACTIONS[action]
     condition = client.get_node(condition_id)
-    condition.call_method(
-        _acknowledge_method(condition, client),
-        ua.Variant(b64decode(event_id), ua.VariantType.ByteString),
-        ua.Variant(ua.LocalizedText(comment), ua.VariantType.LocalizedText),
-    )
+    # Which object the method hangs off. The acknowledge family are methods of
+    # the condition's own type; the shelving ones are methods of
+    # ShelvedStateMachineType and hang off the condition's ShelvingState
+    # component instead. Calling one on the wrong object does not fail cleanly —
+    # the server resolves a *different* method of the right name's neighbour and
+    # answers BadArgumentsMissing or BadTooManyArguments.
+    target = condition if spec["on"] == "condition" else _shelving_state(condition, condition_id)
+    method = _action_method(target, client, spec)
+
+    if spec["takes"] == "eventIdAndComment":
+        target.call_method(
+            method,
+            ua.Variant(b64decode(event_id), ua.VariantType.ByteString),
+            ua.Variant(ua.LocalizedText(comment), ua.VariantType.LocalizedText),
+        )
+    elif spec["takes"] == "duration":
+        # Duration is a Double of milliseconds in OPC UA, not a struct.
+        target.call_method(method, ua.Variant(float(duration_ms or 0), ua.VariantType.Double))
+    else:
+        target.call_method(method)
 
 
-def _acknowledge_method(condition, client):
-    """The condition's own Acknowledge method, or the type's when it has none."""
+def _shelving_state(condition, condition_id: str):
+    """The condition's ShelvingState, or raise saying this server has none.
+
+    ShelvingState is optional in Part 9, and a server without it is still
+    conformant — so this is a refusal to word rather than a bug to hide. Falling
+    back to the type node would be worse than useless: shelving is per-instance
+    state, and a call against the type would either fail obscurely or change
+    something nobody asked about.
+    """
+    browse_name = EVENTS["shelvingStateBrowseName"]
     try:
         for child in condition.get_children():
-            if child.get_browse_name().Name == "Acknowledge":
+            if child.get_browse_name().Name == browse_name:
                 return child
     except Exception as error:
         print(
-            f"Could not browse {condition.nodeid.to_string()} for its Acknowledge method: {error}",
+            f"Could not browse {condition_id} for its {browse_name}: {error}",
             file=sys.stderr,
         )
-    return client.get_node(EVENTS["acknowledgeMethodNodeId"])
+    raise ValueError(message("shelvingNotSupported", condition_id=condition_id))
+
+
+def acknowledge_alarm(client, condition_id: str, event_id: str, comment: str) -> None:
+    """Acknowledge one condition instance. The first stage of Part 9's handshake.
+
+    Kept as its own name because `acknowledge_alarm` is a tool callers already
+    have; the work is :func:`alarm_action`'s, so there is only ever one
+    implementation to drift.
+    """
+    alarm_action(client, condition_id, event_id, "acknowledge", comment)
+
+
+def _action_method(target, client, spec: dict):
+    """``target``'s own method, or its type's well-known one when it has none.
+
+    Part 9 allows a server not to expose condition instances in its address space
+    at all, in which case the type's method is called with the condition as the
+    object — which is what the fallback is for.
+    """
+    browse_name = spec["browseName"]
+    try:
+        for child in target.get_children():
+            if child.get_browse_name().Name == browse_name:
+                return child
+    except Exception as error:
+        print(
+            f"Could not browse {target.nodeid.to_string()} for its {browse_name} method: {error}",
+            file=sys.stderr,
+        )
+    return client.get_node(spec["methodNodeId"])

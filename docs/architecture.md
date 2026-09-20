@@ -154,6 +154,32 @@ first, session second — Python in the lifespan's `finally`, Node on `SIGINT`,
 `SIGTERM` *and* `server.onclose`, because the usual end of an MCP session is not
 a signal at all but the client closing stdin.
 
+### Filtering where the values are
+
+A subscription with no filter reports every change the OPC UA server samples.
+Point one at a noisy analogue tag and the default 20-record ring fills with
+sensor jitter in about a second: the agent reads it back, sees nothing but noise,
+and has spent one of the 200 subscriptions this server will hold to get it.
+
+`deadband_type` / `deadband_value` / `data_change_trigger` are OPC UA's own
+answer (Part 4 §7.22), and the reason to use it rather than filtering here is
+that the discarded values never leave the server — no bandwidth, no buffer, no
+round trip. `percent` is defined *against the node's `EURange`*, which is why
+this composes with the engineering-units work: that landed once and pays twice.
+A node publishing no range is refused a percent deadband rather than quietly
+given an absolute one, because 2% of an unknown range is not 2 engineering units.
+
+Two decisions worth stating. The default trigger is `statusValue`, **not** OPC
+UA's own default of `status` — an agent that asked to watch a value and was told
+only about status transitions would have been given something nobody asks for.
+And when a request asks for nothing special, no `DataChangeFilter` is sent at
+all: a server is entitled to reject a filter it does not implement, and there is
+no reason to risk that for a subscription that wanted the defaults.
+
+The record reports the filter in force for the same reason it reports the
+resolved intervals — a caller looking at a suspiciously quiet buffer needs to
+know whether it asked for that.
+
 ### Why the subscriptions resource is polled, not pushed
 
 Issue #3 asked for `notifications/resources/updated`. It is not offered, on
@@ -308,6 +334,38 @@ than offering them. A server without Alarms & Conditions is told apart at call
 time instead: `list_active_alarms` reports that its ConditionRefresh call failed
 and that the server may not implement A&C, rather than returning an empty list a
 model would read as "no alarms".
+
+### The operator workflow, not just the first step of it
+
+`acknowledge_alarm` implemented the first half of Part 9 §5.5's
+acknowledge→confirm handshake and nothing else. An agent could say "I have seen
+this" and then had no way to say "I have dealt with it", to leave a note, or to do
+what an operator actually does with a chattering nuisance alarm. `act_on_alarm`
+adds `confirm`, `comment`, `shelve`, `shelveFor` and `unshelve`.
+
+It is a *second tool* rather than a rename, and the reason matters: merging it
+into `acknowledge_alarm` would break every existing caller for no functional
+gain. What is *not* duplicated is the implementation — both resolve their method
+through one table (`contract/tools.json` -> `events.actions`) and run one code
+path, which is the property the 17→13 consolidation was really about. The count
+test in `tests/unit/test_contract.py` says so rather than leaving it to review.
+
+Two things here do not fail cleanly, and both cost a debugging session:
+
+- **The shelving methods hang off the condition's `ShelvingState`**, not off the
+  condition. They belong to `ShelvedStateMachineType`, so `events.actions` carries
+  an `on` field and the acknowledge family and the shelving family take different
+  routes. Resolved against the wrong object, a server finds a *different* method
+  of the right name's neighbour and answers `BadArgumentsMissing` or
+  `BadTooManyArguments` — never "no such method".
+- **A method only accepts a *current* `EventId`.** Every condition state change is
+  its own event with its own id, so confirming with the id that came back before
+  the acknowledge is answered `BadEventIdUnknown`. The tool description says so,
+  because nothing in the argument list hints at it.
+
+Deliberately absent: Suppress, Enable/Disable, Reset and Silence. Those configure
+the alarm system rather than respond to an alarm, and an agent switching an alarm
+off is not a feature.
 
 ## Events and Alarms & Conditions
 

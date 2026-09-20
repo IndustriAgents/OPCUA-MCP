@@ -56,6 +56,7 @@ from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
 from .subscriptions import (
     SUBSCRIPTIONS,
+    resolve_filter,
     unknown_subscription_message,
     unknown_subscriptions_message,
 )
@@ -1520,9 +1521,13 @@ def call_opcua_method(
 @mcp.tool(description=DESC["subscribe_opcua_nodes"])
 async def subscribe_opcua_nodes(
     node_ids: list[str],
+    ctx: Context,
     publishing_interval: float = 1000,
     sampling_interval: float = 0,
     buffer_size: int = 20,
+    deadband_type: str | None = None,
+    deadband_value: float | None = None,
+    data_change_trigger: str | None = None,
 ) -> list[dict]:
     """
     Watch one or more OPC UA nodes for value changes instead of polling them.
@@ -1535,6 +1540,10 @@ async def subscribe_opcua_nodes(
         raise ToolError(
             error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
         )
+    try:
+        data_filter = resolve_filter(deadband_type, deadband_value, data_change_trigger)
+    except ValueError as error:
+        raise ToolError(str(error)) from error
     # One OPC UA subscription per monitored node is what makes a single
     # unsubscribe take the whole thing down — and it is also what makes an
     # unbounded subscribe ask a PLC for one subscription per node, past whatever
@@ -1549,6 +1558,18 @@ async def subscribe_opcua_nodes(
                 wanted=len(node_ids),
             )
         )
+    if data_filter.deadband_type == "percent":
+        # A percent deadband is a percentage *of the node's EURange*, so a node
+        # that publishes none cannot have one. Checked here, before a single
+        # subscription is created, so a batch is refused whole rather than
+        # leaving some nodes monitored and some not.
+        client = ctx.request_context.lifespan_context["opcua_client"]
+        engineering = _NODE_METADATA.for_nodes(client, node_ids)
+        for node_id in node_ids:
+            info = engineering.get(node_id)
+            if info is None or info.eu_range is None:
+                raise ToolError(error_message("percentDeadbandNeedsRange", node_id=node_id))
+
     records = []
     for node_id in node_ids:
         # `ToolError`, not a bare exception: the SDK forwards a ToolError's
@@ -1563,6 +1584,7 @@ async def subscribe_opcua_nodes(
                     publishing_interval,
                     sampling_interval,
                     buffer_size,
+                    data_filter,
                 )
             )
         except Exception as e:
@@ -1752,6 +1774,51 @@ def acknowledge_alarm(
         {
             "event_id": event_id,
             "condition_id": canonical_node_id(condition),
+            "status": "Good",
+        }
+    )
+
+
+@mcp.tool(description=DESC["act_on_alarm"])
+def act_on_alarm(
+    event_id: str,
+    action: str,
+    ctx: Context,
+    comment: str = "",
+    shelve_duration_ms: float | None = None,
+    condition_id: str | None = None,
+) -> CallToolResult:
+    """
+    Confirm, annotate or shelve an alarm — the rest of the operator workflow.
+
+    Returns:
+        CallToolResult: One record of ``resultShapes.alarmAction``.
+    """
+    # A relationship between two arguments, which the contract's own schema
+    # cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
+    # on any other action would silently ignore it. Refusing says which action
+    # the caller probably meant.
+    if action == "shelveFor" and shelve_duration_ms is None:
+        raise ToolError(error_message("shelveForNeedsDuration"))
+    if action != "shelveFor" and shelve_duration_ms is not None:
+        raise ToolError(error_message("shelveDurationNotAllowed", action=action))
+
+    condition = condition_id or _EVENTS.condition_for(event_id)
+    if not condition:
+        raise ToolError(error_message("unknownEventId", event_id=event_id))
+
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    try:
+        events.alarm_action(client, condition, event_id, action, comment, shelve_duration_ms)
+    except Exception as e:
+        raise ToolError(
+            error_message("alarmActionFailed", action=action, condition_id=condition, reason=str(e))
+        ) from e
+    return _object_result(
+        {
+            "event_id": event_id,
+            "condition_id": canonical_node_id(condition),
+            "action": action,
             "status": "Good",
         }
     )

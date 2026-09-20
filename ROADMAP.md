@@ -8,7 +8,7 @@ actually shipped — including entries under `[Unreleased]`, which are merged bu
 not yet published to npm or PyPI. The
 [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is the phased plan currently
 being worked; the [v0.2.0 plan](docs/ROADMAP-0.2.0.md) is finished work, kept
-for context; and [#19](https://github.com/midhunxavier/OPCUA-MCP/issues/19) is
+for context; and [#19](https://github.com/IndustriAgents/OPCUA-MCP/issues/19) is
 the feature epic this page summarises.
 
 ## In the codebase today
@@ -54,7 +54,7 @@ needs no code:
 | # | Work | Done when |
 |---|---|---|
 | 1 | [MCP Registry listing](docs/mcp-registry.md) | A published package carries `mcpName`, and the entry resolves in the registry |
-| 2 | Results from third-party OPC UA servers ([#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
+| 2 | Results from third-party OPC UA servers ([#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
 
 Both need a release and reports from people with real equipment rather than
 changes to this repository.
@@ -71,7 +71,7 @@ chunk reassembly is bounded against CVE-2022-25304, and CI runs on Windows and
 macOS.
 
 The next thing worth doing is decided by what
-[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) turns up: a result
+[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) turns up: a result
 from a real vendor server is the one input this repository cannot generate for
 itself, and it is more likely to set priorities usefully than anything that could
 be written down now. It is also what decides the one question the review left
@@ -86,9 +86,9 @@ condition below is met.
 
 | Work | Set aside because | Reopen when |
 |---|---|---|
-| Streamable-HTTP transport ([#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14)) | The tool policy is enforced per process and has no notion of *who* is calling; an HTTP listener would make it a remote endpoint that can write to a PLC | Per-client authorisation has a design |
-| Multiple or file-configured endpoints ([#15](https://github.com/midhunxavier/OPCUA-MCP/issues/15)) | **Its condition has been met — see below.** | Superseded |
-| Docker images ([#16](https://github.com/midhunxavier/OPCUA-MCP/issues/16)) | Four distribution channels already ship, and a container adds little for a stdio server that runs beside its client | A remote transport lands, or a deployment requires an image |
+| Streamable-HTTP transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)) | The tool policy is enforced per process and has no notion of *who* is calling; an HTTP listener would make it a remote endpoint that can write to a PLC | Per-client authorisation has a design |
+| Multiple or file-configured endpoints ([#15](https://github.com/IndustriAgents/OPCUA-MCP/issues/15)) | **Its condition has been met — see below.** | Superseded |
+| Docker images ([#16](https://github.com/IndustriAgents/OPCUA-MCP/issues/16)) | Four distribution channels already ship, and a container adds little for a stdio server that runs beside its client | A remote transport lands, or a deployment requires an image |
 
 ### Multiple endpoints: the condition was met, and the answer is still not yet
 
@@ -110,14 +110,14 @@ per endpoint. Serving a plant rather than a workstation needs, together:
 - an endpoint registry, and an endpoint argument on every tool that names a node;
 - policy scoped per endpoint, since `writable_nodes` for PLC A must not authorise
   anything on PLC B — which is the same missing notion of *who is asking* that
-  set aside [#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14);
+  set aside [#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14);
 - pooled sessions, so N clients do not mean N sessions per PLC;
 - a transport that can serve more than one client.
 
 That is one piece of work, not four, and #14 is half of it. The tool signatures
 are the part that would have to change, and they were only just stabilised at
 0.4.0 — so the sequencing that makes sense is to let
-[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) come back from real
+[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) come back from real
 equipment first: whether sessions are actually scarce, and whether anyone is
 trying to run this for a line rather than for themselves, decides whether this is
 worth the tool-surface break. Until then, one process per endpoint is not a
@@ -145,7 +145,7 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 as well as the verdict, because "permitted" and "happened" are different facts
 and the gap between them is where a control call that reached the plant and then
 failed lives. `call_id` is what joins a call's lines to each other, which they had
-no way to be until [#87](https://github.com/midhunxavier/OPCUA-MCP/issues/87):
+no way to be until [#87](https://github.com/IndustriAgents/OPCUA-MCP/issues/87):
 both runtimes serve calls concurrently, so overlapping writes interleave, and two
 writes to the same node were not distinguishable by content. The targets come from the same `guard` declaration in
 `contract/tools.json` that the policy authorises from, so the two cannot disagree
@@ -161,14 +161,14 @@ built-in persistent sink still has no plan, and needs one that holds for both
 runtimes before any code is written.
 
 Per-client approval semantics for control tools are the stated prerequisite for
-[#14](https://github.com/midhunxavier/OPCUA-MCP/issues/14) and are tracked there.
+[#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14) and are tracked there.
 
 ## Helping
 
 The most useful contribution is a result from a real server:
 
 - Open a
-  [compatibility report](https://github.com/midhunxavier/OPCUA-MCP/issues/new?template=compatibility_report.md)
+  [compatibility report](https://github.com/IndustriAgents/OPCUA-MCP/issues/new?template=compatibility_report.md)
   for an OPC UA server that is not one of the mocks.
 - Report where the mock walkthrough in [docs/testing.md](docs/testing.md) leaves
   you stuck — onboarding bugs are bugs.

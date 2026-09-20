@@ -16,11 +16,11 @@ This MCP server acts as a bridge between AI assistants and OPC UA servers, allow
 
 ## Tools
 
-See the central per-tool reference in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)**; the shared tool surface is defined in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**.
+See the central per-tool reference in **[docs/examples.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md)**; the shared tool surface is defined in **[contract/tools.json](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/tools.json)**.
 
 ## Resources
 
-One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
+One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
 
 ## Features
 
@@ -71,7 +71,7 @@ existing `opcua` entry.
 
 There is also a **downloadable `.mcpb` bundle** for Claude Desktop and
 **single-file executables** that need no Python at all — see
-[docs/install.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/install.md).
+[docs/install.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/install.md).
 
 In an MCP client:
 
@@ -119,9 +119,9 @@ An unusable combination — a mode without a policy, a policy without a
 certificate, a username without a password — is refused at startup with a
 message naming the variable. With no security configured the connection is
 unencrypted and unauthenticated, and the server says so on stderr; see
-[SECURITY.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/SECURITY.md).
 Making a client certificate and getting it trusted:
-[docs/certificates.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/certificates.md).
+[docs/certificates.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/certificates.md).
 
 On the **Python runtime**, certificate and key files are parsed as PEM only when
 they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
@@ -152,7 +152,7 @@ keep-alive period).
 `get_server_status` reports whether the connection is up and what the OPC UA
 server says about itself; it is the one tool that answers while the connection is
 down, and calling it is also what brings a dropped one back. See
-[Staying connected](https://github.com/midhunxavier/OPCUA-MCP#staying-connected).
+[Staying connected](https://github.com/IndustriAgents/OPCUA-MCP#staying-connected).
 
 ## Usage
 
@@ -252,4 +252,4 @@ Result: Found 5 variables:
 
 ## API Reference
 
-See the central per-tool reference in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)** for full tool signatures, parameters, and return formats. The shared tool surface is defined in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**.
+See the central per-tool reference in **[docs/examples.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md)** for full tool signatures, parameters, and return formats. The shared tool surface is defined in **[contract/tools.json](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/tools.json)**.

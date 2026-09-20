@@ -8,7 +8,7 @@ test suite — the same working style as
 
 Every phase here is **code and tests only**. Nothing in this plan needs physical
 equipment; the hardware gate is
-[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) and stays open until
+[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) and stays open until
 someone runs the suite against a vendor server.
 
 ## The one finding everything descends from
@@ -59,7 +59,7 @@ nowhere left for them to hide.
    snapshot). 13 is the honest floor, not a target to beat.
 5. **Node search and browse-path resolution add no tools.** They become
    arguments on `browse_opcua_nodes` (Phase 7), so closing
-   [#11](https://github.com/midhunxavier/OPCUA-MCP/issues/11) does not undo
+   [#11](https://github.com/IndustriAgents/OPCUA-MCP/issues/11) does not undo
    Phase 5.
 6. **Phases 1–2 ship before anything else.** They are correctness bugs on the
    target hardware and must not wait behind a breaking change.
@@ -154,7 +154,7 @@ return page one as a complete answer.
 Two issues, one PR: they share the certificate-loading plumbing and the same
 test fixture.
 
-**[#45](https://github.com/midhunxavier/OPCUA-MCP/issues/45) — verify the
+**[#45](https://github.com/IndustriAgents/OPCUA-MCP/issues/45) — verify the
 server's certificate.** Neither runtime checks it today; it is taken from the
 endpoint description and encrypted to, whoever answered. `OPCUA_SERVER_CERT`
 pins an expected certificate — python-opcua accepts
@@ -166,7 +166,7 @@ Optionally `OPCUA_TRUST_UNKNOWN_CERTS=false` on Node via an
 divergence gets documented deliberately in `docs/compatibility.md` rather than
 discovered.
 
-**[#7](https://github.com/midhunxavier/OPCUA-MCP/issues/7) — X.509 user
+**[#7](https://github.com/IndustriAgents/OPCUA-MCP/issues/7) — X.509 user
 authentication.** Only `Anonymous` and `UserName` identity tokens exist
 (`security.ts:219-225`). Add `UserTokenType.Certificate` / python-opcua's
 `load_client_certificate` + `load_private_key`. **Naming matters:** the existing
@@ -256,10 +256,10 @@ The breaking change, and the systemic fix.
    extended to cover the read path. Divergence 4 then dies by construction rather
    than by patch. The `ast.literal_eval` normalisation in the e2e suite goes with
    it.
-4. **Closes [#8](https://github.com/midhunxavier/OPCUA-MCP/issues/8)** —
+4. **Closes [#8](https://github.com/IndustriAgents/OPCUA-MCP/issues/8)** —
    structured output with value, dataType, statusCode and timestamps *is* the
    `nodeValues` shape.
-5. **Closes [#9](https://github.com/midhunxavier/OPCUA-MCP/issues/9)** — an
+5. **Closes [#9](https://github.com/IndustriAgents/OPCUA-MCP/issues/9)** — an
    optional `data_type` on `write_opcua_nodes` skips the read-first inference,
    which also makes write-only nodes work. Natural in the merged writer, awkward
    in two separate ones.
@@ -334,10 +334,10 @@ All eight phases shipped in four pull requests, released as **0.4.0**:
 
 | PR | Phases | Closed |
 |---|---|---|
-| [#77](https://github.com/midhunxavier/OPCUA-MCP/pull/77) | 1–2 | #75, #76 |
-| [#78](https://github.com/midhunxavier/OPCUA-MCP/pull/78) | 3–4 | #45, #7 |
-| [#79](https://github.com/midhunxavier/OPCUA-MCP/pull/79) | 5–7 | #8, #9, #10, #11 |
-| [#80](https://github.com/midhunxavier/OPCUA-MCP/pull/80) | 8 + release | — |
+| [#77](https://github.com/IndustriAgents/OPCUA-MCP/pull/77) | 1–2 | #75, #76 |
+| [#78](https://github.com/IndustriAgents/OPCUA-MCP/pull/78) | 3–4 | #45, #7 |
+| [#79](https://github.com/IndustriAgents/OPCUA-MCP/pull/79) | 5–7 | #8, #9, #10, #11 |
+| [#80](https://github.com/IndustriAgents/OPCUA-MCP/pull/80) | 8 + release | — |
 
 Three things this plan got wrong, all found by tests rather than by review:
 
@@ -379,7 +379,7 @@ they touch files Phase 5 does not, so the two large diffs never collide.
 
 ## Out of scope
 
-- **[#70](https://github.com/midhunxavier/OPCUA-MCP/issues/70) — validation
+- **[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) — validation
   against a real vendor server.** No code; needs equipment. It stays open as the
   only remaining non-codeable gate, and Phases 1, 2 and 4 are exactly the
   findings most likely to change behaviour when it is finally run.

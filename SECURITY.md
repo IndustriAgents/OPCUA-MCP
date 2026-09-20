@@ -206,8 +206,8 @@ npm release of `opcua-mcp-server`.
 Please **do not** open a public issue for security vulnerabilities.
 
 Instead, report privately via GitHub's
-[private vulnerability reporting](https://github.com/midhunxavier/OPCUA-MCP/security/advisories/new),
-or email the maintainer at midhunxavier@outlook.com.
+[private vulnerability reporting](https://github.com/IndustriAgents/OPCUA-MCP/security/advisories/new),
+or email the maintainer at hi@industriagents.com.
 
 Please include:
 

@@ -49,7 +49,7 @@ existing `opcua` entry.
 
 There is also a **downloadable `.mcpb` bundle** for Claude Desktop and
 **single-file executables** that need no Node at all — see
-[docs/install.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/install.md).
+[docs/install.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/install.md).
 
 ### Local Development
 
@@ -81,9 +81,9 @@ An unusable combination — a mode without a policy, a policy without a
 certificate, a username without a password — is refused at startup with a
 message naming the variable. With no security configured the connection is
 unencrypted and unauthenticated, and the server says so on stderr; see
-[SECURITY.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/SECURITY.md).
 Making a client certificate and getting it trusted:
-[docs/certificates.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/certificates.md).
+[docs/certificates.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/certificates.md).
 
 Examples:
 
@@ -112,15 +112,15 @@ session rather than failing until the process is restarted. Tune it with
 `get_server_status` reports whether the connection is up and what the OPC UA
 server says about itself; it is the one tool that answers while the connection is
 down, and calling it is also what brings a dropped one back. See
-[Staying connected](https://github.com/midhunxavier/OPCUA-MCP#staying-connected).
+[Staying connected](https://github.com/IndustriAgents/OPCUA-MCP#staying-connected).
 
 ## Tools
 
-This server exposes the shared OPC UA MCP tool set. See the full per-tool reference (inputs, outputs, node-ID map) in **[docs/examples.md](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md)**. The tool surface is defined once in **[contract/tools.json](https://github.com/midhunxavier/OPCUA-MCP/blob/main/contract/tools.json)**, which this server builds its `tools/list` from.
+This server exposes the shared OPC UA MCP tool set. See the full per-tool reference (inputs, outputs, node-ID map) in **[docs/examples.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md)**. The tool surface is defined once in **[contract/tools.json](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/tools.json)**, which this server builds its `tools/list` from.
 
 ## Resources
 
-One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
+One resource, `opcua://subscriptions`: the active data-change subscriptions and the values each has buffered, as JSON. It is the same set of records `list_subscriptions` returns, re-readable without spending a tool call. See [Subscriptions](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md#data-change-subscriptions) for the shape and the worked example.
 
 ## Integration with Cursor/Claude
 
@@ -258,11 +258,11 @@ The server provides detailed error messages for:
 
 We welcome contributions to improve the OPC UA MCP Server!
 
-**Repository**: [https://github.com/midhunxavier/OPCUA-MCP](https://github.com/midhunxavier/OPCUA-MCP)
+**Repository**: [https://github.com/IndustriAgents/OPCUA-MCP](https://github.com/IndustriAgents/OPCUA-MCP)
 
 To contribute:
 
-1. Fork the repository at [https://github.com/midhunxavier/OPCUA-MCP](https://github.com/midhunxavier/OPCUA-MCP)
+1. Fork the repository at [https://github.com/IndustriAgents/OPCUA-MCP](https://github.com/IndustriAgents/OPCUA-MCP)
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests if applicable
@@ -280,7 +280,7 @@ MIT License - see LICENSE file for details
 
 For issues and questions:
 
-- Open an issue on [GitHub](https://github.com/midhunxavier/OPCUA-MCP/issues)
+- Open an issue on [GitHub](https://github.com/IndustriAgents/OPCUA-MCP/issues)
 - Check the OPC UA server connectivity
 - Verify node IDs are correct
 - Ensure proper permissions for OPC UA operations

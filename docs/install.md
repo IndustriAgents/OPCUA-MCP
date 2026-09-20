@@ -31,7 +31,7 @@ field — no runtime to install, no JSON to edit, nothing fetched from the netwo
 at startup.
 
 1. Download `opcua-mcp-server-<version>.mcpb` from the
-   [latest release](https://github.com/midhunxavier/OPCUA-MCP/releases/latest).
+   [latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest).
 2. In Claude Desktop, open **Settings → Extensions**.
 3. Drag the file onto that pane.
 4. Set **OPC UA endpoint** to your server's URL, e.g. `opc.tcp://192.168.0.10:4840`.
@@ -50,7 +50,7 @@ after the download. This is the route for a plant machine that has neither
 runtime and no way to get one.
 
 Download the file matching your platform from the
-[latest release](https://github.com/midhunxavier/OPCUA-MCP/releases/latest):
+[latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest):
 
 ```
 opcua-mcp-server-node-<platform>-<arch>       # ~110 MB

@@ -318,9 +318,16 @@ class IndustrialControlSystem:
             ua.NodeId(93, 2), ua.QualifiedName("InstrumentRange", 0), _range(-50.0, 250.0)
         )
         # What makes it an AnalogItem rather than a Variable that happens to have
-        # three properties. Nothing in this project reads the type definition
-        # yet, but a mock that lies about what it is teaches the wrong lesson to
-        # whatever reads it next.
+        # three properties — and it has to *replace* the type definition
+        # `add_variable` gives it, not join it. OPC UA Part 3 §4.3 gives a
+        # Variable exactly one HasTypeDefinition, and a node answering with both
+        # BaseDataVariableType and AnalogItemType hands a client a coin flip
+        # between the useless answer and the useful one.
+        node.delete_reference(
+            ua.NodeId(ua.ObjectIds.BaseDataVariableType),
+            ua.ObjectIds.HasTypeDefinition,
+            bidirectional=False,
+        )
         node.add_reference(ua.NodeId(ua.ObjectIds.AnalogItemType), ua.ObjectIds.HasTypeDefinition)
         self.scratch_analog = node
 

@@ -102,6 +102,8 @@ export const CONTRACT: {
     defaultMaxNodes: number;
     maxNodes: number;
     skipBrowseName: string;
+    hasTypeDefinitionNodeId: string;
+    maxTypeDefinitionsPerRequest: number;
   };
   events: {
     defaultNotifierNodeId: string;

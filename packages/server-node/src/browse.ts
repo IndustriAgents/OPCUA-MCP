@@ -81,3 +81,24 @@ export async function browseAllReferences(
     result = await session.browseNext(continuationPoint, false);
   }
 }
+
+/** Which of a node's HasTypeDefinition references to report, if any.
+ *
+ * Split out from the browse and driven by `tests/fixtures/type-definitions.json`
+ * because `tests/unit/test_type_definitions.py` has to answer identically: two
+ * clients browsing the same server must not disagree about what its nodes are.
+ *
+ * Exactly one, or nothing. OPC UA Part 3 §4.3 gives an Object or a Variable
+ * exactly one HasTypeDefinition, so:
+ *
+ * - none — a Method, a View or a type itself. That is an answer, not a failure.
+ * - two — a server no client can read correctly. Taking whichever came first
+ *   would let the two runtimes report different types for the same node
+ *   depending on how each library ordered the references, and would report the
+ *   *base* type for a node that also declared a useful one. Saying nothing is
+ *   the only answer that is both deterministic and never wrong.
+ */
+export function typeDefinitionOf(isGood: boolean, browseNames: string[]): string | null {
+  if (!isGood || browseNames.length !== 1) return null;
+  return browseNames[0] || null;
+}

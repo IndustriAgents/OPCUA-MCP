@@ -116,9 +116,13 @@
               "description": {
                 "type": ["string", "null"],
                 "description": "The node's Description attribute, or null when it has none."
+              },
+              "type_definition": {
+                "type": ["string", "null"],
+                "description": "BrowseName of the node's type, which is what says what it *is* rather than what class it belongs to: 'ExclusiveLimitAlarmType' rather than 'Object', 'AnalogItemType' rather than 'Variable'. A node reported as AnalogItemType is one whose unit and EURange read_opcua_nodes can return; one reported as a subtype of AlarmConditionType is one act_on_alarm applies to. null for a node class that has no type (Method, View, and the types themselves) and for a node whose type could not be read."
               }
             },
-            "required": ["node_id", "browse_name", "node_class", "parent_node_id", "data_type", "value", "description"],
+            "required": ["node_id", "browse_name", "node_class", "parent_node_id", "data_type", "value", "description", "type_definition"],
             "additionalProperties": false
           }
         },
@@ -613,6 +617,9 @@
     "defaultMaxNodes": 500,
     "maxNodes": 5000,
     "skipBrowseName": "Server",
+    "hasTypeDefinitionNodeId": "ns=0;i=40",
+    "maxTypeDefinitionsPerRequest": 300,
+    "$typeDefinitionComment": "A browse record named a node and its class, which does not say what the node *is*: every alarm, every pump and every folder came back as 'Object'. HasTypeDefinition is the reference that says, and it is non-hierarchical, so the traversal's own hierarchical browse never sees it \u2014 it takes a second browse, which is why it is one batched request for the whole result rather than one per node. maxTypeDefinitionsPerRequest chunks that batch for the same reason the property reads are chunked: MaxNodesPerBrowse is an operational limit a conformant server may enforce, and the default walk already returns up to 500 nodes.",
     "$skipComment": "The built-in Server object is skipped by every traversal: it is several hundred nodes of the server describing itself, it is the same on every server, and get_server_status answers what anyone would browse it for."
   },
   "diagnostics": {
@@ -796,7 +803,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "nodeRefs",
-      "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
+      "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every node also reports its `type_definition` \u2014 what it *is*, as against what class it belongs to: 'AnalogItemType' for a tag that publishes a unit and a range, a subtype of 'AlarmConditionType' for something act_on_alarm applies to, 'FolderType' for structure. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
       "inputSchema": {
         "type": "object",
         "properties": {

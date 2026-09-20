@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A browse now says what each node *is*** (#120). A browse record named a node,
+  its class and its parent, which is enough to walk an address space and not
+  enough to understand one: every alarm, every pump and every folder came back as
+  `Object`, and every reading as `Variable`. `type_definition` now carries the
+  node's `HasTypeDefinition` — `AnalogItemType` for a tag that publishes a unit
+  and a range (so it composes with #110), a subtype of `AlarmConditionType` for
+  something `act_on_alarm` applies to. That reference is non-hierarchical, so the
+  traversal's own browse never saw it; it is fetched as one batched browse for
+  the whole result, chunked, rather than one round trip per node. A node with
+  more than one type definition — which OPC UA Part 3 §4.3 does not allow, and
+  which this project's own mock server had — reports `null` rather than letting
+  the two runtimes pick different references. Decoding structured values
+  (`ExtensionObject`) is a separate problem and is not part of this.
 - **`get_server_status` reports the server's own diagnostics** (#121). The status
   report covered this client's view of the connection and said nothing about the
   server's load, so "the plant server is slow" and "the plant server is refusing

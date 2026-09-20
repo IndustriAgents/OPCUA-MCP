@@ -1038,7 +1038,79 @@ def _describe_node(client, node_id: str, parent_node_id: str) -> dict:
         "data_type": None,
         "value": None,
         "description": None,
+        "type_definition": None,
     }
+
+
+def type_definition_of(is_good: bool, browse_names: list[str]) -> str | None:
+    """Which of a node's HasTypeDefinition references to report, if any.
+
+    Split out from the browse and driven by ``tests/fixtures/type-definitions.json``
+    because ``type-definitions.test.mjs`` has to answer identically: two clients
+    browsing the same server must not disagree about what its nodes are.
+
+    Exactly one, or nothing. OPC UA Part 3 §4.3 gives an Object or a Variable
+    exactly one HasTypeDefinition, so:
+
+    * none — a Method, a View or a type itself. That is an answer, not a failure.
+    * two — a server no client can read correctly. Taking whichever came first
+      would let the two runtimes report different types for the same node
+      depending on how each library ordered the references, and would report the
+      *base* type for a node that also declared a useful one. Saying nothing is
+      the only answer that is both deterministic and never wrong.
+    """
+    if not is_good or len(browse_names) != 1:
+        return None
+    return browse_names[0] or None
+
+
+def _fill_type_definitions(client, records: list[dict]) -> None:
+    """Fill in ``type_definition`` for ``records``, in one batched browse.
+
+    ``HasTypeDefinition`` is non-hierarchical, so the traversal's own browse —
+    forward hierarchical references only, deliberately, or every node would
+    answer with its parent and its type instead of its children — never sees it.
+    It takes a second browse, and that is why this is one request for the whole
+    result rather than one per node: a 500-node walk would otherwise cost 500
+    extra round trips to say what one already could.
+
+    Best-effort, like the variable detail: a server that refuses this leaves the
+    field null rather than failing a browse that succeeded.
+    """
+    if not records:
+        return
+    descriptions = []
+    for record in records:
+        description = ua.BrowseDescription()
+        description.NodeId = ua.NodeId.from_string(record["node_id"])
+        description.BrowseDirection = ua.BrowseDirection.Forward
+        description.ReferenceTypeId = ua.NodeId.from_string(_TRAVERSAL["hasTypeDefinitionNodeId"])
+        # No subtypes: HasTypeDefinition has none, and asking for them would let
+        # an unrelated reference through on a server that has invented one.
+        description.IncludeSubtypes = False
+        description.NodeClassMask = ua.NodeClass.Unspecified
+        description.ResultMask = ua.BrowseResultMask.All
+        descriptions.append(description)
+
+    # Chunked for the same reason the property reads are: MaxNodesPerBrowse is
+    # an operational limit a conformant server may enforce, and the default walk
+    # already returns up to 500 nodes.
+    size = _TRAVERSAL["maxTypeDefinitionsPerRequest"]
+    for start in range(0, len(descriptions), size):
+        chunk = descriptions[start : start + size]
+        params = ua.BrowseParameters()
+        params.View.Timestamp = ua.get_win_epoch()
+        params.NodesToBrowse = chunk
+        params.RequestedMaxReferencesPerNode = 0
+        try:
+            results = client.uaclient.browse(params)
+        except Exception:
+            return
+        for record, result in zip(records[start : start + size], results, strict=False):
+            record["type_definition"] = type_definition_of(
+                result.StatusCode.is_good(),
+                [reference.BrowseName.Name for reference in result.References],
+            )
 
 
 def _fill_variable_detail(client, records: list[dict]) -> None:
@@ -1171,6 +1243,7 @@ def browse_opcua_nodes(
                         "data_type": None,
                         "value": None,
                         "description": None,
+                        "type_definition": None,
                     }
                     if keep(record):
                         found.append(record)
@@ -1181,6 +1254,10 @@ def browse_opcua_nodes(
                     if reference.NodeClass == ua.NodeClass.Object and current_depth + 1 < depth:
                         queue.append((child_id, current_depth + 1))
 
+        # Unconditional, unlike the variable detail: the type is what the record
+        # *is*, not extra reading about its value, and it costs one batched
+        # browse however many nodes were found.
+        _fill_type_definitions(client, found)
         if include_values:
             _fill_variable_detail(client, found)
         return _object_result({"nodes": found, "truncated": truncated, "inspected": inspected})

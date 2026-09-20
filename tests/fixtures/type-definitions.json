@@ -1,0 +1,45 @@
+{
+  "$comment": "Which HasTypeDefinition reference a browse reports, driven by both tests/unit/test_type_definitions.py and packages/server-node/test/type-definitions.test.mjs. The rule is small enough to look obvious and is exactly the kind that diverges silently: a node's reported type is not an error anyone sees, it is a different string, and two runtimes disagreeing about it would only show up as an agent reaching a different conclusion on one of them. OPC UA Part 3 §4.3 gives an Object or a Variable exactly one HasTypeDefinition, so anything else is a server this cannot read, and null is the answer that is deterministic and never wrong.",
+  "cases": [
+    {
+      "name": "the ordinary case: one type, reported",
+      "is_good": true,
+      "browse_names": ["AnalogItemType"],
+      "type_definition": "AnalogItemType"
+    },
+    {
+      "name": "a method has no type definition, which is an answer",
+      "$why": "A server returning Good and no references is saying 'this node has no type'. Reporting that as a failure, or inventing a type, would both be worse than null.",
+      "is_good": true,
+      "browse_names": [],
+      "type_definition": null
+    },
+    {
+      "name": "two type definitions is a server neither runtime can read",
+      "$why": "This is not hypothetical: the bundled mock had exactly this shape, declaring AnalogItemType on top of the BaseDataVariableType it was created with. Taking the first reference reported the useless one, and which one is first is the library's business, not the spec's.",
+      "is_good": true,
+      "browse_names": ["BaseDataVariableType", "AnalogItemType"],
+      "type_definition": null
+    },
+    {
+      "name": "the same two the other way round, and still null",
+      "$why": "The point of the rule: the answer cannot depend on reference order.",
+      "is_good": true,
+      "browse_names": ["AnalogItemType", "BaseDataVariableType"],
+      "type_definition": null
+    },
+    {
+      "name": "a browse the server refused says nothing rather than guessing",
+      "is_good": false,
+      "browse_names": ["FolderType"],
+      "type_definition": null
+    },
+    {
+      "name": "an empty browse name is not a type",
+      "$why": "Both libraries surface an absent QualifiedName name as empty rather than raising, and '' is not something to report as a node's type.",
+      "is_good": true,
+      "browse_names": [""],
+      "type_definition": null
+    }
+  ]
+}

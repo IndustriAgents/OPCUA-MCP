@@ -140,7 +140,7 @@ bounds.
 { "nodes": [
     { "node_id": "ns=2;i=2", "browse_name": "2:Sensors", "node_class": "Object",
       "parent_node_id": "ns=2;i=1", "data_type": null, "value": null,
-      "description": null },
+      "description": null, "type_definition": "FolderType" },
     { "node_id": "ns=2;i=11", "browse_name": "2:Actuators", … },
     { "node_id": "ns=2;i=27", "browse_name": "2:Methods", … } ],
   "truncated": false, "inspected": 4 }
@@ -155,9 +155,23 @@ bounds.
 { "nodes": [
     { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", "node_class": "Variable",
       "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 26.5,
-      "description": "Temperature" }, … ],
+      "description": "Temperature", "type_definition": "BaseDataVariableType" },
+    { "node_id": "ns=2;i=90", "browse_name": "2:ScratchAnalog", "node_class": "Variable",
+      "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 50.0,
+      "description": null, "type_definition": "AnalogItemType" }, … ],
   "truncated": false, "inspected": 22 }
 ```
+`type_definition` is what a node *is*, as against what class it belongs to. The
+two variables above are both `Variable` and both Double, and only the second one
+will answer with a unit and a range — `AnalogItemType` is the difference, and
+`node_class` cannot express it. The same holds for Objects, more strongly: an
+alarm and the folder holding it are both `Object`, and only
+`ExclusiveLimitAlarmType` says which one `act_on_alarm` applies to.
+
+It costs one batched browse for the whole result rather than one per node, and
+it is `null` for a node class that has no type (a Method, a View) and for a node
+whose type could not be read.
+
 The built-in `Server` subtree is always skipped — several hundred nodes of the
 server describing itself, identical everywhere, and `get_server_status` answers
 what anyone would browse it for.

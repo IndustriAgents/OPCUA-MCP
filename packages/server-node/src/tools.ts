@@ -14,11 +14,12 @@ import {
   NodeClass,
   HistoryData,
   AggregateFunction,
+  BrowseDirection,
   ClientSession,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { browseAllReferences } from "./browse.js";
+import { browseAllReferences, typeDefinitionOf } from "./browse.js";
 import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
@@ -89,6 +90,7 @@ interface NodeRefRecord {
   data_type: string | null;
   value: unknown;
   description: string | null;
+  type_definition: string | null;
 }
 
 /** One attempted write (resultShapes.writeResults). */
@@ -1268,6 +1270,7 @@ export class OpcuaTools {
               data_type: null,
               value: null,
               description: null,
+              type_definition: null,
             };
             if (keep(record)) found.push(record);
 
@@ -1280,6 +1283,10 @@ export class OpcuaTools {
         }
       }
 
+      // Unconditional, unlike the variable detail: the type is what the record
+      // *is*, not extra reading about its value, and it costs one batched
+      // browse however many nodes were found.
+      await this.fillTypeDefinitions(session, found);
       if (includeValues) await this.fillVariableDetail(session, found);
       return objectResult({ nodes: found, truncated, inspected });
     } catch (error) {
@@ -1309,7 +1316,57 @@ export class OpcuaTools {
       data_type: null,
       value: null,
       description: null,
+      type_definition: null,
     };
+  }
+
+  /** Fill in `type_definition` for `records`, in one batched browse.
+   *
+   * `HasTypeDefinition` is non-hierarchical, so the traversal's own browse —
+   * forward hierarchical references only, deliberately, or every node would
+   * answer with its parent and its type instead of its children — never sees
+   * it. It takes a second browse, and that is why this is one request for the
+   * whole result rather than one per node: a 500-node walk would otherwise cost
+   * 500 extra round trips to say what one already could.
+   *
+   * Best-effort, like the variable detail: a server that refuses this leaves the
+   * field null rather than failing a browse that succeeded.
+   */
+  private async fillTypeDefinitions(
+    session: ClientSession,
+    records: NodeRefRecord[]
+  ): Promise<void> {
+    if (records.length === 0) return;
+    const traversal = CONTRACT.traversal;
+    const descriptions = records.map((record) => ({
+      nodeId: record.node_id,
+      browseDirection: BrowseDirection.Forward,
+      referenceTypeId: traversal.hasTypeDefinitionNodeId,
+      // No subtypes: HasTypeDefinition has none, and asking for them would let
+      // an unrelated reference through on a server that has invented one.
+      includeSubtypes: false,
+      nodeClassMask: 0,
+      resultMask: 63,
+    }));
+
+    // Chunked for the same reason the property reads are: MaxNodesPerBrowse is
+    // an operational limit a conformant server may enforce, and the default
+    // walk already returns up to 500 nodes.
+    const size = traversal.maxTypeDefinitionsPerRequest;
+    for (let start = 0; start < descriptions.length; start += size) {
+      let results;
+      try {
+        results = await session.browse(descriptions.slice(start, start + size));
+      } catch {
+        return;
+      }
+      results.forEach((result, index) => {
+        records[start + index].type_definition = typeDefinitionOf(
+          result.statusCode === StatusCodes.Good,
+          (result.references ?? []).map((reference) => reference.browseName.name ?? "")
+        );
+      });
+    }
   }
 
   /** Fill in value, data type and description for the Variables among `records`.

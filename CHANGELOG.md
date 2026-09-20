@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`get_server_status` reports the server's own diagnostics** (#121). The status
+  report covered this client's view of the connection and said nothing about the
+  server's load, so "the plant server is slow" and "the plant server is refusing
+  us" looked identical from the agent's side. `diagnostics` now carries OPC UA
+  Part 5's `ServerDiagnosticsSummary` (`ns=0;i=2275`) — twelve counters that tell
+  those apart: `rejected_session_count` and `security_rejected_session_count`
+  separate a server turning connections away from wrong credentials,
+  `cumulated_session_count` far above `current_session_count` is a client
+  reconnecting in a loop, and `current_subscription_count` against
+  `publishing_interval_count` shows how many subscriptions share a cycle. Part 5
+  makes diagnostics optional, so the field is nullable and `null` means "this
+  server does not say" rather than zero — the two mock servers differ exactly
+  there, so both branches are covered against a real server. It is read in the
+  same batch as the status and the namespace array, so it costs no extra round
+  trip. Discovery (`FindServers`/`GetEndpoints`) is deliberately not part of this:
+  it is a network scanner, and it needs its own access class and endpoint
+  allowlist before it belongs in a tool an agent can call.
 - **`act_on_alarm`: the rest of the operator workflow** (#119). `acknowledge_alarm`
   implemented the first half of OPC UA Part 9 §5.5's acknowledge→confirm handshake
   and nothing else, so an agent could say "I have seen this" and then had no way to

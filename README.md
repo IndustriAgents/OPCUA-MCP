@@ -130,7 +130,7 @@ Both servers expose the same fourteen tools, defined once in
 | `browse_opcua_nodes` | List children, walk a subtree, resolve a browse path, search by name |
 | `write_opcua_nodes` | Write to one or more nodes |
 | `call_opcua_method` | Invoke a method on an object node |
-| `get_server_status` | Connection state, server health and the namespace array |
+| `get_server_status` | Connection state, server health, the namespace array and the server's own diagnostics |
 | `subscribe_opcua_nodes` | Watch nodes for data changes instead of polling them, with an optional deadband |
 | `list_subscriptions` | The active subscriptions, each with its buffered changes |
 | `unsubscribe_opcua_nodes` | Cancel subscriptions |

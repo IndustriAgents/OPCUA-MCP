@@ -78,7 +78,12 @@ export const CONTRACT: {
     enforceEuRangeOnWrite: boolean;
     maxPropertiesPerRequest: number;
   };
-  diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
+  diagnostics: {
+    serverStatusNodeId: string;
+    namespaceArrayNodeId: string;
+    serverDiagnosticsSummaryNodeId: string;
+    diagnosticsFields: string[];
+  };
   subscriptions: {
     defaultPublishingIntervalMs: number;
     minPublishingIntervalMs: number;

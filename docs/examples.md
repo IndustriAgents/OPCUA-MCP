@@ -229,6 +229,7 @@ when another tool fails.
     { "index": 1, "uri": "urn:freeopcua:python:server" },
     { "index": 2, "uri": "http://examples.freeopcua.github.io" }
   ],
+  "diagnostics": null,
   "error": null
 }
 ```
@@ -237,6 +238,43 @@ when another tool fails.
 Use `namespaces` rather than hard-coding a namespace index: the same URI can sit
 at a different index after a server restart, so an `ns=2;i=3` that worked
 yesterday may address something else today.
+
+`diagnostics` is the server's own `ServerDiagnosticsSummary`, and it is `null`
+above because the Python mock does not publish one. OPC UA Part 5 makes
+diagnostics optional, so plenty of real servers answer the same way — `null`
+means *this server does not say*, not *zero*. The aggregate mock does publish
+them, and there the same call returns:
+
+```json
+{
+  "diagnostics": {
+    "server_view_count": 0,
+    "current_session_count": 1,
+    "cumulated_session_count": 4,
+    "security_rejected_session_count": 0,
+    "rejected_session_count": 0,
+    "session_timeout_count": 0,
+    "session_abort_count": 0,
+    "current_subscription_count": 2,
+    "cumulated_subscription_count": 5,
+    "publishing_interval_count": 1,
+    "security_rejected_requests_count": 0,
+    "rejected_requests_count": 0
+  }
+}
+```
+> Prompt: *"Is the server refusing connections, or is it just slow for us?"*
+
+These twelve counters answer the questions someone asks about a server they
+cannot see. `rejected_session_count` and `security_rejected_session_count`
+separate "the server is turning connections away" from "our credentials are
+wrong" — a distinction that otherwise takes a site visit.
+`cumulated_session_count` climbing far above `current_session_count` means
+something is connecting and dropping in a loop.
+`current_subscription_count` against `publishing_interval_count` shows whether
+many subscriptions are sharing one publishing cycle. They are read in the same
+batch as the status and the namespaces, so none of this costs an extra round
+trip.
 
 This is the one tool that never fails for being disconnected — it reports it:
 
@@ -250,6 +288,7 @@ This is the one tool that never fails for being disconnected — it reports it:
   "start_time": null,
   "build_info": null,
   "namespaces": [],
+  "diagnostics": null,
   "error": "connect ECONNREFUSED 127.0.0.1:4840"
 }
 ```

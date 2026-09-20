@@ -366,6 +366,39 @@
           "type": ["object", "null"],
           "description": "What the server says it is: { product_name, product_uri, manufacturer_name, software_version, build_number, build_date }, each a string the server supplied (build_date is ISO-8601 UTC). Any of them may be an empty string; the whole object is null when ServerStatus could not be read."
         },
+        "diagnostics": {
+          "type": ["object", "null"],
+          "description": "The server's own ServerDiagnosticsSummary: session and subscription counts, and how many requests it has turned away. null when the connection is down, when the server does not publish it, or when diagnostics are switched off \u2014 which Part 5 allows, so null is an answer rather than a failure.",
+          "properties": {
+            "server_view_count": { "type": "number", "description": "Views the server publishes. 0 on most servers, which publish none." },
+            "current_session_count": { "type": "number", "description": "Sessions open right now, including this one. The number to look at when a licensed-session limit is suspected." },
+            "cumulated_session_count": { "type": "number", "description": "Sessions opened since the server started. Far above current_session_count means something is reconnecting in a loop." },
+            "security_rejected_session_count": { "type": "number", "description": "Sessions refused on security grounds \u2014 a bad certificate, an untrusted client. The first place to look when a connection fails and the server says little." },
+            "rejected_session_count": { "type": "number", "description": "Sessions refused for any reason, security included." },
+            "session_timeout_count": { "type": "number", "description": "Sessions the server closed because the client stopped talking. Rising means keep-alives are not getting through." },
+            "session_abort_count": { "type": "number", "description": "Sessions the server terminated abnormally." },
+            "current_subscription_count": { "type": "number", "description": "Subscriptions alive right now across all clients \u2014 not just this server's, which list_subscriptions reports." },
+            "cumulated_subscription_count": { "type": "number", "description": "Subscriptions created since the server started." },
+            "publishing_interval_count": { "type": "number", "description": "Distinct publishing intervals in use. A large number means clients are asking for many different rates, which costs the server more than the same count at one rate." },
+            "security_rejected_requests_count": { "type": "number", "description": "Requests refused on security grounds." },
+            "rejected_requests_count": { "type": "number", "description": "Requests refused for any reason. Rising while calls fail points at the server's limits rather than at the request." }
+          },
+          "required": [
+            "server_view_count",
+            "current_session_count",
+            "cumulated_session_count",
+            "security_rejected_session_count",
+            "rejected_session_count",
+            "session_timeout_count",
+            "session_abort_count",
+            "current_subscription_count",
+            "cumulated_subscription_count",
+            "publishing_interval_count",
+            "security_rejected_requests_count",
+            "rejected_requests_count"
+          ],
+          "additionalProperties": false
+        },
         "namespaces": {
           "type": "array",
           "description": "The server's NamespaceArray as [{ index, uri }, ...], index ascending from 0. This is what turns an 'ns=<n>;...' node ID into something stable: the same URI can sit at a different index after a server restart, so resolve a namespace URI here rather than hard-coding its index. Empty when the array could not be read."
@@ -383,6 +416,7 @@
         "current_time",
         "start_time",
         "build_info",
+        "diagnostics",
         "namespaces",
         "error"
       ],
@@ -582,9 +616,24 @@
     "$skipComment": "The built-in Server object is skipped by every traversal: it is several hundred nodes of the server describing itself, it is the same on every server, and get_server_status answers what anyone would browse it for."
   },
   "diagnostics": {
-    "$comment": "The standard nodes `get_server_status` reads. Both are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. Kept here rather than in either server so the two ask the same questions.",
+    "$comment": "The standard nodes `get_server_status` reads. ServerStatus and the NamespaceArray are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. ServerDiagnosticsSummary is *not* mandatory to populate \u2014 Part 5 lets a server leave diagnostics off, and the two mocks here differ exactly there, which is why the field is nullable and why both branches are covered end to end. It answers the questions people actually ask an assistant about a server they cannot see: why is this slow, am I being rejected, how many sessions are open. `diagnosticsFields` is the record's field order, listed once so the two runtimes cannot report the same twelve counters in different orders; each maps it onto its own client library's spelling of ServerDiagnosticsSummaryDataType.",
     "serverStatusNodeId": "ns=0;i=2256",
-    "namespaceArrayNodeId": "ns=0;i=2255"
+    "namespaceArrayNodeId": "ns=0;i=2255",
+    "serverDiagnosticsSummaryNodeId": "ns=0;i=2275",
+    "diagnosticsFields": [
+      "server_view_count",
+      "current_session_count",
+      "cumulated_session_count",
+      "security_rejected_session_count",
+      "rejected_session_count",
+      "session_timeout_count",
+      "session_abort_count",
+      "current_subscription_count",
+      "cumulated_subscription_count",
+      "publishing_interval_count",
+      "security_rejected_requests_count",
+      "rejected_requests_count"
+    ]
   },
   "retryPolicies": {
     "$comment": "What this server may do when the OPC UA session dies underneath a request. Every tool names one. Deliberately NOT `annotations.idempotentHint`, which both runtimes used to read for this: that annotation is advice to the *model* about calling a tool twice, and this decides whether the *transport* may put a second request on the wire after an uncertain outcome. The two are different questions, and conflating them meant write_opcua_nodes was automatically re-sent after a lost response \u2014 it is idempotent from the model's point of view (writing 99.9 twice leaves 99.9) so it carries idempotentHint: true, but OPC UA Part 4 \u00a75.11.4 lets a Write partially succeed, leaves rollback to the client and defines no operation order, so a lost response never proved the write had not landed. Whatever the policy, the connection is always rebuilt, so the next call finds a live session.",
@@ -845,7 +894,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "serverStatus",
-      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server.",
+      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server. 'diagnostics' is the server's own ServerDiagnosticsSummary when it publishes one — session and subscription counts, and how many sessions and requests it has rejected — which is what separates 'the server is slow' from 'the server is refusing us'. OPC UA leaves diagnostics optional, so null there means this server does not say, not zero.",
       "inputSchema": {
         "type": "object",
         "properties": {},

@@ -524,6 +524,28 @@ one tool whose output *is* the report: it never fails for being disconnected, it
 says `connected: false` and why, and every other tool's "not connected" error
 points at it by name.
 
+**What the server says about itself.** That report covered this client's view of
+the connection and nothing about the server's own load, so "it is slow" and "it
+is refusing us" looked identical from here. OPC UA Part 5 defines
+`ServerDiagnosticsSummary` (`ns=0;i=2275`) for exactly that, and
+`get_server_status` now returns its twelve counters as `diagnostics`. They
+separate the questions that matter when nobody can walk to the panel:
+`rejected_session_count` and `security_rejected_session_count` distinguish a
+server turning connections away from credentials being wrong;
+`cumulated_session_count` far above `current_session_count` is a client
+reconnecting in a loop; `current_subscription_count` against
+`publishing_interval_count` shows how many subscriptions share a cycle.
+
+Part 5 makes diagnostics *optional*, so the field is nullable, and `null` means
+"this server does not say" rather than zero — a server with diagnostics disabled
+would otherwise appear to be idle and healthy. The two mocks differ exactly
+here — the aggregate one publishes a summary and the Python one does not — which
+is what lets both branches be tested against a real server rather than a stub,
+and the field order lives in the contract (`diagnostics.diagnosticsFields`) so
+the two runtimes cannot report the same twelve counters differently. Both read it
+in the same batch as the status and the namespace array, so a server that
+publishes nothing costs one `null` in the response and no extra round trip.
+
 ## The three invariants
 
 **1. `stdout` belongs to the transport.** MCP speaks JSON-RPC over stdio; a stray

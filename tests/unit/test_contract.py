@@ -245,19 +245,35 @@ def test_the_event_family_shares_one_result_shape():
 
 
 def test_the_history_family_shares_one_result_shape():
-    """The divergence in #23 was two tools, both servers; one tool now covers all."""
+    """The divergence in #23 was two tools, both servers; one tool now covers all.
+
+    Two capability-gated tools since #117, and the *reason* they are two is the
+    thing worth pinning: reading stored values and reading stored events are
+    gated on different nodes (a server may historise one and not the other) and
+    answer in different shapes. A value history is `historyRecords`; an event
+    history has to be `eventRecords`, because an alarm recovered from the
+    archive must be the same record as one seen live or an agent has to learn
+    two shapes for one thing. A single tool whose result shape depended on an
+    argument is exactly what `resultShape` cannot express, which is why folding
+    this into `read_opcua_history` the way `aggregate_function` folded in would
+    have been the wrong merge.
+    """
     history_family = {t["name"]: t.get("resultShape") for t in TOOLS if t["capabilities"]}
-    assert history_family == {"read_opcua_history": "historyRecords"}
+    assert history_family == {
+        "read_opcua_history": "historyRecords",
+        "read_event_history": "eventRecords",
+    }
 
 
 def test_every_tool_declares_a_result_shape():
     """The systemic fix: the contract pins behaviour, not only interface.
 
-    Ten of the seventeen tools used to declare `resultShape: null`, and for those
-    the output format, error wording and defaults were two hand-written copies
-    that no test compared. The parity suite could prove the two servers
-    *advertise* the same thing; it could not prove they *do* the same thing — and
-    four confirmed divergences lived in exactly that gap.
+    Most tools used to declare `resultShape: null` — ten of the seventeen there
+    were before 0.4.0 merged several — and for those the output format, error
+    wording and defaults were two hand-written copies that no test compared. The
+    parity suite could prove the two servers *advertise* the same thing; it could
+    not prove they *do* the same thing — and four confirmed divergences lived in
+    exactly that gap.
 
     With a shape on every tool, `tests/e2e/test_contract_parity.py` checks every
     tool's actual output against the contract on both runtimes.
@@ -275,7 +291,7 @@ def test_every_declared_shape_exists_and_every_shape_is_used():
 
 
 def test_the_tool_surface_stays_consolidated():
-    """13 tools, and the single/batch pairs are gone.
+    """The single/batch pairs are gone and stay gone.
 
     Not a count for its own sake. Each merged pair was the same operation written
     twice per runtime — four copies — which is *why* the batch read reported
@@ -283,9 +299,24 @@ def test_the_tool_surface_stays_consolidated():
     continuation points on only one (#75). Re-splitting them would reopen the
     ground those bugs grew in, so the shape of the surface is asserted rather
     than left to review.
+
+    14 since #119 added `act_on_alarm`. That is a new capability rather than a
+    re-split, and it is held to the same rule the merges were: it and
+    `acknowledge_alarm` resolve their method through one table
+    (`events.actions`) and run one implementation, so there is no second copy of
+    the operation to drift. They are two entry points only because renaming
+    `acknowledge_alarm` would break every existing caller for no functional gain.
+
+    15 since #117 added `read_event_history`, and the same rule applies to it.
+    It shares the select clauses and the decoder with the live event path
+    (`event_filter` / `event_record`), so there is no second definition of what
+    an event record is — which is the divergence that would matter, not the tool
+    count. It is not folded into `read_opcua_history` because the two are gated
+    on different capability nodes and answer in different shapes; see
+    `test_the_history_family_shares_one_result_shape`.
     """
     names = {tool["name"] for tool in TOOLS}
-    assert len(TOOLS) == 13, sorted(names)
+    assert len(TOOLS) == 15, sorted(names)
     for retired in (
         "read_opcua_node",
         "read_multiple_opcua_nodes",
@@ -533,3 +564,39 @@ def test_no_test_reads_a_file_at_the_system_locale():
         f"these read a file at the system locale and will fail on Windows; "
         f'pass encoding="utf-8": {offenders}'
     )
+
+
+# --- the contract's own header ---------------------------------------------------
+#
+# A contributor's first read of the single source of truth is its header, and it
+# had drifted three ways at once (#115): it named FastMCP, which the SDK renamed
+# in 2.x; it said Python advertised signature-derived schemas, which #81 changed;
+# and it pointed at a test path that had moved. None of that could be caught,
+# because prose is not executable — so the checkable parts of it are checked here.
+
+
+HEADER = CONTRACT["$comment"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted({candidate for candidate in re.findall(r"tests/[\w/]+\.py", HEADER)}),
+)
+def test_a_path_the_header_names_exists(path):
+    """It pointed at `tests/test_contract_parity.py` long after the file moved."""
+    assert (ROOT / path).is_file(), f"contract header names {path}, which does not exist"
+
+
+def test_the_header_names_the_runtime_the_python_server_actually_uses():
+    """It said FastMCP for two minor versions after the SDK renamed it."""
+    server = (
+        ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "server.py"
+    ).read_text(encoding="utf-8")
+    assert "from mcp.server.mcpserver import" in server, "the Python server changed runtime"
+    assert "MCPServer" in HEADER
+    assert "FastMCP" not in HEADER or "not FastMCP" in HEADER
+
+
+def test_the_header_does_not_still_claim_signature_derived_schemas():
+    """#81 made both servers advertise the contract's own schema."""
+    assert "signature-derived input schemas are checked" not in HEADER

@@ -121,7 +121,7 @@ do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same thirteen tools, defined once in
+Both servers expose the same fourteen tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |
@@ -130,22 +130,26 @@ Both servers expose the same thirteen tools, defined once in
 | `browse_opcua_nodes` | List children, walk a subtree, resolve a browse path, search by name |
 | `write_opcua_nodes` | Write to one or more nodes |
 | `call_opcua_method` | Invoke a method on an object node |
-| `get_server_status` | Connection state, server health and the namespace array |
-| `subscribe_opcua_nodes` | Watch nodes for data changes instead of polling them |
+| `get_server_status` | Connection state, server health, the namespace array and the server's own diagnostics |
+| `subscribe_opcua_nodes` | Watch nodes for data changes instead of polling them, with an optional deadband |
 | `list_subscriptions` | The active subscriptions, each with its buffered changes |
 | `unsubscribe_opcua_nodes` | Cancel subscriptions |
 | `subscribe_events` | Start collecting events from a notifier node |
 | `read_events` | Read the events collected since the last read |
 | `list_active_alarms` | The alarms the server is currently retaining |
 | `acknowledge_alarm` | Acknowledge one of them, with a comment |
+| `act_on_alarm` | Confirm, annotate or shelve an alarm — the rest of the operator workflow |
 | `read_opcua_history` † | Historical values, raw or summarised by a server-side aggregate |
+| `read_event_history` † | Events the server stored, for a range that has already passed |
 
 † **Capability-gated.** `read_opcua_history` appears only when the connected
 server advertises historical access (`AccessHistoryDataCapability`) or aggregates
 (a non-empty `AggregateFunctions` folder). Its `aggregate_function` argument
 appears only with the latter, and its description then lists the functions that
-server actually offers. What a server cannot do is not on the menu, rather than
-failing at call time.
+server actually offers. `read_event_history` is gated separately, on
+`AccessHistoryEventsCapability` — keeping values and keeping events are
+different features and a server commonly does one without the other. What a
+server cannot do is not on the menu, rather than failing at call time.
 
 **One tool per operation, not one per arity.** Reading one node and reading fifty
 is the same request with a longer list, so it is one tool and one code path.
@@ -170,6 +174,7 @@ Once configured, you can ask in plain language:
 - *"Watch the tank level and tell me what it does over the next minute"*
 - *"What alarms are active right now?"*
 - *"Acknowledge the high-temperature alarm — I'm looking into it"*
+- *"That level switch has cycled 40 times in an hour. Shelve it for half an hour."*
 
 Every answer comes back as a record, not prose. A reading carries its data type,
 its OPC UA status and both timestamps — because quality and age are what decide
@@ -239,9 +244,11 @@ Both runtimes read the same environment variables:
 | `OPCUA_ALLOWED_TOOLS` | — | Comma-separated allowlist that can only narrow the selected profile |
 | `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated node IDs writable by the `operator` profile. `ns=2;i=5` or, preferably, `nsu=<namespace-uri>;i=5` — see [Writing an allowlist that stays correct](#writing-an-allowlist-that-stays-correct) |
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id|method_node_id` pairs callable by `operator` |
-| `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to acknowledge alarms |
+| `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to act on alarms — `acknowledge_alarm` and every `act_on_alarm` action |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node — see [Bounding the value, not only the node](#bounding-the-value-not-only-the-node) |
+| `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. A file that cannot be opened stops the server rather than falling back |
+| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
@@ -284,8 +291,10 @@ Both `operator` and `full` also require a secured OPC UA channel unless
 
 The policy is enforced again on **every call**, not only when tools are listed —
 an MCP client may hold a stale catalogue, and a hidden tool is a usability
-feature rather than a security boundary. Every control call is also recorded on
-stderr with its targets and its outcome.
+feature rather than a security boundary. Every control call is also recorded —
+with its targets, its outcome, the endpoint it went to and the session it rode
+on — to stderr and, if `OPCUA_AUDIT_FILE` is set, to an append-only file beside
+it.
 
 ### Bounding the value, not only the node
 

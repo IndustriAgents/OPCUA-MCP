@@ -189,6 +189,102 @@
       "tool": "acknowledge_alarm",
       "arguments": { "event_id": "abc123" },
       "error": null
+    },
+
+    {
+      "$comment": "additionalProperties (#114). A misspelled *optional* argument used to be accepted and silently change behaviour — the call browsed with the default node class and returned a plausible wrong answer. The refusal names the tool's real arguments, because 'no such argument' without the list is a riddle to a model that has just guessed one.",
+      "name": "a misspelled optional argument",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "node_id": "ns=2;i=1", "node_clas": "Variable" },
+      "error": "browse_opcua_nodes has no argument node_clas. It accepts: node_id, browse_path, depth, node_class, name_filter, include_values, max_nodes."
+    },
+    {
+      "name": "an argument from another tool",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=1"], "depth": 2 },
+      "error": "read_opcua_nodes has no argument depth. It accepts: node_ids."
+    },
+    {
+      "name": "an unknown key inside a write entry",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=1", "value": 1, "units": "C" }] },
+      "error": "write_opcua_nodes has no argument nodes[0].units. It accepts: node_id, value, data_type."
+    },
+    {
+      "name": "a tool that takes no arguments, given one",
+      "tool": "get_server_status",
+      "arguments": { "verbose": true },
+      "error": "get_server_status has no argument verbose. It accepts: no arguments."
+    },
+    {
+      "name": "a tool that takes no arguments, given none",
+      "tool": "get_server_status",
+      "arguments": {},
+      "error": null
+    },
+
+    {
+      "$comment": "enum (#114). An unknown node class used to match nothing and come back as an empty list, which is indistinguishable from a subtree that really is empty — the quiet wrong answer this project refuses to give.",
+      "name": "a misspelled node class",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "node_class": "Varaible" },
+      "error": "browse_opcua_nodes argument node_class must be one of \"Object\", \"Variable\", \"Method\", \"ObjectType\", \"VariableType\", \"ReferenceType\", \"DataType\", \"View\", got \"Varaible\""
+    },
+    {
+      "name": "a node class in the wrong case",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "node_class": "variable" },
+      "error": "browse_opcua_nodes argument node_class must be one of \"Object\", \"Variable\", \"Method\", \"ObjectType\", \"VariableType\", \"ReferenceType\", \"DataType\", \"View\", got \"variable\""
+    },
+    {
+      "name": "a node class the contract names",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "node_class": "Variable" },
+      "error": null
+    },
+    {
+      "name": "a data type OPC UA does not have",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=1", "value": 1, "data_type": "Real" }] },
+      "error": "write_opcua_nodes argument nodes[0].data_type must be one of \"Boolean\", \"SByte\", \"Byte\", \"Int16\", \"UInt16\", \"Int32\", \"UInt32\", \"Int64\", \"UInt64\", \"Float\", \"Double\", \"String\", \"DateTime\", \"Guid\", \"ByteString\", got \"Real\""
+    },
+    {
+      "name": "a data type OPC UA does have",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=1", "value": 1, "data_type": "Int32" }] },
+      "error": null
+    },
+
+    {
+      "$comment": "minimum (#114). A negative is never meaningful for any numeric argument here and used to be silently clamped, which is how a caller computing an offset wrongly gets a plausible answer and never finds out. The ceilings stay clamps: they are documented caps on how much work one call may ask for, and the result says when one was hit.",
+      "name": "a negative depth",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": -1 },
+      "error": "browse_opcua_nodes argument depth must be at least 0, got -1"
+    },
+    {
+      "name": "a negative buffer size",
+      "tool": "subscribe_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=3"], "buffer_size": -5 },
+      "error": "subscribe_opcua_nodes argument buffer_size must be at least 0, got -5"
+    },
+    {
+      "name": "a negative timeout",
+      "tool": "list_active_alarms",
+      "arguments": { "timeout_seconds": -0.5 },
+      "error": "list_active_alarms argument timeout_seconds must be at least 0, got -0.5"
+    },
+    {
+      "name": "zero is allowed, because zero means the default",
+      "tool": "read_opcua_history",
+      "arguments": { "node_id": "ns=2;i=1", "num_values": 0 },
+      "error": null
+    },
+    {
+      "name": "a depth above the cap is clamped, not refused",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "depth": 9999 },
+      "error": null
     }
   ]
 }

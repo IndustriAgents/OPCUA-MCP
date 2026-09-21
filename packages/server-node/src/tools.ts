@@ -14,14 +14,16 @@ import {
   NodeClass,
   HistoryData,
   AggregateFunction,
+  BrowseDirection,
   ClientSession,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { browseAllReferences } from "./browse.js";
+import { browseAllReferences, typeDefinitionOf } from "./browse.js";
 import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
+import { AuditSink, operatorId } from "./audit.js";
 import { ContractRefusal, message } from "./errors.js";
 import {
   MAX_NODES_PER_READ,
@@ -38,17 +40,20 @@ import {
   EVENT_DEFAULTS,
   EventRecord,
   EventSubscriptions,
-  acknowledgeAlarm,
+  alarmAction,
   droppedEventsMessage,
   listActiveAlarms,
+  readEventHistory,
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
 import {
   SubscribeOptions,
+  SubscriptionFilter,
   SubscriptionManager,
   SubscriptionRecord,
+  resolveFilter,
   unknownSubscriptionsMessage,
 } from "./subscriptions.js";
 import {
@@ -86,6 +91,7 @@ interface NodeRefRecord {
   data_type: string | null;
   value: unknown;
   description: string | null;
+  type_definition: string | null;
 }
 
 /** One attempted write (resultShapes.writeResults). */
@@ -414,7 +420,9 @@ function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<str
  * collector ships off the machine.
  */
 function auditDecision(
+  sink: AuditSink,
   policy: ToolPolicy,
+  connection: OpcuaConnection,
   name: string,
   args: Record<string, unknown>,
   decision: "allowed" | "denied" | "failed" | "completed",
@@ -424,25 +432,33 @@ function auditDecision(
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
   if (!tool || !["control", "alarm-action"].includes(tool.accessClass)) return;
-  console.error(
-    JSON.stringify({
-      event: "opcua_mcp_policy",
-      timestamp: new Date().toISOString(),
-      // Second, so it is next to the timestamp in the line an operator reads and
-      // can be grepped for to pull one call's whole story out of a shipped log.
-      call_id: callId,
-      // Which physical attempt this line is about. One call can reach the plant
-      // twice — the session dies, the connection is rebuilt, the request is
-      // re-sent — and a trail whose purpose is "what reached the plant" has to
-      // count those separately rather than fold them into one line.
-      attempt,
-      profile: policy.config.profile,
-      tool: name,
-      decision,
-      ...auditTargets(tool, args),
-      ...(reason ? { reason } : {}),
-    })
-  );
+  sink.write({
+    event: "opcua_mcp_policy",
+    timestamp: new Date().toISOString(),
+    // Second, so it is next to the timestamp in the line an operator reads and
+    // can be grepped for to pull one call's whole story out of a shipped log.
+    call_id: callId,
+    // Which physical attempt this line is about. One call can reach the plant
+    // twice — the session dies, the connection is rebuilt, the request is
+    // re-sent — and a trail whose purpose is "what reached the plant" has to
+    // count those separately rather than fold them into one line.
+    attempt,
+    // Which plant, and which of this process's sessions. A node id is not stable
+    // across a server restart — that is the whole reason the `nsu=` allowlist
+    // form exists — so "a write to ns=2;i=5 was allowed" is only interpretable
+    // later alongside where it went and over which session.
+    endpoint: connection.endpointUrl,
+    session: connection.sessionId,
+    // On whose behalf, as the deployment chose to record it. null when
+    // OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion of
+    // who is calling, and a name nothing verified would be worse than none.
+    operator: operatorId(),
+    profile: policy.config.profile,
+    tool: name,
+    decision,
+    ...auditTargets(tool, args),
+    ...(reason ? { reason } : {}),
+  });
 }
 
 /** An id for one tool call, to tie its audit lines together.
@@ -476,7 +492,8 @@ export class OpcuaTools {
 
   constructor(
     private readonly conn: OpcuaConnection,
-    private readonly policy: ToolPolicy = toolPolicy()
+    private readonly policy: ToolPolicy = toolPolicy(),
+    private readonly audit: AuditSink = new AuditSink()
   ) {
     // A rebuilt connection is a new session, and an OPC UA subscription belongs
     // to the session that created it. Without this, a server restart would leave
@@ -546,6 +563,10 @@ export class OpcuaTools {
     return this.conn.accessHistoryDataCapability(on);
   }
 
+  private accessHistoryEventsCapability(on?: ClientSession): Promise<boolean> {
+    return this.conn.accessHistoryEventsCapability(on);
+  }
+
   /** Read what the connected OPC UA server can do, off the session we already have.
    *
    * Never connects. Both probes run against a live session or not at all, so a
@@ -563,6 +584,7 @@ export class OpcuaTools {
       return available;
     }
     const historyOk = await this.accessHistoryDataCapability(session);
+    const historyEventsOk = await this.accessHistoryEventsCapability(session);
     this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions(session);
 
     // A tool gated on capabilities is offered when the server reports *any* of
@@ -570,6 +592,7 @@ export class OpcuaTools {
     // still answer an aggregate read, and gating it on `history` alone would
     // hide the one thing such a server is good at.
     if (historyOk) available.add("history");
+    if (historyEventsOk) available.add("historyEvents");
     if (this.aggregateFunctions.length > 0) available.add("aggregate");
     this.capabilities = available;
     return available;
@@ -704,6 +727,9 @@ export class OpcuaTools {
     // been recorded as one, and the `failed` line below would otherwise repeat
     // its reason and read as though the plant had rejected the call.
     const audit = { attempt: 1, denied: false };
+    // Which session this call rides on, so recovery can tell "my session died"
+    // from "someone else already replaced it".
+    let session: string | null = null;
 
     try {
       // Shape before permission: a call that does not match the contract is not a
@@ -725,10 +751,12 @@ export class OpcuaTools {
       try {
         this.policy.authorize(name, args);
         authorized = true;
-        auditDecision(this.policy, name, args, "allowed", callId, 1);
+        auditDecision(this.audit, this.policy, this.conn, name, args, "allowed", callId, 1);
       } catch (error) {
         auditDecision(
+          this.audit,
           this.policy,
+          this.conn,
           name,
           args,
           "denied",
@@ -765,6 +793,8 @@ export class OpcuaTools {
         );
       }
 
+      session = this.conn.sessionId;
+
       if (!(await this.capabilitiesMet(spec))) {
         throw new Error(
           message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
@@ -776,20 +806,39 @@ export class OpcuaTools {
         result = await this.dispatch(name, args);
       } catch (error) {
         if (!isConnectionError(error)) throw error;
-        result = await this.recover(spec, args, callId, audit, error);
+        result = await this.recover(spec, args, callId, audit, session, error);
       }
       // The outcome, not only the decision. "Permitted" and "happened" are
       // different facts, and the gap between them is where a control call that
       // reached the plant and then failed lives — which is the one an operator
       // most needs to find afterwards.
-      auditDecision(this.policy, name, args, "completed", callId, audit.attempt);
+      auditDecision(
+        this.audit,
+        this.policy,
+        this.conn,
+        name,
+        args,
+        "completed",
+        callId,
+        audit.attempt
+      );
       return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
       if (authorized && !audit.denied) {
-        auditDecision(this.policy, name, args, "failed", callId, audit.attempt, reason);
+        auditDecision(
+          this.audit,
+          this.policy,
+          this.conn,
+          name,
+          args,
+          "failed",
+          callId,
+          audit.attempt,
+          reason
+        );
       }
       // No "Error: " prefix. `isError` already says it is one, and the Python
       // runtime returns the bare message — so prefixing here made every failure
@@ -821,6 +870,7 @@ export class OpcuaTools {
     args: Record<string, unknown>,
     callId: string,
     audit: { attempt: number; denied: boolean },
+    session: string | null,
     error: unknown
   ) {
     const policy = spec.retryPolicy;
@@ -829,7 +879,19 @@ export class OpcuaTools {
         policy === "resend" ? " and retrying once" : ""
       }`
     );
-    await this.conn.reconnect();
+    try {
+      await this.conn.reconnect(session);
+    } catch (rebuildFailed) {
+      // The same failure the pre-dispatch path reports, worded the same way.
+      // Left bare, this reached the model as whatever the client library said —
+      // the same outage the call before it had described as "Not connected to the
+      // OPC UA server at …: … Call get_server_status for details", so one server
+      // said two things about one event depending on where in the request it
+      // happened to notice.
+      throw new ContractRefusal(
+        notConnectedMessage(this.conn.endpointUrl, describeError(rebuildFailed))
+      );
+    }
 
     if (policy === "uncertainOutcome") {
       throw new Error(
@@ -857,7 +919,9 @@ export class OpcuaTools {
     } catch (denial) {
       audit.denied = true;
       auditDecision(
+        this.audit,
         this.policy,
+        this.conn,
         spec.name,
         args,
         "denied",
@@ -867,7 +931,7 @@ export class OpcuaTools {
       );
       throw denial;
     }
-    auditDecision(this.policy, spec.name, args, "allowed", callId, 2);
+    auditDecision(this.audit, this.policy, this.conn, spec.name, args, "allowed", callId, 2);
 
     return await this.dispatch(spec.name, args);
   }
@@ -899,6 +963,15 @@ export class OpcuaTools {
           processingInterval: (args.processing_interval as number) || 0,
         });
 
+      case "read_event_history":
+        return await this.readEventHistory({
+          nodeId: (args.node_id as string) || DEFAULT_NOTIFIER,
+          start: args.start_time as string | undefined,
+          end: args.end_time as string | undefined,
+          numValues: (args.num_values as number) || 0,
+          severityMin: (args.severity_min as number) || EVENT_DEFAULTS.severityMin,
+        });
+
       case "write_opcua_nodes":
         return await this.writeOpcuaNodes(args.nodes as WriteRequest[]);
 
@@ -910,11 +983,19 @@ export class OpcuaTools {
         );
 
       case "subscribe_opcua_nodes":
-        return await this.subscribeOpcuaNodes(args.node_ids as string[], {
-          publishingInterval: args.publishing_interval as number | undefined,
-          samplingInterval: args.sampling_interval as number | undefined,
-          bufferSize: args.buffer_size as number | undefined,
-        });
+        return await this.subscribeOpcuaNodes(
+          args.node_ids as string[],
+          {
+            publishingInterval: args.publishing_interval as number | undefined,
+            samplingInterval: args.sampling_interval as number | undefined,
+            bufferSize: args.buffer_size as number | undefined,
+          },
+          resolveFilter({
+            deadbandType: args.deadband_type as string | undefined,
+            deadbandValue: args.deadband_value as number | undefined,
+            dataChangeTrigger: args.data_change_trigger as string | undefined,
+          })
+        );
 
       case "unsubscribe_opcua_nodes":
         return await this.unsubscribeOpcuaNodes(args.subscription_ids as string[]);
@@ -942,9 +1023,20 @@ export class OpcuaTools {
         );
 
       case "acknowledge_alarm":
-        return await this.acknowledgeAlarm(
+        return await this.actOnAlarm(
           args.event_id as string,
+          "acknowledge",
           (args.comment as string) ?? "",
+          null,
+          args.condition_id as string | undefined
+        );
+
+      case "act_on_alarm":
+        return await this.actOnAlarm(
+          args.event_id as string,
+          args.action as string,
+          (args.comment as string) ?? "",
+          (args.shelve_duration_ms as number | undefined) ?? null,
           args.condition_id as string | undefined
         );
 
@@ -1194,6 +1286,7 @@ export class OpcuaTools {
               data_type: null,
               value: null,
               description: null,
+              type_definition: null,
             };
             if (keep(record)) found.push(record);
 
@@ -1206,6 +1299,10 @@ export class OpcuaTools {
         }
       }
 
+      // Unconditional, unlike the variable detail: the type is what the record
+      // *is*, not extra reading about its value, and it costs one batched
+      // browse however many nodes were found.
+      await this.fillTypeDefinitions(session, found);
       if (includeValues) await this.fillVariableDetail(session, found);
       return objectResult({ nodes: found, truncated, inspected });
     } catch (error) {
@@ -1235,7 +1332,57 @@ export class OpcuaTools {
       data_type: null,
       value: null,
       description: null,
+      type_definition: null,
     };
+  }
+
+  /** Fill in `type_definition` for `records`, in one batched browse.
+   *
+   * `HasTypeDefinition` is non-hierarchical, so the traversal's own browse —
+   * forward hierarchical references only, deliberately, or every node would
+   * answer with its parent and its type instead of its children — never sees
+   * it. It takes a second browse, and that is why this is one request for the
+   * whole result rather than one per node: a 500-node walk would otherwise cost
+   * 500 extra round trips to say what one already could.
+   *
+   * Best-effort, like the variable detail: a server that refuses this leaves the
+   * field null rather than failing a browse that succeeded.
+   */
+  private async fillTypeDefinitions(
+    session: ClientSession,
+    records: NodeRefRecord[]
+  ): Promise<void> {
+    if (records.length === 0) return;
+    const traversal = CONTRACT.traversal;
+    const descriptions = records.map((record) => ({
+      nodeId: record.node_id,
+      browseDirection: BrowseDirection.Forward,
+      referenceTypeId: traversal.hasTypeDefinitionNodeId,
+      // No subtypes: HasTypeDefinition has none, and asking for them would let
+      // an unrelated reference through on a server that has invented one.
+      includeSubtypes: false,
+      nodeClassMask: 0,
+      resultMask: 63,
+    }));
+
+    // Chunked for the same reason the property reads are: MaxNodesPerBrowse is
+    // an operational limit a conformant server may enforce, and the default
+    // walk already returns up to 500 nodes.
+    const size = traversal.maxTypeDefinitionsPerRequest;
+    for (let start = 0; start < descriptions.length; start += size) {
+      let results;
+      try {
+        results = await session.browse(descriptions.slice(start, start + size));
+      } catch {
+        return;
+      }
+      results.forEach((result, index) => {
+        records[start + index].type_definition = typeDefinitionOf(
+          result.statusCode === StatusCodes.Good,
+          (result.references ?? []).map((reference) => reference.browseName.name ?? "")
+        );
+      });
+    }
   }
 
   /** Fill in value, data type and description for the Variables among `records`.
@@ -1560,7 +1707,11 @@ export class OpcuaTools {
 
   // --- data-change subscriptions -------------------------------------------
 
-  private async subscribeOpcuaNodes(nodeIds: string[], options: SubscribeOptions) {
+  private async subscribeOpcuaNodes(
+    nodeIds: string[],
+    options: SubscribeOptions,
+    filter: SubscriptionFilter
+  ) {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(
         message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
@@ -1581,13 +1732,27 @@ export class OpcuaTools {
       );
     }
     const session = this.requireSession();
+
+    if (filter.deadbandType === "percent") {
+      // A percent deadband is a percentage *of the node's EURange*, so a node
+      // that publishes none cannot have one. Checked here, before a single
+      // subscription is created, so a batch is refused whole rather than leaving
+      // some nodes monitored and some not.
+      const engineering = await this.metadata.forNodes(session, nodeIds);
+      for (const nodeId of nodeIds) {
+        if (!engineering.get(nodeId)?.eu_range) {
+          throw new Error(message("percentDeadbandNeedsRange", { node_id: nodeId }));
+        }
+      }
+    }
+
     const records: SubscriptionRecord[] = [];
     for (const nodeId of nodeIds) {
       // Named per node, as the Python runtime words it: a batch that fails on
       // its fourth node should say which one, not report the library's own
       // phrasing for whichever call happened to throw.
       try {
-        records.push(await this.subs.subscribe(session, nodeId, options));
+        records.push(await this.subs.subscribe(session, nodeId, options, filter));
       } catch (error) {
         throw new Error(
           message("subscribeFailed", { node_id: nodeId, reason: describeError(error) })
@@ -1670,6 +1835,48 @@ export class OpcuaTools {
     return result;
   }
 
+  /** `read_event_history`: the events the server kept, for a range already past.
+   *
+   * `subscribe_events` only sees what arrives after it subscribes, so it cannot
+   * answer what fired before anyone was watching. This reads the server's own
+   * event archive instead, and returns the same records, so an alarm looks
+   * identical whether it was seen live or recovered afterwards.
+   */
+  private async readEventHistory(request: {
+    nodeId: string;
+    start?: string;
+    end?: string;
+    numValues: number;
+    severityMin: number;
+  }) {
+    const { nodeId } = request;
+    const end = toDate(request.end) ?? new Date();
+    // An hour back, rather than the epoch: a range nobody bounded should be the
+    // recent past, not the whole archive. `read_opcua_history` defaults the same
+    // way and for the same reason.
+    const start = toDate(request.start) ?? new Date(end.getTime() - 60 * 60 * 1000);
+    // The same cap as a raw value read, and a refusal rather than a knob: an
+    // alarm burst is tens of thousands of events, and "all of them" is a request
+    // that never returns.
+    const wanted = historyValues(request.numValues);
+
+    try {
+      const events = await readEventHistory(
+        this.requireSession(),
+        nodeId,
+        start,
+        end,
+        wanted,
+        request.severityMin
+      );
+      return eventResult(events);
+    } catch (error) {
+      throw new Error(
+        message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) })
+      );
+    }
+  }
+
   private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {
     let alarms: EventRecord[];
     try {
@@ -1682,30 +1889,75 @@ export class OpcuaTools {
     return eventResult(alarms);
   }
 
-  private async acknowledgeAlarm(eventId: string, comment: string, conditionId?: string) {
+  /** Both alarm tools, through one implementation.
+   *
+   * `acknowledge_alarm` is `act_on_alarm` with the action fixed, so there is only
+   * ever one copy of "find the condition, resolve the method, call it, report the
+   * status" to drift — the property the 17→13 consolidation was about, held to
+   * here rather than assumed.
+   *
+   * The refusal wording is the one difference: `acknowledge_alarm` has said
+   * `acknowledgeFailed` since it existed, and changing that would break a caller
+   * matching on it for no gain.
+   */
+  private async actOnAlarm(
+    eventId: string,
+    action: string,
+    comment: string,
+    durationMs: number | null,
+    conditionId?: string
+  ) {
+    // A relationship between two arguments, which the contract's own schema
+    // cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
+    // on any other action would silently ignore it. Refusing says which action
+    // the caller probably meant.
+    if (action === "shelveFor" && durationMs === null) {
+      throw new Error(message("shelveForNeedsDuration"));
+    }
+    if (action !== "shelveFor" && durationMs !== null) {
+      throw new Error(message("shelveDurationNotAllowed", { action }));
+    }
+
     const condition = conditionId || this.events.conditionFor(eventId);
     if (!condition) {
       throw new Error(message("unknownEventId", { event_id: eventId }));
     }
 
+    const failed = (reason: string) =>
+      new Error(
+        action === "acknowledge"
+          ? message("acknowledgeFailed", { condition_id: condition, reason })
+          : message("alarmActionFailed", { action, condition_id: condition, reason })
+      );
+
     let statusCode;
     try {
-      statusCode = await acknowledgeAlarm(this.requireSession(), condition, eventId, comment);
-    } catch (error) {
-      throw new Error(
-        message("acknowledgeFailed", { condition_id: condition, reason: describeError(error) })
+      statusCode = await alarmAction(
+        this.requireSession(),
+        condition,
+        eventId,
+        action,
+        comment,
+        durationMs
       );
+    } catch (error) {
+      throw failed(describeError(error));
     }
     if (statusCode !== StatusCodes.Good) {
-      throw new Error(
-        message("acknowledgeFailed", { condition_id: condition, reason: statusCode.name })
-      );
+      throw failed(statusCode.name);
     }
 
-    return objectResult({
+    const record: Record<string, unknown> = {
       event_id: eventId,
       condition_id: canonicalNodeId(condition),
       status: statusCode.name,
-    });
+    };
+    // `acknowledge_alarm` answers with the shape it always has; `act_on_alarm`
+    // adds the action, because 'shelve' and 'shelveFor' are one argument apart
+    // and the record should say which one happened.
+    if (action !== "acknowledge") {
+      return objectResult({ ...record, action, status: statusCode.name });
+    }
+    return objectResult(record);
   }
 }

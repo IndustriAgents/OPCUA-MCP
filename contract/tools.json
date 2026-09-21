@@ -116,9 +116,13 @@
               "description": {
                 "type": ["string", "null"],
                 "description": "The node's Description attribute, or null when it has none."
+              },
+              "type_definition": {
+                "type": ["string", "null"],
+                "description": "BrowseName of the node's type, which is what says what it *is* rather than what class it belongs to: 'ExclusiveLimitAlarmType' rather than 'Object', 'AnalogItemType' rather than 'Variable'. A node reported as AnalogItemType is one whose unit and EURange read_opcua_nodes can return; one reported as a subtype of AlarmConditionType is one act_on_alarm applies to. null for a node class that has no type (Method, View, and the types themselves) and for a node whose type could not be read."
               }
             },
-            "required": ["node_id", "browse_name", "node_class", "parent_node_id", "data_type", "value", "description"],
+            "required": ["node_id", "browse_name", "node_class", "parent_node_id", "data_type", "value", "description", "type_definition"],
             "additionalProperties": false
           }
         },
@@ -278,6 +282,18 @@
             "type": "number",
             "description": "Total data changes received since subscribing, including any discarded by the buffer. An OPC UA server sends the node's current value as the first change, so this reaches 1 without the value having moved."
           },
+          "deadband_type": {
+            "type": "string",
+            "description": "The deadband in force: 'none', 'absolute' or 'percent'. Reported for the same reason the intervals are — a caller reading a suspiciously quiet buffer needs to know whether it asked for that."
+          },
+          "deadband_value": {
+            "type": "number",
+            "description": "The deadband's size, in engineering units or percent of EURange as `deadband_type` says. 0 when there is no deadband."
+          },
+          "data_change_trigger": {
+            "type": "string",
+            "description": "What this subscription counts as a change: 'status', 'statusValue' or 'statusValueTimestamp'."
+          },
           "changes": {
             "type": "array",
             "description": "The retained changes, oldest first, at most `buffer_size` of them. Each is a record of the shape defined by \"historyRecords\": { value, timestamp, status }."
@@ -290,10 +306,37 @@
           "sampling_interval",
           "buffer_size",
           "change_count",
+          "deadband_type",
+          "deadband_value",
+          "data_change_trigger",
           "changes"
         ],
         "additionalProperties": false
       }
+    },
+    "alarmAction": {
+      "$comment": "One object, returned as a single MCP text content block. Deliberately the same shape as \"acknowledgement\" plus the action taken: the two tools do the same kind of thing to the same kind of target, and an agent that has learned to read one answer should not have to learn another. They are separate tools only because merging them would rename `acknowledge_alarm` out from under every existing caller for no functional gain \u2014 see the tool's own description.",
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "The event_id that identified the condition, echoed back."
+        },
+        "condition_id": {
+          "type": ["string", "null"],
+          "description": "The condition instance acted on, canonically spelled. null when the caller supplied none and none could be recovered from the buffered event."
+        },
+        "action": {
+          "type": "string",
+          "description": "The action taken: 'confirm', 'comment', 'shelve', 'shelveFor' or 'unshelve'. Echoed because 'shelve' and 'shelveFor' are one argument apart and the record should say which one happened."
+        },
+        "status": {
+          "type": "string",
+          "description": "OPC UA status code name the server answered the call with. 'Good' means it accepted the action."
+        }
+      },
+      "required": ["event_id", "condition_id", "action", "status"],
+      "additionalProperties": false
     },
     "serverStatus": {
       "$comment": "A single object rather than a list of records: `get_server_status` returns one text content block carrying it as JSON, and {\"result\": {...}} as structured content. Every field is always present. A field this server could not read — because the connection is down, or the OPC UA server does not expose it — is null, and `namespaces` is then empty; `connected` and `error` say which of those happened.",
@@ -327,6 +370,39 @@
           "type": ["object", "null"],
           "description": "What the server says it is: { product_name, product_uri, manufacturer_name, software_version, build_number, build_date }, each a string the server supplied (build_date is ISO-8601 UTC). Any of them may be an empty string; the whole object is null when ServerStatus could not be read."
         },
+        "diagnostics": {
+          "type": ["object", "null"],
+          "description": "The server's own ServerDiagnosticsSummary: session and subscription counts, and how many requests it has turned away. null when the connection is down, when the server does not publish it, or when diagnostics are switched off \u2014 which Part 5 allows, so null is an answer rather than a failure.",
+          "properties": {
+            "server_view_count": { "type": "number", "description": "Views the server publishes. 0 on most servers, which publish none." },
+            "current_session_count": { "type": "number", "description": "Sessions open right now, including this one. The number to look at when a licensed-session limit is suspected." },
+            "cumulated_session_count": { "type": "number", "description": "Sessions opened since the server started. Far above current_session_count means something is reconnecting in a loop." },
+            "security_rejected_session_count": { "type": "number", "description": "Sessions refused on security grounds \u2014 a bad certificate, an untrusted client. The first place to look when a connection fails and the server says little." },
+            "rejected_session_count": { "type": "number", "description": "Sessions refused for any reason, security included." },
+            "session_timeout_count": { "type": "number", "description": "Sessions the server closed because the client stopped talking. Rising means keep-alives are not getting through." },
+            "session_abort_count": { "type": "number", "description": "Sessions the server terminated abnormally." },
+            "current_subscription_count": { "type": "number", "description": "Subscriptions alive right now across all clients \u2014 not just this server's, which list_subscriptions reports." },
+            "cumulated_subscription_count": { "type": "number", "description": "Subscriptions created since the server started." },
+            "publishing_interval_count": { "type": "number", "description": "Distinct publishing intervals in use. A large number means clients are asking for many different rates, which costs the server more than the same count at one rate." },
+            "security_rejected_requests_count": { "type": "number", "description": "Requests refused on security grounds." },
+            "rejected_requests_count": { "type": "number", "description": "Requests refused for any reason. Rising while calls fail points at the server's limits rather than at the request." }
+          },
+          "required": [
+            "server_view_count",
+            "current_session_count",
+            "cumulated_session_count",
+            "security_rejected_session_count",
+            "rejected_session_count",
+            "session_timeout_count",
+            "session_abort_count",
+            "current_subscription_count",
+            "cumulated_subscription_count",
+            "publishing_interval_count",
+            "security_rejected_requests_count",
+            "rejected_requests_count"
+          ],
+          "additionalProperties": false
+        },
         "namespaces": {
           "type": "array",
           "description": "The server's NamespaceArray as [{ index, uri }, ...], index ascending from 0. This is what turns an 'ns=<n>;...' node ID into something stable: the same URI can sit at a different index after a server restart, so resolve a namespace URI here rather than hard-coding its index. Empty when the array could not be read."
@@ -344,6 +420,7 @@
         "current_time",
         "start_time",
         "build_info",
+        "diagnostics",
         "namespaces",
         "error"
       ],
@@ -429,6 +506,52 @@
     "conditionTypeNodeId": "ns=0;i=2782",
     "conditionRefreshMethodNodeId": "ns=0;i=3875",
     "acknowledgeMethodNodeId": "ns=0;i=9111",
+    "shelvingStateBrowseName": "ShelvingState",
+    "actions": {
+      "$comment": "The rest of the operator workflow Part 9 \u00a75.5 defines. `acknowledge_alarm` implemented the first half of a two-stage handshake and nothing else, so an agent could see an alarm and say it had seen it \u2014 and then had no way to confirm it, annotate it, or do the thing an operator actually does with a chattering nuisance alarm. Each entry names the method to call on the condition instance, with the well-known method of its type as the fallback for a server that does not expose condition instances in its address space (Part 9 allows that, which is why `acknowledge_alarm` already falls back the same way). Deliberately absent: Suppress, Enable/Disable, Reset and Silence. Those configure the alarm system rather than respond to an alarm, and an agent switching an alarm off is not a feature. `on` says which object the method is called on: `condition` for the acknowledge family, which are methods of the condition's own type, and `shelvingState` for the three shelving ones, which are methods of ShelvedStateMachineType and so hang off the condition's ShelvingState component rather than off the condition. Getting that wrong is not a subtle failure \u2014 the server answers BadArgumentsMissing or BadTooManyArguments, because the method it resolves is a *different* method of the right name's neighbour.",
+      "acknowledge": {
+        "browseName": "Acknowledge",
+        "methodNodeId": "ns=0;i=9111",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "The first stage of the handshake, and what `acknowledge_alarm` does. Here as well so both tools resolve their method through one table: the two are the same operation with a different method id, and the surface only carries them separately because renaming `acknowledge_alarm` would break every caller for no functional gain."
+      },
+      "confirm": {
+        "browseName": "Confirm",
+        "methodNodeId": "ns=0;i=9113",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "The second stage of Part 9's acknowledge\u2192confirm handshake: the operator has not merely seen the alarm but dealt with it. A server only offers it on a condition whose type declares ConfirmedState."
+      },
+      "comment": {
+        "browseName": "AddComment",
+        "methodNodeId": "ns=0;i=9029",
+        "on": "condition",
+        "takes": "eventIdAndComment",
+        "description": "Attach a note to a condition without changing its state. A method of ConditionType itself, so every condition has it."
+      },
+      "shelve": {
+        "browseName": "OneShotShelve",
+        "methodNodeId": "ns=0;i=2948",
+        "on": "shelvingState",
+        "takes": "nothing",
+        "description": "Shelve the alarm until it returns to normal. What an operator does with a chattering nuisance alarm, and a natural agent action \u2014 'this level switch has cycled 40 times in an hour, shelve it'."
+      },
+      "shelveFor": {
+        "browseName": "TimedShelve",
+        "methodNodeId": "ns=0;i=2949",
+        "on": "shelvingState",
+        "takes": "duration",
+        "description": "The same, for a fixed time. Self-limiting, which is a rare and welcome property in an agent-invokable control action: the alarm comes back whether or not anyone remembers to unshelve it."
+      },
+      "unshelve": {
+        "browseName": "Unshelve",
+        "methodNodeId": "ns=0;i=2947",
+        "on": "shelvingState",
+        "takes": "nothing",
+        "description": "Put a shelved alarm back on the board."
+      }
+    },
     "refreshStartEventTypeNodeId": "ns=0;i=2787",
     "refreshEndEventTypeNodeId": "ns=0;i=2788",
     "defaults": {
@@ -459,7 +582,20 @@
     "minPublishingIntervalMs": 50,
     "defaultBufferSize": 20,
     "minBufferSize": 1,
-    "maxBufferSize": 1000
+    "maxBufferSize": 1000,
+    "deadbandTypes": {
+      "$comment": "OPC UA Part 4 \u00a77.22's DataChangeFilter, by the names the specification gives it. Point a subscription at a noisy analogue tag without one and the default 20-record ring fills with sensor jitter in about a second \u2014 the agent reads it back and sees nothing but noise, having spent one of the server's subscriptions to get it. `percent` is defined *against the node's EURange*, which is why this composes with `analog`: the unit work lands once and pays twice. Each runtime maps these names onto its own library's DeadbandType enum, whose numbering is fixed by the specification, so the two provably agree.",
+      "none": "Report every change the server samples. The default, and what this server did before there was a choice.",
+      "absolute": "Report a change only when it differs from the last reported value by more than `deadband_value`, in the node's own engineering units.",
+      "percent": "The same, with `deadband_value` read as a percentage of the node's EURange. Requires the node to publish one; a node that does not is refused rather than silently treated as absolute."
+    },
+    "dataChangeTriggers": {
+      "$comment": "What counts as a change worth reporting, also Part 4 \u00a77.22. The OPC UA default is `status`, which is *not* this server's: an agent that asked to watch a value and was told only about status transitions would have been given something nobody asks for. `statusValue` is the useful default and the one a deadband filters on. `statusValueTimestamp` additionally reports a re-sample that changed nothing but the timestamp, which is how to tell 'the value is steady' from 'the value stopped updating' \u2014 a distinction that matters on a plant and cannot be drawn from the other two.",
+      "status": "Only when the OPC UA status code changes.",
+      "statusValue": "When the status or the value changes. The default here.",
+      "statusValueTimestamp": "When the status, the value or the source timestamp changes."
+    },
+    "defaultDataChangeTrigger": "statusValue"
   },
   "transport": {
     "$comment": "Bounds on what the OPC UA server on the other end may send us, advertised in the OPC UA Hello and enforced on receipt. CVE-2022-25304 is a missing limit on the number of chunks one message may be split into: python-opcua appends every intermediate chunk to a list with nothing counting them, so a hostile or compromised server can stream chunks until the client runs out of memory. The advisory has no fixed version and will not get one — python-opcua is unmaintained, and the same advisory names asyncua. Both runtimes therefore advertise these bounds and, because advertising only binds a server that chooses to obey, enforce them on what actually arrives. maxChunkCount * maxChunkSize is the largest message either runtime will assemble: 1024 * 64KiB = 64MiB, which is far above any real OPC UA response and far below a memory-exhaustion attack. See SECURITY.md.",
@@ -481,18 +617,77 @@
     "defaultMaxNodes": 500,
     "maxNodes": 5000,
     "skipBrowseName": "Server",
+    "hasTypeDefinitionNodeId": "ns=0;i=40",
+    "maxTypeDefinitionsPerRequest": 300,
+    "$typeDefinitionComment": "A browse record named a node and its class, which does not say what the node *is*: every alarm, every pump and every folder came back as 'Object'. HasTypeDefinition is the reference that says, and it is non-hierarchical, so the traversal's own hierarchical browse never sees it \u2014 it takes a second browse, which is why it is one batched request for the whole result rather than one per node. maxTypeDefinitionsPerRequest chunks that batch for the same reason the property reads are chunked: MaxNodesPerBrowse is an operational limit a conformant server may enforce, and the default walk already returns up to 500 nodes.",
     "$skipComment": "The built-in Server object is skipped by every traversal: it is several hundred nodes of the server describing itself, it is the same on every server, and get_server_status answers what anyone would browse it for."
   },
   "diagnostics": {
-    "$comment": "The standard nodes `get_server_status` reads. Both are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. Kept here rather than in either server so the two ask the same questions.",
+    "$comment": "The standard nodes `get_server_status` reads. ServerStatus and the NamespaceArray are mandatory in OPC UA Part 5, so every server has them and neither runtime needs to browse for them. ServerDiagnosticsSummary is *not* mandatory to populate \u2014 Part 5 lets a server leave diagnostics off, and the two mocks here differ exactly there, which is why the field is nullable and why both branches are covered end to end. It answers the questions people actually ask an assistant about a server they cannot see: why is this slow, am I being rejected, how many sessions are open. `diagnosticsFields` is the record's field order, listed once so the two runtimes cannot report the same twelve counters in different orders; each maps it onto its own client library's spelling of ServerDiagnosticsSummaryDataType.",
     "serverStatusNodeId": "ns=0;i=2256",
-    "namespaceArrayNodeId": "ns=0;i=2255"
+    "namespaceArrayNodeId": "ns=0;i=2255",
+    "serverDiagnosticsSummaryNodeId": "ns=0;i=2275",
+    "diagnosticsFields": [
+      "server_view_count",
+      "current_session_count",
+      "cumulated_session_count",
+      "security_rejected_session_count",
+      "rejected_session_count",
+      "session_timeout_count",
+      "session_abort_count",
+      "current_subscription_count",
+      "cumulated_subscription_count",
+      "publishing_interval_count",
+      "security_rejected_requests_count",
+      "rejected_requests_count"
+    ]
   },
   "retryPolicies": {
     "$comment": "What this server may do when the OPC UA session dies underneath a request. Every tool names one. Deliberately NOT `annotations.idempotentHint`, which both runtimes used to read for this: that annotation is advice to the *model* about calling a tool twice, and this decides whether the *transport* may put a second request on the wire after an uncertain outcome. The two are different questions, and conflating them meant write_opcua_nodes was automatically re-sent after a lost response \u2014 it is idempotent from the model's point of view (writing 99.9 twice leaves 99.9) so it carries idempotentHint: true, but OPC UA Part 4 \u00a75.11.4 lets a Write partially succeed, leaves rollback to the client and defines no operation order, so a lost response never proved the write had not landed. Whatever the policy, the connection is always rebuilt, so the next call finds a live session.",
     "resend": "Run the request again on the fresh session. Only for reads, where a second attempt changes nothing in the plant and the first attempt's outcome does not matter.",
     "reconnectOnly": "Rebuild the connection and report the original failure. Honest for the monitor tools: a subscription lives on the session, so it died with it and the failure is complete rather than uncertain.",
     "uncertainOutcome": "Rebuild the connection and fail with errors.uncertainOutcome, which says the request may or may not have reached the plant and names what it was aimed at. For every control tool: re-sending would be a second physical actuation on a guess, and reporting a plain failure would claim knowledge this server does not have."
+  },
+  "deadSession": {
+    "$comment": "What tells a failure of the *connection* from a failure of the *request*. It decides whether rebuilding the session and trying again is meaningful at all: a BadNodeIdUnknown would fail identically on a fresh session, so retrying it would only hide the real answer. It was 23 hand-transcribed strings matched against the error's rendered text, and the test guarding them parametrised over the same constant — so it passed by construction and could not detect the failure it existed to catch, which is a client library rewording a message and silently disabling reconnection. The three groups below are three different kinds of evidence, and only one of them is prose.",
+    "statusCodeNames": {
+      "$comment": "OPC UA status codes, by the names the specification gives them. Both client libraries publish these in their own enums (python-opcua's ua.StatusCodes, node-opcua's StatusCodes), so each runtime resolves this list against its library rather than carrying numbers — and a name that ceases to exist there fails tests/unit/test_reconnect.py instead of quietly never matching again. The numbers are fixed by the spec, which is what makes the two runtimes provably agree.",
+      "names": [
+        "BadSessionIdInvalid",
+        "BadSessionClosed",
+        "BadSessionNotActivated",
+        "BadSecureChannelClosed",
+        "BadSecureChannelIdInvalid",
+        "BadServerNotConnected",
+        "BadNotConnected",
+        "BadConnectionClosed",
+        "BadConnectionRejected",
+        "BadDisconnect",
+        "BadNoCommunication",
+        "BadCommunicationError",
+        "BadServerHalted",
+        "BadTcpInternalError"
+      ]
+    },
+    "socketErrors": {
+      "$comment": "Failures below OPC UA, which carry no status code because the socket never got far enough to have one. These are operating-system error codes, not library prose: their spelling is fixed by errno and by Node's `os` constants, so matching them in text is as stable as matching a status code and there is nothing better to match.",
+      "codes": [
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "EPIPE",
+        "ETIMEDOUT",
+        "EHOSTUNREACH",
+        "ENETUNREACH"
+      ]
+    },
+    "phrases": {
+      "$comment": "The remainder, matched in the error's text, and the only fragile part of this. The first is this project's own wording (`requireSession` / `_open_with_backoff` raise it) and so cannot drift under us. The other two are node-opcua prose for a socket that went away without an errno reaching us, and they are exactly what a library release may reword — which is why the e2e test that kills the mock mid-call matters more than any of this list: it is the one check that fails when reconnection stops working for real.",
+      "texts": [
+        "No OPC UA session available",
+        "socket has been disconnected",
+        "The connection has been rejected"
+      ]
+    }
   },
   "analog": {
     "$comment": "Where a node says what its number means. OPC UA Part 8 §5.3 defines AnalogItemType and introduces EngineeringUnits by citing the Mars Climate Orbiter; these three properties are how a server publishes the unit and the two ranges. Both runtimes resolve them with one TranslateBrowsePathsToNodeIds for the whole batch and one Read of whatever resolved, in chunks of `maxPropertiesPerRequest` (a 500-node read is 1500 browse paths, and MaxNodesPerTranslateBrowsePathsToNodeIds is an operational limit servers publish and enforce, so one request that large is one a conformant server may refuse), then cache the answer for the life of the session — a node's unit does not change while a session lasts, and re-reading it per call would put two round trips on every read. The cache is dropped when the session is replaced, because a restarted server may be a different server. `enforceEuRangeOnWrite` is the safety half: a value outside the range the plant itself published is refused before anything is sent, which is a bound the equipment declares rather than one a human retyped into a policy file. OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true turns it off for deployments that have to write outside normal operation on purpose.",
@@ -508,6 +703,12 @@
       "browseName": "AccessHistoryDataCapability",
       "check": "readBooleanTrue"
     },
+    "historyEvents": {
+      "$comment": "Part 11 \u00a75.4's HistoryServerCapabilities. A separate node from AccessHistoryDataCapability and a separate answer: storing values and storing events are different features, and a server commonly does one and not the other. Note that this node is genuinely absent from some servers' namespace 0 rather than present-and-false \u2014 python-opcua is one \u2014 which reads the same way here and should: a server that cannot say it keeps event history is one whose event history nobody should go looking for.",
+      "nodeId": "ns=0;i=11194",
+      "browseName": "AccessHistoryEventsCapability",
+      "check": "readBooleanTrue"
+    },
     "aggregate": {
       "nodeId": "ns=0;i=2997",
       "browseName": "AggregateFunctions",
@@ -519,6 +720,9 @@
     "emptyArray": "{tool} requires a non-empty {argument} array",
     "missingArgument": "{tool} requires {argument}",
     "wrongType": "{tool} argument {argument} must be {expected}",
+    "unknownArgument": "{tool} has no argument {argument}. It accepts: {allowed}.",
+    "notAllowedValue": "{tool} argument {argument} must be one of {allowed}, got {value}",
+    "belowMinimum": "{tool} argument {argument} must be at least {minimum}, got {value}",
     "unknownTool": "Unknown tool: {tool}",
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
     "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
@@ -538,11 +742,18 @@
     "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. The connection has been rebuilt \u2014 read the targets back to see what happened before sending it again.",
     "browseFailed": "Failed to browse {node_id}: {reason}",
     "historyFailed": "Failed to read history of node {node_id}: {reason}",
+    "eventHistoryFailed": "Failed to read event history of node {node_id}: {reason}",
     "methodFailed": "Failed to call method {method_node_id} on object {object_node_id}: {reason}",
     "subscribeFailed": "Failed to subscribe to node {node_id}: {reason}",
     "eventSubscribeFailed": "Failed to subscribe to events from node {node_id}: {reason}",
     "alarmsFailed": "Failed to list active alarms from node {node_id}: {reason}",
+    "shelvingNotSupported": "Condition {condition_id} has no ShelvingState, so this server cannot shelve it. ShelvingState is optional in OPC UA Part 9 \u2014 acknowledge or comment on the alarm instead, or ask the plant's integrator to enable shelving.",
+    "alarmActionFailed": "Failed to {action} alarm {condition_id}: {reason}",
+    "shelveDurationNotAllowed": "act_on_alarm only takes shelve_duration_ms with action \"shelveFor\"; got \"{action}\". Use \"shelveFor\" to shelve for a set time, or drop the duration to shelve until the alarm clears.",
+    "shelveForNeedsDuration": "act_on_alarm requires shelve_duration_ms with action \"shelveFor\". Use action \"shelve\" to shelve until the alarm returns to normal instead.",
     "acknowledgeFailed": "Failed to acknowledge alarm {condition_id}: {reason}",
+    "deadbandNeedsValue": "subscribe_opcua_nodes requires deadband_value when deadband_type is \"{deadband_type}\"",
+    "percentDeadbandNeedsRange": "A percent deadband is a percentage of node {node_id}'s EURange, and it publishes none. Use deadband_type \"absolute\" with a value in engineering units, or read the node to see what it reports.",
     "aggregateNeedsStart": "read_opcua_history requires start_time when aggregate_function is given",
     "notSubscribedToEvents": "Not subscribed to events from node {node_id}. Call subscribe_events first.",
     "unknownEventId": "Unknown event_id \"{event_id}\". Call list_active_alarms first, or pass the condition_id of the alarm to acknowledge.",
@@ -588,7 +799,8 @@
             "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
           }
         },
-        "required": ["node_ids"]
+        "required": ["node_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -598,7 +810,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "nodeRefs",
-      "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
+      "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every node also reports its `type_definition` \u2014 what it *is*, as against what class it belongs to: 'AnalogItemType' for a tag that publishes a unit and a range, a subtype of 'AlarmConditionType' for something act_on_alarm applies to, 'FolderType' for structure. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -612,10 +824,21 @@
           },
           "depth": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many levels below the starting node to walk. 1 (the default) lists its immediate children; 0 returns only the starting node itself, which is how to resolve a `browse_path` to a node ID. Clamped to 64."
           },
           "node_class": {
             "type": "string",
+            "enum": [
+              "Object",
+              "Variable",
+              "Method",
+              "ObjectType",
+              "VariableType",
+              "ReferenceType",
+              "DataType",
+              "View"
+            ],
             "description": "Keep only nodes of this OPC UA NodeClass: 'Variable' for readable tags, 'Object' for structure, 'Method' for callable operations. Every class is returned when unset. Filtering does not prune the walk — an Object is still descended into when `depth` allows."
           },
           "name_filter": {
@@ -628,10 +851,12 @@
           },
           "max_nodes": {
             "type": "integer",
+            "minimum": 0,
             "description": "Stop after inspecting this many nodes (default 500, clamped to 5000). A traversal that stops early sets 'truncated' in the result."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -659,6 +884,7 @@
           },
           "num_values": {
             "type": "integer",
+            "minimum": 0,
             "description": "Maximum number of raw readings to return, capped at 5000. 0 (the default) means as many as that cap allows, not every reading in the range — a raw read of a year of fast data is a request that never returns. When the cap is reached the result says so, and the way to see the whole range is `aggregate_function` rather than a bigger number. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
           },
           "aggregate_function": {
@@ -667,10 +893,56 @@
           },
           "processing_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "Width in milliseconds of each interval the aggregate is computed over. 0 (the default) makes the whole range a single interval, giving one result. Only meaningful with `aggregate_function`."
           }
         },
-        "required": ["node_id"]
+        "required": ["node_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_event_history",
+      "accessClass": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "retryPolicy": "resend",
+      "capabilities": [
+        "historyEvents"
+      ],
+      "resultShape": "eventRecords",
+      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Offered only when the server advertises AccessHistoryEventsCapability; storing values and storing events are separate features and many servers do one without the other. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The notifier node whose stored events to read. Defaults to the Server object 'ns=0;i=2253', which is where most servers collect events. This is the same node subscribe_events takes."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the time range, ISO-8601 ('2026-09-09T12:00:00Z'). A naive timestamp is read as UTC. Defaults to one hour before `end_time`."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the time range, ISO-8601. Defaults to now (UTC)."
+          },
+          "num_values": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Maximum number of events to return, capped at 5000. 0 (the default) means as many as that cap allows, not every event in the range — an alarm burst can be tens of thousands of events, and asking for all of them is a request that never returns."
+          },
+          "severity_min": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Keep only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event. Filtered here rather than by the server, exactly as subscribe_events does, so a server that mishandles a filter cannot silently drop events."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -680,8 +952,13 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "serverStatus",
-      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server.",
-      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server. 'diagnostics' is the server's own ServerDiagnosticsSummary when it publishes one — session and subscription counts, and how many sessions and requests it has rejected — which is what separates 'the server is slow' from 'the server is refusing us'. OPC UA leaves diagnostics optional, so null there means this server does not say, not zero.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "list_subscriptions",
@@ -691,7 +968,12 @@
       "capabilities": [],
       "resultShape": "subscriptionRecords",
       "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. This is how to collect what subscribe_opcua_nodes has been watching; the same document is also readable as the 'opcua://subscriptions' resource.",
-      "inputSchema": { "type": "object", "properties": {}, "required": [] }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "list_active_alarms",
@@ -710,10 +992,12 @@
           },
           "timeout_seconds": {
             "type": "number",
+            "minimum": 0,
             "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -748,14 +1032,33 @@
                 },
                 "data_type": {
                   "type": "string",
+                  "enum": [
+                    "Boolean",
+                    "SByte",
+                    "Byte",
+                    "Int16",
+                    "UInt16",
+                    "Int32",
+                    "UInt32",
+                    "Int64",
+                    "UInt64",
+                    "Float",
+                    "Double",
+                    "String",
+                    "DateTime",
+                    "Guid",
+                    "ByteString"
+                  ],
                   "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
                 }
               },
-              "required": ["node_id", "value"]
+              "required": ["node_id", "value"],
+              "additionalProperties": false
             }
           }
         },
-        "required": ["nodes"]
+        "required": ["nodes"],
+        "additionalProperties": false
       }
     },
     {
@@ -787,7 +1090,8 @@
             "items": {}
           }
         },
-        "required": ["object_node_id", "method_node_id"]
+        "required": ["object_node_id", "method_node_id"],
+        "additionalProperties": false
       }
     },
     {
@@ -809,18 +1113,37 @@
           },
           "publishing_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "How often (ms) the OPC UA server publishes queued changes. Default 1000. Clamped to at least 50."
           },
           "sampling_interval": {
             "type": "number",
+            "minimum": 0,
             "description": "How often (ms) the OPC UA server samples each node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
           },
           "buffer_size": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many of the most recent changes to retain per subscription; older ones are discarded. Default 20, clamped to 1..1000."
+          },
+          "deadband_type": {
+            "type": "string",
+            "enum": ["none", "absolute", "percent"],
+            "description": "Filter out changes too small to be worth reporting (OPC UA Part 4 §7.22). 'none' (the default) reports every change the server samples, which on a noisy analogue tag fills the buffer with sensor jitter in about a second. 'absolute' compares against `deadband_value` in the node's own engineering units. 'percent' reads `deadband_value` as a percentage of the node's EURange, and needs the node to publish one."
+          },
+          "deadband_value": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How far the value must move to be reported, in engineering units for 'absolute' and in percent of EURange for 'percent'. Ignored when `deadband_type` is 'none' or unset; required when it is not."
+          },
+          "data_change_trigger": {
+            "type": "string",
+            "enum": ["status", "statusValue", "statusValueTimestamp"],
+            "description": "What counts as a change. 'statusValue' (the default) reports a change of value or of OPC UA status. 'status' reports only status transitions — useful for watching a tag go bad without caring what it reads. 'statusValueTimestamp' also reports a re-sample that changed nothing but the timestamp, which is how to tell 'the value is steady' from 'the value stopped updating'."
           }
         },
-        "required": ["node_ids"]
+        "required": ["node_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -841,7 +1164,8 @@
             "description": "The subscription IDs returned by subscribe_opcua_nodes, as listed by list_subscriptions. Example: ['sub-1']."
           }
         },
-        "required": ["subscription_ids"]
+        "required": ["subscription_ids"],
+        "additionalProperties": false
       }
     },
     {
@@ -861,14 +1185,17 @@
           },
           "severity_min": {
             "type": "integer",
+            "minimum": 0,
             "description": "Buffer only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event."
           },
           "buffer_size": {
             "type": "integer",
+            "minimum": 0,
             "description": "How many events to hold before the oldest are dropped (default 100)."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -888,10 +1215,12 @@
           },
           "limit": {
             "type": "integer",
+            "minimum": 0,
             "description": "Maximum number of events to return (default 50)."
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
       }
     },
     {
@@ -923,7 +1252,51 @@
             "description": "NodeId of the condition instance to acknowledge. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
           }
         },
-        "required": ["event_id"]
+        "required": ["event_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "act_on_alarm",
+      "accessClass": "alarm-action",
+      "guard": {
+        "$comment": "Gated as a whole by the same acknowledge_alarms flag as acknowledge_alarm, and for the same reason: a condition id is discovered at runtime from list_active_alarms and cannot be enumerated in a policy file ahead of time. `action` is in auditPaths because 'shelved the fire alarm' and 'left a comment on the fire alarm' are different facts and the record has to say which.",
+        "flag": "acknowledgeAlarms",
+        "auditPaths": ["condition_id", "event_id", "action"]
+      },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+      "retryPolicy": "uncertainOutcome",
+      "capabilities": [],
+      "resultShape": "alarmAction",
+      "description": "Confirm, annotate or shelve an alarm — the rest of the operator workflow that acknowledge_alarm starts. 'confirm' is the second stage of OPC UA's acknowledge→confirm handshake: not merely 'I have seen this' but 'I have dealt with it'. 'comment' attaches a note without changing the alarm's state. 'shelve' silences a chattering nuisance alarm until it returns to normal, and 'shelveFor' does the same for a set number of milliseconds, after which it comes back whether or not anyone remembers to unshelve it. 'unshelve' puts it back on the board immediately. Every action is visible to every other client on the server, and none of them clears the underlying condition. Disabled unless the deployment policy explicitly allows it. Separate from acknowledge_alarm only because merging the two would rename it out from under every existing caller; they take the same arguments and answer in the same shape.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The 'event_id' of the event that reported the alarm, exactly as returned (base64). Must be a *current* one: every condition state change is its own event with its own EventId, so after acknowledging an alarm, re-read list_active_alarms for the id the acknowledgement produced before confirming it. A stale id is answered 'BadEventIdUnknown'."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["acknowledge", "confirm", "comment", "shelve", "shelveFor", "unshelve"],
+            "description": "What to do. 'acknowledge' is exactly what acknowledge_alarm does, here so one tool can do the whole workflow. 'confirm' needs a condition whose type declares ConfirmedState; 'shelve', 'shelveFor' and 'unshelve' need one that declares ShelvingState. A server that offers neither refuses the call rather than silently doing nothing."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Note to record with the action, e.g. why it is being shelved. Used by 'confirm' and 'comment'; ignored by the shelving actions, which OPC UA gives no comment argument."
+          },
+          "shelve_duration_ms": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How long to shelve for, in milliseconds. Required with action 'shelveFor' and refused with any other — 'shelve' means 'until the alarm clears', and accepting a duration there would silently ignore it."
+          },
+          "condition_id": {
+            "type": "string",
+            "description": "NodeId of the condition instance to act on. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
+          }
+        },
+        "required": ["event_id", "action"],
+        "additionalProperties": false
       }
     }
   ]

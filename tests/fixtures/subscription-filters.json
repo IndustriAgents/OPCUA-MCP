@@ -1,0 +1,84 @@
+{
+  "$comment": "One table of subscribe requests and the filter each resolves to, driven through BOTH runtimes: tests/unit/test_subscription_filters.py and packages/server-node/test/subscription-filters.test.mjs read this file and assert the same result and the same refusal. The same pattern as argument-validation.json, and for the same reason — two hand-written copies of a rule are two rules. Nothing here touches an OPC UA server: this is the part of a subscribe request that is decidable from the call alone. What is *not* here is the percent deadband's EURange requirement, which needs the node, and is covered end to end in tests/e2e/test_engineering_units_e2e.py.",
+  "cases": [
+    {
+      "name": "an omitted filter asks for nothing the server would not do anyway",
+      "arguments": {},
+      "filter": { "deadband_type": "none", "deadband_value": 0, "trigger": "statusValue" }
+    },
+    {
+      "name": "an explicit 'none' is the same as omitting it",
+      "arguments": { "deadband_type": "none" },
+      "filter": { "deadband_type": "none", "deadband_value": 0, "trigger": "statusValue" }
+    },
+    {
+      "name": "'none' discards a deadband_value rather than pretending it applies",
+      "arguments": { "deadband_type": "none", "deadband_value": 5 },
+      "filter": { "deadband_type": "none", "deadband_value": 0, "trigger": "statusValue" }
+    },
+    {
+      "name": "an absolute deadband in engineering units",
+      "arguments": { "deadband_type": "absolute", "deadband_value": 0.5 },
+      "filter": { "deadband_type": "absolute", "deadband_value": 0.5, "trigger": "statusValue" }
+    },
+    {
+      "name": "a percent deadband, which is a percentage of EURange",
+      "arguments": { "deadband_type": "percent", "deadband_value": 2 },
+      "filter": { "deadband_type": "percent", "deadband_value": 2, "trigger": "statusValue" }
+    },
+    {
+      "name": "a zero deadband is a real answer, not a missing one",
+      "arguments": { "deadband_type": "absolute", "deadband_value": 0 },
+      "filter": { "deadband_type": "absolute", "deadband_value": 0, "trigger": "statusValue" }
+    },
+    {
+      "name": "watching a tag go bad without caring what it reads",
+      "arguments": { "data_change_trigger": "status" },
+      "filter": { "deadband_type": "none", "deadband_value": 0, "trigger": "status" }
+    },
+    {
+      "name": "telling 'the value is steady' from 'the value stopped updating'",
+      "arguments": { "data_change_trigger": "statusValueTimestamp" },
+      "filter": {
+        "deadband_type": "none",
+        "deadband_value": 0,
+        "trigger": "statusValueTimestamp"
+      }
+    },
+    {
+      "name": "a deadband and a trigger together",
+      "arguments": {
+        "deadband_type": "absolute",
+        "deadband_value": 1.5,
+        "data_change_trigger": "statusValueTimestamp"
+      },
+      "filter": {
+        "deadband_type": "absolute",
+        "deadband_value": 1.5,
+        "trigger": "statusValueTimestamp"
+      }
+    },
+
+    {
+      "$comment": "A deadband needs a size. Refused rather than defaulted to zero, which would be a deadband that filters nothing while reporting that one is in force — the caller would read a buffer full of jitter and conclude the tag was noisier than their threshold, which it may not be. This is a relationship *between* two arguments, so the contract's own `enum` cannot express it and the runtimes have to.",
+      "name": "an absolute deadband with no size",
+      "arguments": { "deadband_type": "absolute" },
+      "error": "subscribe_opcua_nodes requires deadband_value when deadband_type is \"absolute\""
+    },
+    {
+      "name": "a percent deadband with no size",
+      "arguments": { "deadband_type": "percent" },
+      "error": "subscribe_opcua_nodes requires deadband_value when deadband_type is \"percent\""
+    },
+    {
+      "name": "a deadband kind OPC UA does not have",
+      "arguments": { "deadband_type": "relative", "deadband_value": 1 },
+      "error": "subscribe_opcua_nodes argument deadband_type must be one of \"none\", \"absolute\", \"percent\", got \"relative\""
+    },
+    {
+      "name": "a trigger OPC UA does not have",
+      "arguments": { "data_change_trigger": "value" },
+      "error": "subscribe_opcua_nodes argument data_change_trigger must be one of \"status\", \"statusValue\", \"statusValueTimestamp\", got \"value\""
+    }
+  ]
+}

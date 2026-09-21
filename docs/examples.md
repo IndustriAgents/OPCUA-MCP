@@ -140,7 +140,7 @@ bounds.
 { "nodes": [
     { "node_id": "ns=2;i=2", "browse_name": "2:Sensors", "node_class": "Object",
       "parent_node_id": "ns=2;i=1", "data_type": null, "value": null,
-      "description": null },
+      "description": null, "type_definition": "FolderType" },
     { "node_id": "ns=2;i=11", "browse_name": "2:Actuators", … },
     { "node_id": "ns=2;i=27", "browse_name": "2:Methods", … } ],
   "truncated": false, "inspected": 4 }
@@ -155,9 +155,23 @@ bounds.
 { "nodes": [
     { "node_id": "ns=2;i=3", "browse_name": "2:Temperature", "node_class": "Variable",
       "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 26.5,
-      "description": "Temperature" }, … ],
+      "description": "Temperature", "type_definition": "BaseDataVariableType" },
+    { "node_id": "ns=2;i=90", "browse_name": "2:ScratchAnalog", "node_class": "Variable",
+      "parent_node_id": "ns=2;i=2", "data_type": "Double", "value": 50.0,
+      "description": null, "type_definition": "AnalogItemType" }, … ],
   "truncated": false, "inspected": 22 }
 ```
+`type_definition` is what a node *is*, as against what class it belongs to. The
+two variables above are both `Variable` and both Double, and only the second one
+will answer with a unit and a range — `AnalogItemType` is the difference, and
+`node_class` cannot express it. The same holds for Objects, more strongly: an
+alarm and the folder holding it are both `Object`, and only
+`ExclusiveLimitAlarmType` says which one `act_on_alarm` applies to.
+
+It costs one batched browse for the whole result rather than one per node, and
+it is `null` for a node class that has no type (a Method, a View) and for a node
+whose type could not be read.
+
 The built-in `Server` subtree is always skipped — several hundred nodes of the
 server describing itself, identical everywhere, and `get_server_status` answers
 what anyone would browse it for.
@@ -229,6 +243,7 @@ when another tool fails.
     { "index": 1, "uri": "urn:freeopcua:python:server" },
     { "index": 2, "uri": "http://examples.freeopcua.github.io" }
   ],
+  "diagnostics": null,
   "error": null
 }
 ```
@@ -237,6 +252,43 @@ when another tool fails.
 Use `namespaces` rather than hard-coding a namespace index: the same URI can sit
 at a different index after a server restart, so an `ns=2;i=3` that worked
 yesterday may address something else today.
+
+`diagnostics` is the server's own `ServerDiagnosticsSummary`, and it is `null`
+above because the Python mock does not publish one. OPC UA Part 5 makes
+diagnostics optional, so plenty of real servers answer the same way — `null`
+means *this server does not say*, not *zero*. The aggregate mock does publish
+them, and there the same call returns:
+
+```json
+{
+  "diagnostics": {
+    "server_view_count": 0,
+    "current_session_count": 1,
+    "cumulated_session_count": 4,
+    "security_rejected_session_count": 0,
+    "rejected_session_count": 0,
+    "session_timeout_count": 0,
+    "session_abort_count": 0,
+    "current_subscription_count": 2,
+    "cumulated_subscription_count": 5,
+    "publishing_interval_count": 1,
+    "security_rejected_requests_count": 0,
+    "rejected_requests_count": 0
+  }
+}
+```
+> Prompt: *"Is the server refusing connections, or is it just slow for us?"*
+
+These twelve counters answer the questions someone asks about a server they
+cannot see. `rejected_session_count` and `security_rejected_session_count`
+separate "the server is turning connections away" from "our credentials are
+wrong" — a distinction that otherwise takes a site visit.
+`cumulated_session_count` climbing far above `current_session_count` means
+something is connecting and dropping in a loop.
+`current_subscription_count` against `publishing_interval_count` shows whether
+many subscriptions are sharing one publishing cycle. They are read in the same
+batch as the status and the namespaces, so none of this costs an extra round
+trip.
 
 This is the one tool that never fails for being disconnected — it reports it:
 
@@ -250,6 +302,7 @@ This is the one tool that never fails for being disconnected — it reports it:
   "start_time": null,
   "build_info": null,
   "namespaces": [],
+  "diagnostics": null,
   "error": "connect ECONNREFUSED 127.0.0.1:4840"
 }
 ```
@@ -343,7 +396,9 @@ Start watching one or more nodes. Each gets its own subscription record and id.
 ```json
 { "subscription_id": "sub-1", "node_id": "ns=2;i=3",
   "publishing_interval": 500, "sampling_interval": 500,
-  "buffer_size": 20, "change_count": 0, "changes": [] }
+  "buffer_size": 20, "change_count": 0,
+  "deadband_type": "none", "deadband_value": 0,
+  "data_change_trigger": "statusValue", "changes": [] }
 ```
 
 | Argument | Default | Meaning |
@@ -352,10 +407,27 @@ Start watching one or more nodes. Each gets its own subscription record and id.
 | `publishing_interval` | `1000` | How often (ms) the OPC UA server publishes queued changes. Clamped to at least 50. |
 | `sampling_interval` | `0` | How often (ms) it samples the node. `0` means "sample at `publishing_interval`", and the record reports the rate actually in force. A shorter interval queues several readings per publish. |
 | `buffer_size` | `20` | How many of the most recent changes to retain. Clamped to 1..1000; older changes are discarded. |
+| `deadband_type` | `none` | `absolute` reports a change only when it moves further than `deadband_value` in engineering units; `percent` reads that value as a percentage of the node's `EURange`. |
+| `deadband_value` | — | Required when `deadband_type` is not `none`. Refused if omitted rather than defaulted to zero, which would be a deadband that filters nothing. |
+| `data_change_trigger` | `statusValue` | `status` reports only OPC UA status transitions; `statusValueTimestamp` also reports a re-sample that changed nothing but the timestamp. |
+
+**Filter a noisy tag at the server, not here.** Without a deadband the default
+20-record ring fills with sensor jitter in about a second, and the agent reads
+back nothing but noise. The discarded values never leave the OPC UA server, so
+this costs no bandwidth and no buffer:
+
+```json
+{ "node_ids": ["ns=2;i=90"], "deadband_type": "percent", "deadband_value": 2 }
+```
+
+> A percent deadband is a percentage of the node's `EURange`, so it needs a node
+> that publishes one — `ns=2;i=90` on the mock does, 0 to 150, making 2% three
+> degrees. A node that publishes none is refused rather than quietly given an
+> absolute deadband.
 
 > An OPC UA server sends the node's **current value** as the first change, so
 > `change_count` reaches 1 without the value having moved.
-> Prompt: *"Watch the temperature sensor."*
+> Prompt: *"Watch the temperature sensor, but only tell me about moves over half a degree."*
 
 ### `list_subscriptions`
 Every active subscription and what it has collected since.
@@ -366,6 +438,8 @@ Every active subscription and what it has collected since.
 { "subscription_id": "sub-1", "node_id": "ns=2;i=3",
   "publishing_interval": 500, "sampling_interval": 500,
   "buffer_size": 20, "change_count": 4,
+  "deadband_type": "none", "deadband_value": 0,
+  "data_change_trigger": "statusValue",
   "changes": [
     { "value": 25.33, "timestamp": "2026-09-12T08:24:11.478Z", "status": "Good" },
     { "value": 26.05, "timestamp": "2026-09-12T08:24:12.481Z", "status": "Good" },
@@ -427,6 +501,10 @@ Added for issue #4, and not capability-gated either: any OPC UA server has a
 Server object that events are raised from, and one that raises none simply has
 none to hand over. Alarms are the same machinery with a condition attached.
 
+The one exception is `read_event_history`, which *is* gated — keeping an archive
+of past events is optional in a way that raising them is not, and a server that
+does not keep one has nothing to read rather than nothing to report.
+
 ### `subscribe_events`
 Start collecting events. Returns immediately — the subscription runs in the
 background, because MCP has no way for the server to push one at you.
@@ -463,6 +541,38 @@ last block — prose, not a record — says how many events were lost and what t
 raise. The mock raises exactly this when its alarm state
 changes — write `true` to `ns=2;i=25` to see it, and to `ns=2;i=26` to clear it.
 > Prompt: *"Anything happen since we last looked?"*
+
+### `read_event_history`
+Events the server stored, for a range that has already passed. `subscribe_events`
+only sees what arrives *after* it subscribes, so it cannot answer "what fired
+overnight" — by the time anyone asks, those events are gone. This reads them back
+out of the server's own archive instead.
+```json
+{ "start_time": "2026-09-12T08:00:00Z", "end_time": "2026-09-12T09:00:00Z",
+  "severity_min": 500 }
+```
+```json
+{ "event_id": "ZDAzNzVmNzlhYzM0NDNjMWI3MzdhMmJhMmRmNzFiN2E=",
+  "event_type": "ns=0;i=2041", "source_node": "ns=2;i=1",
+  "source_name": "IndustrialControlSystem", "time": "2026-09-12T08:36:07.280Z",
+  "message": "Alarm active: emergency stop", "severity": 700,
+  "condition_id": null, "condition_name": null,
+  "active": null, "acked": null, "retain": null }
+```
+> Prompt: *"What alarms fired in the hour before the line stopped last night?"*
+
+The same records as `read_events`, deliberately — an alarm looks identical
+whether it was watched live or recovered afterwards, because both paths send the
+same select clauses and run the same decoder. Every argument is optional: the
+range defaults to the last hour, and the notifier to the Server object. The
+result is capped at 5000 events; an alarm burst can be far more than that, and
+asking for all of them is a request that never returns.
+
+Offered only when the server advertises `AccessHistoryEventsCapability`
+(`ns=0;i=11194`). That is a different node and a different answer from the one
+`read_opcua_history` is gated on: OPC UA Part 11 §5.4 lets a server keep values
+without keeping events, and most do.
+> Prompt: *"Show me everything that happened between 2am and 3am."*
 
 ### `list_active_alarms`
 The alarms the server is retaining right now — active, unacknowledged, or both.
@@ -507,6 +617,37 @@ the underlying condition: `active` stays `true` until the plant says otherwise.
 Pass `condition_id` explicitly for an event that came from somewhere other than
 this server's own `read_events` / `list_active_alarms`.
 > Prompt: *"Acknowledge the high-temperature alarm, note that I'm on it."*
+
+### `act_on_alarm`
+The rest of the operator workflow: confirm, annotate or shelve.
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAI=", "action": "confirm",
+  "comment": "cooler restarted, temperature falling" }
+```
+```json
+{ "event_id": "ZjW7HJrVSFzDV2sMsX7sEQAAAAI=", "condition_id": "ns=1;i=1002",
+  "action": "confirm", "status": "Good" }
+```
+
+| `action` | What it does |
+|---|---|
+| `acknowledge` | Exactly what `acknowledge_alarm` does, so one tool can drive the whole workflow. |
+| `confirm` | The second stage of the handshake: not "I have seen this" but "I have dealt with it". Needs a condition whose type declares `ConfirmedState`. |
+| `comment` | Attach a note without changing the alarm's state. Every condition supports it. |
+| `shelve` | Silence a chattering alarm until it returns to normal. |
+| `shelveFor` | The same for `shelve_duration_ms` milliseconds, after which it comes back on its own. |
+| `unshelve` | Put it back on the board immediately. |
+
+> **Use a *current* `event_id`.** Every condition state change is its own event
+> with its own `EventId`, so after acknowledging an alarm, re-read
+> `list_active_alarms` for the id the acknowledgement produced before confirming
+> it. A stale id is answered `BadEventIdUnknown`.
+
+> `shelve_duration_ms` belongs to `shelveFor` and is refused on any other action —
+> `shelve` means "until the alarm clears", and accepting a duration there would
+> silently ignore it.
+
+> Prompt: *"That level switch has cycled 40 times in an hour. Shelve it for half an hour."*
 
 The record shape above is defined once, in `../contract/tools.json` under
 `resultShapes.eventRecords`, with the OPC UA browse path behind each field in

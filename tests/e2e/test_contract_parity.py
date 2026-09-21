@@ -23,9 +23,12 @@ from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, 
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 
-# The bundled mock server enables history but advertises no aggregate functions,
-# so a tool is applicable here if it needs nothing or accepts "history".
-_MOCK_CAPS = {"history"}
+# The bundled mock server enables value history and, since #117, event history,
+# but advertises no aggregate functions — so a tool is applicable here if it
+# needs nothing or accepts one of those two. Keeping this in step with the mock
+# is the point: a capability the mock gained and this set did not would show up
+# as a tool "extra" to the contract, which is how the gate gets noticed.
+_MOCK_CAPS = {"history", "historyEvents"}
 EXPECTED = {
     t["name"]: t
     for t in CONTRACT["tools"]
@@ -198,6 +201,10 @@ UNEXERCISED = {
     # Needs a live condition instance to acknowledge; the alarms mock has one and
     # `test_events_e2e.py` drives it there.
     "acknowledge_alarm": "needs a live condition — covered by test_events_e2e.py",
+    # The same, and for the same reason: confirming, commenting and shelving all
+    # need a condition instance to act on, and the shelving half additionally
+    # needs one whose type declares ShelvingState.
+    "act_on_alarm": "needs a live condition — covered by test_events_e2e.py",
     # The bundled mock implements no Alarms & Conditions, so ConditionRefresh
     # answers BadNothingToDo on *both* runtimes — identically, which is itself
     # parity, just not of a result shape. `test_events_e2e.py` runs it against
@@ -214,13 +221,14 @@ def tool_calls(method_node_id: str) -> list[tuple[str, dict]]:
     and subscribing to events before reading them. Every tool in the contract
     must appear here — `test_every_tool_is_exercised` fails otherwise — because a
     tool with a declared shape that nothing calls is a shape nothing checks,
-    which is the state all seventeen tools were in before ten of them gained one.
+    which is the state every tool was in before 0.4.0.
     """
     return [
         ("get_server_status", {}),
         ("read_opcua_nodes", {"node_ids": [NODE["Temperature"], NODE["Pressure"]]}),
         ("browse_opcua_nodes", {"depth": 2, "include_values": True}),
         ("read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 3}),
+        ("read_event_history", {"num_values": 3}),
         ("write_opcua_nodes", {"nodes": [{"node_id": NODE["ValvePosition"], "value": 42.5}]}),
         (
             "call_opcua_method",
@@ -262,8 +270,9 @@ async def _stop_production_node_id(session) -> str:
 async def test_every_tool_output_matches_its_declared_shape(impl_params):
     """Every tool's *actual* output, on both runtimes, against the contract.
 
-    This is the systemic fix. Ten of the seventeen tools used to declare
-    `resultShape: null`, and for those the output format, error wording and
+    This is the systemic fix. Most tools used to declare `resultShape: null` —
+    ten of the seventeen there were before 0.4.0 merged several — and for those
+    the output format, error wording and
     defaults were two hand-written copies that no test compared — the parity
     suite could prove the two servers *advertise* the same thing, never that they
     *do* the same thing. Four confirmed divergences lived in exactly that gap

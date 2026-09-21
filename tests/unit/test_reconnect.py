@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+from concurrent import futures
 
 import pytest
 from conftest import ROOT
+from opcua import ua
 from opcua_mcp_server.config import (
     RECONNECT_DEFAULTS,
     ReconnectConfig,
@@ -25,6 +28,8 @@ from opcua_mcp_server.config import (
 )
 from opcua_mcp_server.connection import (
     DEAD_SESSION_MARKERS,
+    DEAD_SESSION_STATUS_CODES,
+    describe_error,
     is_connection_error,
     not_connected_message,
 )
@@ -174,9 +179,45 @@ def test_both_runtimes_read_the_same_environment_variables():
 # --- what counts as a dead session ---------------------------------------------
 
 
+@pytest.mark.parametrize("name", sorted(DEAD_SESSION_STATUS_CODES))
+def test_every_status_code_the_contract_names_still_exists_in_the_library(name):
+    """The check the old parametrized test could not make.
+
+    That one asserted ``is_connection_error`` against its own constant, so it
+    passed by construction and could not detect the failure it existed to catch:
+    a client library rewording a message, or dropping a name, and silently
+    disabling reconnection. This asserts the contract's names against
+    *python-opcua's own enum*, so a name that stops existing there fails here —
+    and the numbers come from the library rather than from a transcription, so
+    the two runtimes cannot drift apart on what a code means.
+    """
+    assert DEAD_SESSION_STATUS_CODES[name] == getattr(ua.StatusCodes, name)
+
+
+def test_a_status_error_is_recognised_by_its_code_not_its_wording():
+    """The one check here that a release note cannot break."""
+    error = ua.UaStatusCodeError(ua.StatusCodes.BadSessionIdInvalid)
+    assert is_connection_error(error)
+    # And the wording is genuinely not what is being matched: the same code with
+    # its text stripped is still recognised.
+    error.args = ()
+    assert is_connection_error(error)
+
+
+def test_a_status_error_for_a_bad_request_is_not_a_dead_session():
+    """Retrying a BadNodeIdUnknown on a fresh session would fail identically."""
+    assert not is_connection_error(ua.UaStatusCodeError(ua.StatusCodes.BadNodeIdUnknown))
+
+
 @pytest.mark.parametrize("marker", DEAD_SESSION_MARKERS)
 def test_every_marker_is_recognised_inside_a_rewrapped_message(marker):
-    """By the time an error reaches the dispatcher it is prose, not a status code."""
+    """By the time an error reaches the dispatcher it is prose, not a status code.
+
+    Still worth having — each tool body re-raises as
+    ``ToolError("Failed to read node …: <text>")``, so the text path is the one
+    most failures actually take — but it is no longer the *only* check, and it is
+    no longer the one relied on to notice library drift.
+    """
     assert is_connection_error(RuntimeError(f"Failed to read node ns=2;i=3: {marker}(0x1)"))
 
 
@@ -219,6 +260,20 @@ def test_both_runtimes_agree_on_the_markers():
     )
 
 
+def test_both_runtimes_resolve_the_same_status_codes():
+    """Two libraries, one spec: the numbers must agree, not only the names.
+
+    This is the comparison the old "both runtimes agree on the markers" test
+    could not make, because two equal lists of *strings* prove only that the
+    transcriptions match — not that either still resolves to the code the
+    specification assigns.
+    """
+    node_codes = _node_eval(
+        "await import('./build/connection.js').then(c => c.DEAD_SESSION_STATUS_CODES)"
+    )
+    assert node_codes == DEAD_SESSION_STATUS_CODES
+
+
 def test_the_not_connected_message_is_shared_wording():
     message = not_connected_message("opc.tcp://plc:4840", "ECONNREFUSED")
     assert message == (
@@ -229,3 +284,56 @@ def test_the_not_connected_message_is_shared_wording():
         "await import('./build/connection.js').then(c => "
         "c.notConnectedMessage('opc.tcp://plc:4840', 'ECONNREFUSED'))"
     )
+
+
+# --- a dead session that carries no message and no errno --------------------------
+
+
+def test_a_futures_timeout_is_a_dead_session_on_every_supported_python():
+    """python-opcua waits for every response with ``future.result(timeout)``.
+
+    So `concurrent.futures.TimeoutError` is exactly what a session dying
+    mid-request raises — and on Python 3.10 it is **not** the builtin
+    ``TimeoutError``. The two became the same object only in 3.11, and on 3.10 it
+    is not an ``OSError`` either, so none of `ConnectionError`, `TimeoutError`,
+    `OSError` or `EOFError` matched it. Its ``str()`` is empty, so the text
+    markers could not catch it afterwards either.
+
+    The result on 3.10 was a dead session reported as an ordinary tool failure —
+    `"Failed to read nodes: "`, with no reason at all — and no reconnection, which
+    leaves the server dead until someone restarts it. Precisely the failure the
+    classification exists to prevent, on the oldest supported runtime, and
+    invisible to anyone developing on 3.11+.
+
+    CI's version matrix is what found it. This is what keeps it found.
+    """
+    assert is_connection_error(futures.TimeoutError())
+    assert is_connection_error(TimeoutError())
+
+
+def test_an_error_with_no_message_still_reports_something():
+    """An empty reason is not a report.
+
+    `describe_error` falls back to the type name, which is what the tool bodies
+    use — they used bare `str(e)`, and for a message-less exception that produced
+    `"Failed to read nodes: "` and nothing else. Knowing it was a timeout is the
+    difference between a bug report and a shrug.
+    """
+    assert describe_error(futures.TimeoutError()) == "TimeoutError"
+    assert describe_error(ValueError()) == "ValueError"
+    assert describe_error(ValueError("no route to host")) == "no route to host"
+
+
+def test_the_python_310_difference_is_real_and_not_assumed():
+    """Pins the fact the fix rests on, so it is not folded away as redundant.
+
+    On 3.11+ `futures.TimeoutError is TimeoutError`, which makes the extra entry
+    in `_DEAD_SESSION_TYPES` look like a duplicate worth deleting. It is not one
+    on 3.10. If support for 3.10 is ever dropped, this test is the note saying
+    the entry may then go.
+    """
+    if sys.version_info >= (3, 11):
+        assert futures.TimeoutError is TimeoutError
+    else:
+        assert futures.TimeoutError is not TimeoutError
+        assert not issubclass(futures.TimeoutError, OSError)

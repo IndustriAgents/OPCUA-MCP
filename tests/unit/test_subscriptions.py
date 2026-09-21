@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import pytest
 from opcua_mcp_server.subscriptions import (
+    DATA_CHANGE_TRIGGERS,
+    DEADBAND_TYPES,
     DEFAULT_BUFFER_SIZE,
     DEFAULT_PUBLISHING_INTERVAL,
+    Filter,
     SubscriptionManager,
     delete_failed_message,
     resolve_options,
@@ -35,8 +38,15 @@ class FakeSubscription:
         self.deleted = deleted
         self.fail_delete = fail_delete
         self.modified: list[tuple] = []
+        self.subscribed: list[tuple] = []
 
     def subscribe_data_change(self, node, queuesize=0):
+        self.subscribed.append((node, queuesize, None))
+        return 1
+
+    def _subscribe(self, node, attr, mfilter=None, queuesize=0):
+        """The filtered path. See `_attach` for why it reaches for a private name."""
+        self.subscribed.append((node, queuesize, mfilter))
         return 1
 
     def modify_monitored_item(self, handle, new_samp_time, new_queuesize=0):
@@ -122,8 +132,65 @@ def test_subscribe_returns_the_contract_record():
         "sampling_interval": 200,
         "buffer_size": 5,
         "change_count": 0,
+        "deadband_type": "none",
+        "deadband_value": 0.0,
+        "data_change_trigger": "statusValue",
         "changes": [],
     }
+
+
+def test_a_subscription_with_no_filter_sends_none_at_all():
+    """A server may reject a filter it does not implement.
+
+    There is no reason to risk that for a subscription that asked for nothing
+    special, so the default path stays on the public `subscribe_data_change`.
+    """
+    client = FakeClient([])
+    manager = manager_with(client)
+    manager.subscribe("ns=2;i=3", 200, 0, 5)
+
+    [(_, _, mfilter)] = client.subscriptions[-1].subscribed
+    assert mfilter is None
+
+
+def test_a_deadband_reaches_the_monitored_item():
+    """The whole point of #118: the values are dropped by the *server*.
+
+    Filtering after the fact would cost the bandwidth and the buffer this exists
+    to save, so what matters is that the filter is on the create request.
+    """
+    client = FakeClient([])
+    manager = manager_with(client)
+    record = manager.subscribe(
+        "ns=2;i=3", 200, 0, 5, Filter(deadband_type="absolute", deadband_value=0.5)
+    )
+
+    [(_, _, mfilter)] = client.subscriptions[-1].subscribed
+    assert mfilter is not None
+    assert mfilter.DeadbandType == DEADBAND_TYPES["absolute"]
+    assert mfilter.DeadbandValue == 0.5
+    assert mfilter.Trigger == DATA_CHANGE_TRIGGERS["statusValue"]
+    # And the record says what is in force, so a caller reading a quiet buffer
+    # can tell whether it asked for that.
+    assert record["deadband_type"] == "absolute"
+    assert record["deadband_value"] == 0.5
+
+
+def test_a_re_established_subscription_keeps_its_filter():
+    """A reconnect rebuilds the monitored item, and must rebuild it the same.
+
+    Losing the deadband across an outage would turn a quiet subscription into a
+    firehose exactly when someone is watching the plant come back.
+    """
+    client = FakeClient([])
+    manager = manager_with(client)
+    manager.subscribe("ns=2;i=3", 200, 0, 5, Filter(deadband_type="percent", deadband_value=2))
+
+    manager.reattach(FakeClient([]))
+
+    [(_, _, mfilter)] = client.subscriptions[-1].subscribed
+    assert mfilter.DeadbandType == DEADBAND_TYPES["percent"]
+    assert mfilter.DeadbandValue == 2
 
 
 def test_an_independent_sampling_rate_is_asked_for_as_a_modification():

@@ -317,3 +317,238 @@ async def test_condition_events_reach_the_buffer_too(alarm_server):
     assert conditions, f"{impl}: no condition event among {[r['event_type'] for r in records]}"
     assert conditions[-1]["active"] is True
     assert conditions[-1]["condition_name"] == "HighTemperatureAlarm"
+
+
+# --- the rest of the operator workflow (#119) -------------------------------------
+
+
+async def _rearm(session) -> dict:
+    """An alarm that is active, unacknowledged and this test's own.
+
+    Write below the limit, then above it, so the test owns a freshly raised alarm
+    whatever ran before it — including the other runtime's turn through the same
+    test.
+    """
+    await session.call_tool(
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "20"}]},
+    )
+    await asyncio.sleep(1)
+    await session.call_tool(
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": ALARM_TEMPERATURE_NODE_ID, "value": "100"}]},
+    )
+    await asyncio.sleep(1)
+    alarms = records_of(await session.call_tool("list_active_alarms", {}))
+    return next(a for a in alarms if a["condition_name"] == "HighTemperatureAlarm")
+
+
+async def test_the_acknowledge_confirm_handshake_has_both_stages(alarm_server):
+    """Part 9 §5.5 defines acknowledge→confirm, and only the first half existed.
+
+    An agent could say "I have seen this" and then had no way to say "I have
+    dealt with it" — which is the stage that actually clears an operator's queue.
+    """
+    impl, params = alarm_server
+    async with connect(params) as session:
+        alarm = await _rearm(session)
+
+        acknowledged = await session.call_tool(
+            "acknowledge_alarm",
+            {"event_id": alarm["event_id"], "comment": f"seen by the {impl} e2e test"},
+        )
+        assert not acknowledged.is_error, text_of(acknowledged)
+
+        # Re-list for the event_id the *acknowledgement* produced. Every condition
+        # state change is its own event with its own EventId, and Part 9 methods
+        # only accept a current one — confirming with the pre-acknowledge id is
+        # answered `BadEventIdUnknown`. This is the one piece of the workflow that
+        # is not obvious from the tool's arguments, which is why the description
+        # says it too.
+        await asyncio.sleep(1)
+        after_ack = records_of(await session.call_tool("list_active_alarms", {}))
+        acked = next(a for a in after_ack if a["condition_id"] == alarm["condition_id"])
+        assert acked["acked"] is True, f"{impl}: the alarm was not acknowledged"
+
+        confirmed = await session.call_tool(
+            "act_on_alarm",
+            {
+                "event_id": acked["event_id"],
+                "action": "confirm",
+                "comment": f"dealt with by the {impl} e2e test",
+            },
+        )
+        assert not confirmed.is_error, f"{impl}: {text_of(confirmed)}"
+
+    record = json.loads(text_of(confirmed))
+    assert record["action"] == "confirm", f"{impl}: {record}"
+    assert record["status"] == "Good", f"{impl}: {record}"
+    assert record["condition_id"] == alarm["condition_id"], f"{impl}: {record}"
+
+
+async def test_a_comment_can_be_left_without_changing_the_alarms_state(alarm_server):
+    """AddComment is a method of ConditionType itself, so every condition has it."""
+    impl, params = alarm_server
+    async with connect(params) as session:
+        alarm = await _rearm(session)
+
+        result = await session.call_tool(
+            "act_on_alarm",
+            {
+                "event_id": alarm["event_id"],
+                "action": "comment",
+                "comment": "investigating: valve V-12 may be stuck",
+            },
+        )
+        assert not result.is_error, f"{impl}: {text_of(result)}"
+
+        after = records_of(await session.call_tool("list_active_alarms", {}))
+        still = next(a for a in after if a["condition_id"] == alarm["condition_id"])
+
+    # A note, not a state change: the alarm is as unacknowledged as it was.
+    assert still["acked"] is False, f"{impl}: commenting acknowledged the alarm"
+    assert still["active"] is True, f"{impl}: commenting cleared the alarm"
+
+
+# node-opcua implements the ShelvingState machine, with one gap. Measured on both
+# runtimes, with the routing correct:
+#
+#   TimedShelve    => Good, and the condition really is shelved afterwards
+#   Unshelve       => Good when shelved, BadConditionNotShelved when not
+#   OneShotShelve  => BadInternalError, always
+#
+# So `shelveFor` and `unshelve` are asserted functionally below, and
+# `OneShotShelve` gets a test that asserts what is left: that the request is
+# *routed* correctly. That matters because getting it wrong does not fail cleanly.
+# The shelving methods belong to ShelvedStateMachineType and hang off the
+# condition's ShelvingState component, not off the condition; resolved against the
+# wrong object, the server finds a *different* method of the right name's
+# neighbour and answers BadArgumentsMissing or BadTooManyArguments. Those were the
+# answers this gave while the Node runtime's routing was still wrong — which is
+# also why the shelving asymmetry between the two runtimes was worth chasing
+# rather than writing off as the mock's mood.
+WRONG_OBJECT = ("BadArgumentsMissing", "BadTooManyArguments")
+
+
+async def test_a_timed_shelve_really_shelves_and_unshelving_brings_it_back(alarm_server):
+    """Shelving is what an operator does with a chattering nuisance alarm.
+
+    'This level switch has cycled 40 times in an hour, shelve it for 30 minutes'
+    is a natural agent action, and it was the one piece of the workflow with no
+    way to express it at all. `shelveFor` is also self-limiting — the alarm comes
+    back on its own whether or not anyone remembers to unshelve it — which is a
+    rare and welcome property in something handed to an agent.
+
+    The shelve is proved rather than assumed: unshelving an *unshelved* condition
+    is an error, so the successful unshelve in the middle can only have happened
+    because the shelve before it moved the state machine.
+    """
+    impl, params = alarm_server
+    async with connect(params) as session:
+        alarm = await _rearm(session)
+        # The mock is session-scoped and shared with the other runtime's turn, so
+        # start from a known state rather than assuming one.
+        await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "unshelve"}
+        )
+
+        shelved = await session.call_tool(
+            "act_on_alarm",
+            {
+                "event_id": alarm["event_id"],
+                "action": "shelveFor",
+                "shelve_duration_ms": 30_000,
+            },
+        )
+        assert not shelved.is_error, f"{impl}: {text_of(shelved)}"
+        record = json.loads(text_of(shelved))
+        assert record["action"] == "shelveFor", f"{impl}: {record}"
+        assert record["status"] == "Good", f"{impl}: {record}"
+        assert record["condition_id"] == alarm["condition_id"], f"{impl}: {record}"
+
+        back = await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "unshelve"}
+        )
+        assert not back.is_error, f"{impl}: {text_of(back)}"
+        assert json.loads(text_of(back))["action"] == "unshelve"
+
+        again = await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "unshelve"}
+        )
+
+    assert again.is_error, f"{impl}: unshelving twice should be refused"
+    assert "NotShelved" in text_of(again), f"{impl}: {text_of(again)}"
+
+
+async def test_a_one_shot_shelve_reaches_the_shelving_state_machine(alarm_server):
+    """The one shelving action node-opcua does not implement. See the note above.
+
+    Routed correctly, which is the part this project owns: if node-opcua ever
+    implements it, this fails and should be upgraded to assert the shelved state
+    the way the timed test does.
+    """
+    impl, params = alarm_server
+    async with connect(params) as session:
+        alarm = await _rearm(session)
+        await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "unshelve"}
+        )
+
+        result = await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "shelve"}
+        )
+
+    text = text_of(result)
+    for wrong in WRONG_OBJECT:
+        assert wrong not in text, (
+            f"{impl}: {wrong} means OneShotShelve was resolved against the condition "
+            f"instead of its ShelvingState — see the note above. Got: {text!r}"
+        )
+    assert "BadInternalError" in text, (
+        f"{impl}: expected node-opcua's unimplemented-OneShotShelve answer, got {text!r}. "
+        f"Good means it now implements it, and this should assert the shelved state instead."
+    )
+    assert alarm["condition_id"] in text, f"{impl}: {text}"
+
+
+async def test_shelve_and_shelve_for_are_one_argument_apart_and_say_so(alarm_server):
+    """A duration on 'shelve' would be silently ignored, and its absence on
+    'shelveFor' would silently shelve forever. Both are refused, naming the
+    action the caller probably meant."""
+    impl, params = alarm_server
+    async with connect(params) as session:
+        alarm = await _rearm(session)
+
+        no_duration = await session.call_tool(
+            "act_on_alarm", {"event_id": alarm["event_id"], "action": "shelveFor"}
+        )
+        stray_duration = await session.call_tool(
+            "act_on_alarm",
+            {"event_id": alarm["event_id"], "action": "shelve", "shelve_duration_ms": 1000},
+        )
+
+    assert no_duration.is_error, impl
+    assert text_of(no_duration) == (
+        'act_on_alarm requires shelve_duration_ms with action "shelveFor". Use action '
+        '"shelve" to shelve until the alarm returns to normal instead.'
+    ), f"{impl}: {text_of(no_duration)}"
+
+    assert stray_duration.is_error, impl
+    assert text_of(stray_duration) == (
+        'act_on_alarm only takes shelve_duration_ms with action "shelveFor"; got "shelve". '
+        'Use "shelveFor" to shelve for a set time, or drop the duration to shelve until '
+        "the alarm clears."
+    ), f"{impl}: {text_of(stray_duration)}"
+
+
+async def test_an_action_opc_ua_does_not_have_is_refused_by_the_schema(alarm_server):
+    """The contract's `enum`, doing the job it was added for in #114."""
+    impl, params = alarm_server
+    async with connect(params) as session:
+        result = await session.call_tool(
+            "act_on_alarm", {"event_id": "bm90LWFuLWV2ZW50", "action": "suppress"}
+        )
+
+    assert result.is_error, impl
+    assert "must be one of" in text_of(result), f"{impl}: {text_of(result)}"
+    assert '"suppress"' in text_of(result), f"{impl}: {text_of(result)}"

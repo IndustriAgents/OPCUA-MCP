@@ -245,3 +245,116 @@ def test_the_contract_is_where_the_node_ids_come_from():
 
     assert diagnostics["serverStatusNodeId"] == SERVER_STATUS_NODE_ID
     assert diagnostics["namespaceArrayNodeId"] == NAMESPACE_ARRAY_NODE_ID
+
+
+# --- the server's own diagnostics (#121) ------------------------------------------
+
+DIAGNOSTICS_FIELDS = {
+    "server_view_count",
+    "current_session_count",
+    "cumulated_session_count",
+    "security_rejected_session_count",
+    "rejected_session_count",
+    "session_timeout_count",
+    "session_abort_count",
+    "current_subscription_count",
+    "cumulated_subscription_count",
+    "publishing_interval_count",
+    "security_rejected_requests_count",
+    "rejected_requests_count",
+}
+
+
+@pytest.fixture(params=["python", "node"])
+def aggregate_impl_params(request, aggregate_opcua_server):
+    """The mock that actually populates ServerDiagnosticsSummary.
+
+    The bundled Python mock creates the node and leaves it empty — python-opcua
+    does not fill it in — so the two mocks cover the two branches this field has,
+    and neither branch is a guess.
+    """
+    impl = request.param
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    return impl, _server_params(impl, aggregate_opcua_server)
+
+
+async def test_reports_the_servers_own_diagnostics(aggregate_impl_params):
+    """ "Why is this slow, am I being rejected, how many sessions are open?"
+
+    Questions people actually ask an assistant about a server they cannot see,
+    and the answers were sitting in a standard node nothing read.
+    """
+    impl, params = aggregate_impl_params
+    async with connect(params) as session:
+        result = await session.call_tool("get_server_status", {})
+
+    diagnostics = status_of(result)["diagnostics"]
+    assert diagnostics is not None, f"{impl}: the aggregate mock does publish diagnostics"
+    assert set(diagnostics) == DIAGNOSTICS_FIELDS, f"{impl}: {sorted(diagnostics)}"
+    assert all(isinstance(value, int) for value in diagnostics.values()), diagnostics
+    # This connection is one of them, so the server is holding at least one
+    # session and has opened at least one since it started.
+    assert diagnostics["current_session_count"] >= 1, f"{impl}: {diagnostics}"
+    assert diagnostics["cumulated_session_count"] >= diagnostics["current_session_count"], (
+        f"{impl}: cumulated cannot be below current: {diagnostics}"
+    )
+
+
+async def test_a_server_that_publishes_no_diagnostics_says_null(impl_params):
+    """Part 5 lets a server leave diagnostics off, so null is an answer.
+
+    The bundled mock is exactly that case: python-opcua creates
+    ServerDiagnosticsSummary and never populates it. Reporting a record of zeroes
+    would be inventing twelve numbers; reporting null says "this server does not
+    tell me", which is the truth and is what a reviewer needs.
+    """
+    impl, params = impl_params
+    async with connect(params) as session:
+        result = await session.call_tool("get_server_status", {})
+
+    status = status_of(result)
+    assert status["diagnostics"] is None, f"{impl}: {status['diagnostics']}"
+    # And the rest of the report is unaffected — a missing optional must not
+    # cost the fields that are there.
+    assert status["connected"] is True, impl
+    assert status["server_state"] == "Running", impl
+
+
+async def test_a_disconnected_server_reports_no_diagnostics(opcua_server):
+    """Nothing to ask, so nothing to report — and still not an error.
+
+    `get_server_status` is the one tool that must answer while the connection is
+    down, so a diagnostics read that cannot happen must not change that.
+    """
+    unreachable = "opc.tcp://127.0.0.1:1/none"
+    for impl in ("python", "node"):
+        if impl == "node" and not NODE_BUILD.exists():
+            continue
+        params = _server_params(impl, unreachable)
+        params.env["OPCUA_RECONNECT_MAX_RETRY"] = "0"
+        async with connect(params) as session:
+            result = await session.call_tool("get_server_status", {})
+
+        status = status_of(result)
+        assert status["connected"] is False, impl
+        assert status["diagnostics"] is None, f"{impl}: {status['diagnostics']}"
+        assert status["error"], f"{impl}: a disconnected status must say why"
+
+
+async def test_both_runtimes_report_the_same_diagnostics(aggregate_opcua_server):
+    """Twelve counters in one order, or it is two records rather than one shape."""
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+
+    shapes = {}
+    for impl in ("python", "node"):
+        async with connect(_server_params(impl, aggregate_opcua_server)) as session:
+            diagnostics = status_of(await session.call_tool("get_server_status", {}))["diagnostics"]
+        assert diagnostics is not None, impl
+        shapes[impl] = list(diagnostics)
+
+    assert shapes["python"] == shapes["node"], (
+        f"the two runtimes order the counters differently:\n"
+        f"  python: {shapes['python']}\n  node:   {shapes['node']}"
+    )

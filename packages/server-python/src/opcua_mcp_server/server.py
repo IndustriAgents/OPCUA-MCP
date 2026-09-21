@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import secrets
 import sys
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -21,7 +22,12 @@ from opcua import Node, ua
 
 from . import events
 from .aggregates import validate_aggregate_function
-from .capabilities import client_aggregate_functions, client_supports_history
+from .audit import AUDIT_FILE_ENV, AuditSink, describe_audit, operator_id
+from .capabilities import (
+    client_aggregate_functions,
+    client_supports_history,
+    client_supports_history_events,
+)
 from .config import SERVER_URL, describe_reconnect, reconnect_config
 from .connection import (
     OpcuaConnection,
@@ -54,6 +60,7 @@ from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
 from .subscriptions import (
     SUBSCRIPTIONS,
+    resolve_filter,
     unknown_subscription_message,
     unknown_subscriptions_message,
 )
@@ -61,7 +68,11 @@ from .validation import validate_arguments
 from .variant_codec import convert_for_variant
 from .version import package_version
 
-_CAPABILITIES: dict[str, Any] = {"history": False, "aggregate_functions": {}}
+_CAPABILITIES: dict[str, Any] = {
+    "history": False,
+    "history_events": False,
+    "aggregate_functions": {},
+}
 
 #: What each node published about its own number, for the life of one session.
 #: Module-level for the same reason `_CAPABILITIES` is, and dropped by `_bind`
@@ -142,6 +153,9 @@ class _Call:
     spec: dict[str, Any]
     call_id: str
     attempt: int = 1
+    #: The connection's session id when this call was dispatched. Lets recovery
+    #: skip a rebuild the connection has already had.
+    session: str | None = None
     #: Whether a refusal has already been recorded for this call. Keeps a denial
     #: to one line rather than two: the ``failed`` line would otherwise repeat
     #: its reason and read as though the plant had rejected the call.
@@ -165,6 +179,12 @@ def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
+#: Where the audit trail is written. stderr-only until `main` replaces it, which
+#: is the one place allowed to fail on a bad ``OPCUA_AUDIT_FILE`` — a server
+#: imported as a module (the tests do) must not need the environment to be right.
+_AUDIT = AuditSink()
+
+
 def _audit_decision(
     name: str,
     arguments: dict[str, Any],
@@ -173,7 +193,7 @@ def _audit_decision(
     call_id: str | None = None,
     attempt: int = 1,
 ) -> None:
-    """Write one line of the control audit trail to stderr.
+    """Write one line of the control audit trail.
 
     Only ``control`` and ``alarm-action`` tools: an audit trail that also
     recorded every read would bury the four lines anyone is looking for.
@@ -181,6 +201,11 @@ def _audit_decision(
     Never the *values* being written, only the targets. A setpoint is process
     data, and this stream is the one an MCP client shows the user and a log
     collector ships off the machine.
+
+    The field order is part of the record, not an accident: ``audit.ts`` builds
+    the same keys in the same order, and
+    ``tests/e2e/test_policy_e2e.py::test_both_runtimes_write_the_same_record_shape``
+    drives one call through both servers and compares them.
     """
     spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
     if spec is None or spec["accessClass"] not in {"control", "alarm-action"}:
@@ -196,6 +221,16 @@ def _audit_decision(
         # re-sent — and a trail whose purpose is "what reached the plant" has to
         # count those separately rather than fold them into one line.
         "attempt": attempt,
+        # Which plant, and which of this process's sessions. A node id is not
+        # stable across a server restart — that is the whole reason the `nsu=`
+        # allowlist form exists — so "a write to ns=2;i=5 was allowed" is only
+        # interpretable later alongside where it went and over which session.
+        "endpoint": SERVER_URL,
+        "session": _CONNECTION.session_id if _CONNECTION is not None else None,
+        # On whose behalf, as the deployment chose to record it. null when
+        # OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion
+        # of who is calling, and a name nothing verified would be worse than none.
+        "operator": operator_id(),
         "profile": tool_policy().config.profile,
         "tool": name,
         "decision": decision,
@@ -203,7 +238,7 @@ def _audit_decision(
     }
     if reason:
         record["reason"] = reason
-    print(json.dumps(record, separators=(",", ":")), file=sys.stderr)
+    _AUDIT.write(record)
 
 
 #: What ``Tool.run`` puts in front of a ToolError raised inside a tool body.
@@ -271,16 +306,25 @@ def _probe_capabilities(client) -> bool:
     Best-effort by design: any failure yields "not supported" rather than an
     error, because an optional capability must never break `tools/list`.
     """
-    before = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
+
+    def snapshot():
+        return (
+            _CAPABILITIES["history"],
+            _CAPABILITIES["history_events"],
+            tuple(sorted(_CAPABILITIES["aggregate_functions"])),
+        )
+
+    before = snapshot()
     _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
+    _CAPABILITIES["history_events"] = _probe(client_supports_history_events, client, False)
     _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
-    after = (_CAPABILITIES["history"], tuple(sorted(_CAPABILITIES["aggregate_functions"])))
-    return before != after
+    return before != snapshot()
 
 
 def _forget_capabilities() -> None:
     """Drop what was probed, because the session it was true of is gone."""
     _CAPABILITIES["history"] = False
+    _CAPABILITIES["history_events"] = False
     _CAPABILITIES["aggregate_functions"] = {}
 
 
@@ -353,6 +397,7 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(connection.disconnect)
         _CAPABILITIES["history"] = False
+        _CAPABILITIES["history_events"] = False
         _CAPABILITIES["aggregate_functions"] = {}
         _CONNECTION = None
 
@@ -362,6 +407,8 @@ def _available_capabilities() -> set[str]:
     available = set()
     if _CAPABILITIES["history"]:
         available.add("history")
+    if _CAPABILITIES["history_events"]:
+        available.add("historyEvents")
     if _CAPABILITIES["aggregate_functions"]:
         available.add("aggregate")
     return available
@@ -534,6 +581,9 @@ class PolicyMCPServer(MCPServer):
             await asyncio.to_thread(connection.ensure_connected)
         except Exception as error:
             raise ToolError(not_connected_message(connection.url, describe_error(error))) from error
+        # Which session this call is about to ride on, so recovery can tell "my
+        # session died" from "someone else already replaced it".
+        call.session = connection.session_id
 
         if not _capabilities_met(call.spec):
             raise ToolError(
@@ -573,7 +623,18 @@ class PolicyMCPServer(MCPServer):
             f"OPC UA call failed on a dead session; reconnecting{suffix}",
             file=sys.stderr,
         )
-        await asyncio.to_thread(connection.reconnect)
+        try:
+            await asyncio.to_thread(connection.reconnect, call.session)
+        except Exception as rebuild_failed:
+            # The same failure the pre-dispatch path reports, worded the same way.
+            # Left bare, this reached the model as "[Errno 61] Connection refused"
+            # — the same outage the call before it had described as "Not connected
+            # to the OPC UA server at …: … Call get_server_status for details", so
+            # one server said two things about one event depending on where in the
+            # request it happened to notice.
+            raise ToolError(
+                not_connected_message(connection.url, describe_error(rebuild_failed))
+            ) from rebuild_failed
 
         if policy == "uncertainOutcome":
             raise ToolError(
@@ -746,7 +807,7 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
             for node_id, data_value in zip(node_ids, values, strict=True)
         ]
     except Exception as e:
-        raise ToolError(error_message("readFailed", reason=str(e))) from e
+        raise ToolError(error_message("readFailed", reason=describe_error(e))) from e
 
 
 def read_opcua_history(
@@ -784,7 +845,9 @@ def read_opcua_history(
             )
             return _history_result(history_records(values), wanted)
         except Exception as e:
-            raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
+            raise ToolError(
+                error_message("historyFailed", node_id=node_id, reason=describe_error(e))
+            ) from e
 
     if start_time is None:
         raise ToolError(error_message("aggregateNeedsStart"))
@@ -817,13 +880,54 @@ def read_opcua_history(
         # asking for one — it is how to see a week without transferring a week.
         return history_records(result.HistoryData.DataValues)
     except Exception as e:
-        raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
+        raise ToolError(
+            error_message("historyFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
 
 
 # Registered once; tools/list gates it using the capabilities read from the
 # lifecycle's active session. This avoids network I/O during import and prevents
 # startup from opening throwaway OPC UA sessions.
 read_opcua_history = mcp.tool(description=DESC["read_opcua_history"])(read_opcua_history)
+
+
+@mcp.tool(description=DESC["read_event_history"])
+def read_event_history(
+    ctx: Context,
+    node_id: str = events.DEFAULT_NOTIFIER,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    num_values: int = 0,
+    severity_min: int = events.DEFAULTS["severityMin"],
+) -> list[dict]:
+    """
+    Read the events the server stored, for a range that has already passed.
+
+    ``subscribe_events`` only sees what arrives after it subscribes, so it
+    cannot answer what fired before anyone was watching. This reads the server's
+    own event archive instead, and returns the same records, so an alarm looks
+    identical whether it was seen live or recovered afterwards.
+
+    Returns:
+        list[dict]: One record per event, shaped by the shared
+            ``resultShapes.eventRecords`` in ``contract/tools.json``.
+    """
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
+    # An hour back, rather than the epoch: a range nobody bounded should be the
+    # recent past, not the whole archive. `read_opcua_history` defaults the same
+    # way and for the same reason.
+    start = parse_iso_datetime(start_time) or end - timedelta(hours=1)
+    # The same cap as a raw value read, and a refusal rather than a knob: an
+    # alarm burst is tens of thousands of events, and "all of them" is a request
+    # that never returns.
+    wanted = history_values(num_values)
+    try:
+        return events.read_event_history(client, node_id, start, end, wanted, severity_min)
+    except Exception as e:
+        raise ToolError(
+            error_message("eventHistoryFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
@@ -997,7 +1101,79 @@ def _describe_node(client, node_id: str, parent_node_id: str) -> dict:
         "data_type": None,
         "value": None,
         "description": None,
+        "type_definition": None,
     }
+
+
+def type_definition_of(is_good: bool, browse_names: list[str]) -> str | None:
+    """Which of a node's HasTypeDefinition references to report, if any.
+
+    Split out from the browse and driven by ``tests/fixtures/type-definitions.json``
+    because ``type-definitions.test.mjs`` has to answer identically: two clients
+    browsing the same server must not disagree about what its nodes are.
+
+    Exactly one, or nothing. OPC UA Part 3 §4.3 gives an Object or a Variable
+    exactly one HasTypeDefinition, so:
+
+    * none — a Method, a View or a type itself. That is an answer, not a failure.
+    * two — a server no client can read correctly. Taking whichever came first
+      would let the two runtimes report different types for the same node
+      depending on how each library ordered the references, and would report the
+      *base* type for a node that also declared a useful one. Saying nothing is
+      the only answer that is both deterministic and never wrong.
+    """
+    if not is_good or len(browse_names) != 1:
+        return None
+    return browse_names[0] or None
+
+
+def _fill_type_definitions(client, records: list[dict]) -> None:
+    """Fill in ``type_definition`` for ``records``, in one batched browse.
+
+    ``HasTypeDefinition`` is non-hierarchical, so the traversal's own browse —
+    forward hierarchical references only, deliberately, or every node would
+    answer with its parent and its type instead of its children — never sees it.
+    It takes a second browse, and that is why this is one request for the whole
+    result rather than one per node: a 500-node walk would otherwise cost 500
+    extra round trips to say what one already could.
+
+    Best-effort, like the variable detail: a server that refuses this leaves the
+    field null rather than failing a browse that succeeded.
+    """
+    if not records:
+        return
+    descriptions = []
+    for record in records:
+        description = ua.BrowseDescription()
+        description.NodeId = ua.NodeId.from_string(record["node_id"])
+        description.BrowseDirection = ua.BrowseDirection.Forward
+        description.ReferenceTypeId = ua.NodeId.from_string(_TRAVERSAL["hasTypeDefinitionNodeId"])
+        # No subtypes: HasTypeDefinition has none, and asking for them would let
+        # an unrelated reference through on a server that has invented one.
+        description.IncludeSubtypes = False
+        description.NodeClassMask = ua.NodeClass.Unspecified
+        description.ResultMask = ua.BrowseResultMask.All
+        descriptions.append(description)
+
+    # Chunked for the same reason the property reads are: MaxNodesPerBrowse is
+    # an operational limit a conformant server may enforce, and the default walk
+    # already returns up to 500 nodes.
+    size = _TRAVERSAL["maxTypeDefinitionsPerRequest"]
+    for start in range(0, len(descriptions), size):
+        chunk = descriptions[start : start + size]
+        params = ua.BrowseParameters()
+        params.View.Timestamp = ua.get_win_epoch()
+        params.NodesToBrowse = chunk
+        params.RequestedMaxReferencesPerNode = 0
+        try:
+            results = client.uaclient.browse(params)
+        except Exception:
+            return
+        for record, result in zip(records[start : start + size], results, strict=False):
+            record["type_definition"] = type_definition_of(
+                result.StatusCode.is_good(),
+                [reference.BrowseName.Name for reference in result.References],
+            )
 
 
 def _fill_variable_detail(client, records: list[dict]) -> None:
@@ -1130,6 +1306,7 @@ def browse_opcua_nodes(
                         "data_type": None,
                         "value": None,
                         "description": None,
+                        "type_definition": None,
                     }
                     if keep(record):
                         found.append(record)
@@ -1140,11 +1317,17 @@ def browse_opcua_nodes(
                     if reference.NodeClass == ua.NodeClass.Object and current_depth + 1 < depth:
                         queue.append((child_id, current_depth + 1))
 
+        # Unconditional, unlike the variable detail: the type is what the record
+        # *is*, not extra reading about its value, and it costs one batched
+        # browse however many nodes were found.
+        _fill_type_definitions(client, found)
         if include_values:
             _fill_variable_detail(client, found)
         return _object_result({"nodes": found, "truncated": truncated, "inspected": inspected})
     except Exception as e:
-        raise ToolError(error_message("browseFailed", node_id=root, reason=str(e))) from e
+        raise ToolError(
+            error_message("browseFailed", node_id=root, reason=describe_error(e))
+        ) from e
 
 
 # --- writing ---------------------------------------------------------------------
@@ -1260,7 +1443,7 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         # when in fact this server never sent it.
         raise
     except Exception as e:
-        raise ToolError(error_message("writeFailed", reason=str(e))) from e
+        raise ToolError(error_message("writeFailed", reason=describe_error(e))) from e
 
 
 def _current_number(data_value: Any) -> float | None:
@@ -1469,7 +1652,7 @@ def call_opcua_method(
                 "methodFailed",
                 method_node_id=method_node_id,
                 object_node_id=object_node_id,
-                reason=str(e),
+                reason=describe_error(e),
             )
         ) from e
 
@@ -1480,9 +1663,13 @@ def call_opcua_method(
 @mcp.tool(description=DESC["subscribe_opcua_nodes"])
 async def subscribe_opcua_nodes(
     node_ids: list[str],
+    ctx: Context,
     publishing_interval: float = 1000,
     sampling_interval: float = 0,
     buffer_size: int = 20,
+    deadband_type: str | None = None,
+    deadband_value: float | None = None,
+    data_change_trigger: str | None = None,
 ) -> list[dict]:
     """
     Watch one or more OPC UA nodes for value changes instead of polling them.
@@ -1495,6 +1682,10 @@ async def subscribe_opcua_nodes(
         raise ToolError(
             error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
         )
+    try:
+        data_filter = resolve_filter(deadband_type, deadband_value, data_change_trigger)
+    except ValueError as error:
+        raise ToolError(str(error)) from error
     # One OPC UA subscription per monitored node is what makes a single
     # unsubscribe take the whole thing down — and it is also what makes an
     # unbounded subscribe ask a PLC for one subscription per node, past whatever
@@ -1509,6 +1700,18 @@ async def subscribe_opcua_nodes(
                 wanted=len(node_ids),
             )
         )
+    if data_filter.deadband_type == "percent":
+        # A percent deadband is a percentage *of the node's EURange*, so a node
+        # that publishes none cannot have one. Checked here, before a single
+        # subscription is created, so a batch is refused whole rather than
+        # leaving some nodes monitored and some not.
+        client = ctx.request_context.lifespan_context["opcua_client"]
+        engineering = _NODE_METADATA.for_nodes(client, node_ids)
+        for node_id in node_ids:
+            info = engineering.get(node_id)
+            if info is None or info.eu_range is None:
+                raise ToolError(error_message("percentDeadbandNeedsRange", node_id=node_id))
+
     records = []
     for node_id in node_ids:
         # `ToolError`, not a bare exception: the SDK forwards a ToolError's
@@ -1523,10 +1726,13 @@ async def subscribe_opcua_nodes(
                     publishing_interval,
                     sampling_interval,
                     buffer_size,
+                    data_filter,
                 )
             )
         except Exception as e:
-            raise ToolError(error_message("subscribeFailed", node_id=node_id, reason=str(e))) from e
+            raise ToolError(
+                error_message("subscribeFailed", node_id=node_id, reason=describe_error(e))
+            ) from e
     return records
 
 
@@ -1626,7 +1832,7 @@ def subscribe_events(
         replaced = _EVENTS.subscribe(client, node_id, severity_min, buffer_size)
     except Exception as e:
         raise ToolError(
-            error_message("eventSubscribeFailed", node_id=node_id, reason=str(e))
+            error_message("eventSubscribeFailed", node_id=node_id, reason=describe_error(e))
         ) from e
     return _object_result(
         {
@@ -1679,7 +1885,9 @@ def list_active_alarms(
     try:
         alarms = events.list_active_alarms(client, node_id, timeout_seconds)
     except Exception as e:
-        raise ToolError(error_message("alarmsFailed", node_id=node_id, reason=str(e))) from e
+        raise ToolError(
+            error_message("alarmsFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
     _EVENTS.remember(alarms)
     return alarms
 
@@ -1706,12 +1914,59 @@ def acknowledge_alarm(
         events.acknowledge_alarm(client, condition, event_id, comment)
     except Exception as e:
         raise ToolError(
-            error_message("acknowledgeFailed", condition_id=condition, reason=str(e))
+            error_message("acknowledgeFailed", condition_id=condition, reason=describe_error(e))
         ) from e
     return _object_result(
         {
             "event_id": event_id,
             "condition_id": canonical_node_id(condition),
+            "status": "Good",
+        }
+    )
+
+
+@mcp.tool(description=DESC["act_on_alarm"])
+def act_on_alarm(
+    event_id: str,
+    action: str,
+    ctx: Context,
+    comment: str = "",
+    shelve_duration_ms: float | None = None,
+    condition_id: str | None = None,
+) -> CallToolResult:
+    """
+    Confirm, annotate or shelve an alarm — the rest of the operator workflow.
+
+    Returns:
+        CallToolResult: One record of ``resultShapes.alarmAction``.
+    """
+    # A relationship between two arguments, which the contract's own schema
+    # cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
+    # on any other action would silently ignore it. Refusing says which action
+    # the caller probably meant.
+    if action == "shelveFor" and shelve_duration_ms is None:
+        raise ToolError(error_message("shelveForNeedsDuration"))
+    if action != "shelveFor" and shelve_duration_ms is not None:
+        raise ToolError(error_message("shelveDurationNotAllowed", action=action))
+
+    condition = condition_id or _EVENTS.condition_for(event_id)
+    if not condition:
+        raise ToolError(error_message("unknownEventId", event_id=event_id))
+
+    client = ctx.request_context.lifespan_context["opcua_client"]
+    try:
+        events.alarm_action(client, condition, event_id, action, comment, shelve_duration_ms)
+    except Exception as e:
+        raise ToolError(
+            error_message(
+                "alarmActionFailed", action=action, condition_id=condition, reason=describe_error(e)
+            )
+        ) from e
+    return _object_result(
+        {
+            "event_id": event_id,
+            "condition_id": canonical_node_id(condition),
+            "action": action,
             "status": "Good",
         }
     )
@@ -1730,15 +1985,22 @@ def main() -> None:
     # Fail fast and readably on a bad security configuration: an MCP client only
     # ever shows the server's stderr, so letting it surface from a best-effort
     # capability probe (which swallows it) would leave nothing to go on.
+    global _AUDIT
     try:
         security_config()
         policy = tool_policy()
         reconnect = reconnect_config()
+        # Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
+        # cannot be given one has to be told now, not at the first control call
+        # they were relying on it to record.
+        audit = AuditSink(os.environ.get(AUDIT_FILE_ENV, "").strip() or None)
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
+    _AUDIT = audit
 
     print(f"Tool policy: {describe_policy(policy)}", file=sys.stderr)
+    print(f"Control audit: {describe_audit(audit)}", file=sys.stderr)
     print(f"Connection resilience: {describe_reconnect(reconnect)}", file=sys.stderr)
 
     mcp.run(transport="stdio")

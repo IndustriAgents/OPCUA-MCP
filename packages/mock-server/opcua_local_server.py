@@ -185,7 +185,38 @@ class IndustrialControlSystem:
         plant = self.server.get_objects_node().get_child("2:IndustrialControlSystem")
         self.event_generator.event.SourceNode = plant.nodeid
         self.event_generator.event.SourceName = "IndustrialControlSystem"
+        self._historize_events()
         logging.info("event generator ready")
+
+    def _historize_events(self):
+        """Keep the events, so a client can look backwards at an alarm burst.
+
+        Two pieces of setup, neither of which python-opcua does for you:
+
+        `historize_node_event` subscribes to the event types the *source*
+        declares it generates, so a node with no `GeneratesEvent` reference gets
+        a subscription to nothing and stores nothing — it succeeds, and the
+        history is silently always empty. The Server object here emits
+        `BaseEventType`, so that is what it has to declare.
+
+        And `AccessHistoryEventsCapability` (`ns=0;i=11194`) does not exist in
+        python-opcua's namespace 0 at all, so it has to be created. It is the
+        node a client reads to decide whether asking for event history is worth
+        a round trip, and a server that stores events but never says so is a
+        server whose history nobody looks for.
+        """
+        emitter = self.server.get_node(ua.NodeId(ua.ObjectIds.Server))
+        emitter.add_reference(ua.NodeId(ua.ObjectIds.BaseEventType), ua.ObjectIds.GeneratesEvent)
+        self.server.historize_node_event(emitter, period=timedelta(minutes=10), count=0)
+
+        capabilities = self.server.get_node(ua.NodeId(ua.ObjectIds.HistoryServerCapabilities))
+        node = capabilities.add_variable(
+            ua.NodeId(11194),
+            ua.QualifiedName("AccessHistoryEventsCapability", 0),
+            True,
+        )
+        node.add_reference(ua.NodeId(ua.ObjectIds.PropertyType), ua.ObjectIds.HasTypeDefinition)
+        logging.info("event history enabled")
 
     def _emit_alarm_transitions(self):
         """Fire an event when the alarm state changes, and only then."""
@@ -318,9 +349,16 @@ class IndustrialControlSystem:
             ua.NodeId(93, 2), ua.QualifiedName("InstrumentRange", 0), _range(-50.0, 250.0)
         )
         # What makes it an AnalogItem rather than a Variable that happens to have
-        # three properties. Nothing in this project reads the type definition
-        # yet, but a mock that lies about what it is teaches the wrong lesson to
-        # whatever reads it next.
+        # three properties — and it has to *replace* the type definition
+        # `add_variable` gives it, not join it. OPC UA Part 3 §4.3 gives a
+        # Variable exactly one HasTypeDefinition, and a node answering with both
+        # BaseDataVariableType and AnalogItemType hands a client a coin flip
+        # between the useless answer and the useful one.
+        node.delete_reference(
+            ua.NodeId(ua.ObjectIds.BaseDataVariableType),
+            ua.ObjectIds.HasTypeDefinition,
+            bidirectional=False,
+        )
         node.add_reference(ua.NodeId(ua.ObjectIds.AnalogItemType), ua.ObjectIds.HasTypeDefinition)
         self.scratch_analog = node
 

@@ -19,6 +19,27 @@ export interface BuildInfoRecord {
   build_date: string | null;
 }
 
+/** The record's field order, from the contract.
+ *
+ * `diagnostics.py` builds the same keys in the same order — twelve counters
+ * reported in two different orders by two servers would be two records, not one
+ * shape.
+ */
+export const DIAGNOSTICS_FIELDS: readonly string[] = CONTRACT.diagnostics.diagnosticsFields;
+
+/** node-opcua decodes ServerDiagnosticsSummaryDataType with camelCase field
+ *  names; the record uses snake_case. Derived rather than written out, so the
+ *  two can only disagree if the spec's own spelling changes. */
+const SUMMARY_PROPERTIES: Record<string, string> = Object.fromEntries(
+  DIAGNOSTICS_FIELDS.map((field) => {
+    const [head, ...rest] = field.split("_");
+    return [field, head + rest.map((part) => part[0].toUpperCase() + part.slice(1)).join("")];
+  })
+);
+
+/** The server's own ServerDiagnosticsSummary (`serverStatus.diagnostics`). */
+export type DiagnosticsRecord = Record<string, number>;
+
 /** One namespace of the server's NamespaceArray. */
 export interface NamespaceRecord {
   index: number;
@@ -34,6 +55,7 @@ export interface ServerStatusRecord {
   current_time: string | null;
   start_time: string | null;
   build_info: BuildInfoRecord | null;
+  diagnostics: DiagnosticsRecord | null;
   namespaces: NamespaceRecord[];
   error: string | null;
 }
@@ -52,6 +74,7 @@ export function disconnectedStatus(
     current_time: null,
     start_time: null,
     build_info: null,
+    diagnostics: null,
     namespaces: [],
     error,
   };
@@ -103,14 +126,43 @@ function buildInfo(raw: any): BuildInfoRecord | null {
  * them — the node IDs come from the shared contract, which is also where the
  * Python server gets them.
  */
+/** The server's own ServerDiagnosticsSummary, or null if it publishes none.
+ *
+ * Best-effort by design, and `null` is a real answer rather than a failure: Part
+ * 5 lets a server leave diagnostics switched off, and the bundled Python mock
+ * creates the node but never populates it. A server that cannot say how many
+ * sessions it is holding is still a server worth talking to, so this must never
+ * be the reason `get_server_status` fails — which is the one tool that has to
+ * answer when everything else is going wrong.
+ */
+function diagnosticsSummary(summary: unknown): DiagnosticsRecord | null {
+  if (!summary || typeof summary !== "object") return null;
+  const source = summary as Record<string, unknown>;
+  const record: DiagnosticsRecord = {};
+  for (const [field, property] of Object.entries(SUMMARY_PROPERTIES)) {
+    const value = source[property];
+    if (typeof value !== "number") {
+      // A structure that decoded but is missing a counter is not a summary this
+      // server can report honestly, and a record with holes in it is worse than
+      // no record.
+      return null;
+    }
+    record[field] = value;
+  }
+  return record;
+}
+
 export async function readServerStatus(
   session: ClientSession,
   endpointUrl: string,
   security: string
 ): Promise<ServerStatusRecord> {
-  const [statusValue, namespaceValue] = await session.readVariableValue([
+  const [statusValue, namespaceValue, diagnosticsValue] = await session.readVariableValue([
     CONTRACT.diagnostics.serverStatusNodeId,
     CONTRACT.diagnostics.namespaceArrayNodeId,
+    // In the same batch: it is one more node on a read that was already
+    // happening, so reporting it costs no extra round trip.
+    CONTRACT.diagnostics.serverDiagnosticsSummaryNodeId,
   ]);
 
   const status: any = statusValue?.value?.value ?? null;
@@ -127,6 +179,7 @@ export async function readServerStatus(
     current_time: status ? toIsoUtc(status.currentTime) : null,
     start_time: status ? toIsoUtc(status.startTime) : null,
     build_info: buildInfo(status?.buildInfo),
+    diagnostics: diagnosticsSummary(diagnosticsValue?.value?.value),
     namespaces,
     error: null,
   };

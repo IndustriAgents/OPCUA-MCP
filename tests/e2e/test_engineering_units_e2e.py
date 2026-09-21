@@ -343,3 +343,123 @@ async def test_max_change_is_measured_against_where_the_node_actually_is(impl, o
         after = await session.call_tool("read_opcua_nodes", {"node_ids": [NODE["ScratchAnalog"]]})
 
     assert records_of(after)[0]["value"] == 54, f"{impl}: the refused move reached the plant"
+
+
+# --- what the range is also for: a deadband (#118) --------------------------------
+
+
+async def test_a_deadband_is_reported_back_as_the_one_in_force(impl, opcua_server):
+    """A caller reading a suspiciously quiet buffer has to know whether it asked.
+
+    The filter runs inside the OPC UA server, so nothing this side can observe
+    *which* changes it dropped — what can be checked is that the subscription was
+    created carrying it, and that the record says so.
+    """
+    async with connect(params(impl, opcua_server)) as session:
+        result = await session.call_tool(
+            "subscribe_opcua_nodes",
+            {
+                "node_ids": [NODE["ScratchAnalog"]],
+                "deadband_type": "absolute",
+                "deadband_value": 0.5,
+                "data_change_trigger": "statusValueTimestamp",
+            },
+        )
+        assert not result.is_error, f"{impl}: {text_of(result)}"
+        [record] = records_of(result)
+        await session.call_tool(
+            "unsubscribe_opcua_nodes", {"subscription_ids": [record["subscription_id"]]}
+        )
+
+    assert record["deadband_type"] == "absolute", f"{impl}: {record}"
+    assert record["deadband_value"] == 0.5, f"{impl}: {record}"
+    assert record["data_change_trigger"] == "statusValueTimestamp", f"{impl}: {record}"
+
+
+async def test_a_subscription_with_no_deadband_says_so(impl, opcua_server):
+    """The default is still the default, and the record is explicit about it."""
+    async with connect(params(impl, opcua_server)) as session:
+        result = await session.call_tool(
+            "subscribe_opcua_nodes", {"node_ids": [NODE["ScratchDouble"]]}
+        )
+        assert not result.is_error, f"{impl}: {text_of(result)}"
+        [record] = records_of(result)
+        await session.call_tool(
+            "unsubscribe_opcua_nodes", {"subscription_ids": [record["subscription_id"]]}
+        )
+
+    assert record["deadband_type"] == "none", f"{impl}: {record}"
+    assert record["deadband_value"] == 0, f"{impl}: {record}"
+    assert record["data_change_trigger"] == "statusValue", f"{impl}: {record}"
+
+
+async def test_a_percent_deadband_works_on_a_node_that_publishes_a_range(impl, opcua_server):
+    """PercentDeadband is defined *against* EURange (Part 4 §7.22).
+
+    Which is why this composes with #110: the unit work landed once and pays
+    twice. `ScratchAnalog` publishes 0 to 150, so 2% is 3 engineering units.
+    """
+    async with connect(params(impl, opcua_server)) as session:
+        result = await session.call_tool(
+            "subscribe_opcua_nodes",
+            {
+                "node_ids": [NODE["ScratchAnalog"]],
+                "deadband_type": "percent",
+                "deadband_value": 2,
+            },
+        )
+        assert not result.is_error, f"{impl}: {text_of(result)}"
+        [record] = records_of(result)
+        await session.call_tool(
+            "unsubscribe_opcua_nodes", {"subscription_ids": [record["subscription_id"]]}
+        )
+
+    assert record["deadband_type"] == "percent", f"{impl}: {record}"
+
+
+async def test_a_percent_deadband_is_refused_on_a_node_with_no_range(impl, opcua_server):
+    """A percentage of nothing is nothing, and silently treating it as absolute
+    would be a deadband of 2 engineering units where the caller asked for 2%.
+
+    Refused before a single subscription is created, so a batch cannot end up
+    half-monitored.
+    """
+    async with connect(params(impl, opcua_server)) as session:
+        before = await session.call_tool("list_subscriptions", {})
+        result = await session.call_tool(
+            "subscribe_opcua_nodes",
+            {
+                "node_ids": [NODE["ScratchAnalog"], NODE["ScratchDouble"]],
+                "deadband_type": "percent",
+                "deadband_value": 2,
+            },
+        )
+        after = await session.call_tool("list_subscriptions", {})
+
+    assert result.is_error, impl
+    assert text_of(result) == (
+        "A percent deadband is a percentage of node ns=2;i=41's EURange, and it publishes "
+        'none. Use deadband_type "absolute" with a value in engineering units, or read '
+        "the node to see what it reports."
+    ), f"{impl}: {text_of(result)}"
+    # Not even the node that *does* publish a range was subscribed: the batch is
+    # refused whole, as a forbidden write target already is.
+    assert len(records_of(after)) == len(records_of(before)), f"{impl}: a partial batch landed"
+
+
+async def test_a_deadband_with_no_size_is_refused_rather_than_defaulted(impl, opcua_server):
+    """Zero would be a deadband that filters nothing while reporting one is on.
+
+    The caller would read a buffer full of jitter and conclude the tag was
+    noisier than their threshold, which it may not be.
+    """
+    async with connect(params(impl, opcua_server)) as session:
+        result = await session.call_tool(
+            "subscribe_opcua_nodes",
+            {"node_ids": [NODE["ScratchAnalog"]], "deadband_type": "absolute"},
+        )
+
+    assert result.is_error, impl
+    assert text_of(result) == (
+        'subscribe_opcua_nodes requires deadband_value when deadband_type is "absolute"'
+    ), f"{impl}: {text_of(result)}"

@@ -9,7 +9,7 @@ from __future__ import annotations
 from opcua import ua
 
 from .aggregates import spec_aggregate_node_ids
-from .contract import AGGREGATE_NODE_ID, HISTORY_NODE_ID
+from .contract import AGGREGATE_NODE_ID, HISTORY_EVENTS_NODE_ID, HISTORY_NODE_ID
 from .security import create_client
 
 
@@ -17,6 +17,22 @@ def client_supports_history(client) -> bool:
     """Read history support through an already-connected client."""
     try:
         return bool(client.get_node(HISTORY_NODE_ID).get_value())
+    except Exception:
+        return False
+
+
+def client_supports_history_events(client) -> bool:
+    """Read *event* history support through an already-connected client.
+
+    A separate node and a separate answer from :func:`client_supports_history`:
+    Part 11 §5.4 lets a server historise values without historising events, and
+    most do. Note that the node is commonly absent rather than present-and-false
+    — python-opcua's own server has no ns=0;i=11194 at all — which reads the
+    same way here, and should: a server that cannot say it keeps event history
+    is one whose event history nobody should go looking for.
+    """
+    try:
+        return bool(client.get_node(HISTORY_EVENTS_NODE_ID).get_value())
     except Exception:
         return False
 

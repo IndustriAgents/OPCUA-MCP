@@ -119,6 +119,8 @@ export function notConnectedMessage(url: string, reason: string): string {
 export class OpcuaConnection {
   private opcuaClient: OPCUAClient | null = null;
   private connectPromise: Promise<void> | null = null;
+  /** The rebuild in flight, so concurrent callers join it rather than start one. */
+  private reconnectPromise: Promise<void> | null = null;
   private state: ConnectionState = "disconnected";
   private lastError: string | null = null;
   session: ClientSession | null = null;
@@ -330,8 +332,27 @@ export class OpcuaConnection {
    *
    * The session that comes back is a new one, so anything holding the old one —
    * the subscriptions, above all — is told through `onSessionReplaced`.
+   *
+   * Single-flight, as one transaction, because the *steps* being individually
+   * safe was not enough. `connect()` already memoised its promise, so two
+   * concurrent rebuilds could not both open a client — but they could still
+   * interleave as: A tears down, A opens a fresh session, B tears down and
+   * closes the session A had just opened and was about to return. A then
+   * believed it held a live session, and every call after it failed on one B had
+   * closed (issue #107). The whole teardown → open → rebind → re-establish
+   * sequence is therefore claimed once, and concurrent callers await the same
+   * rebuild rather than starting a second.
    */
   async reconnect(): Promise<void> {
+    if (!this.reconnectPromise) {
+      this.reconnectPromise = this.rebuild().finally(() => {
+        this.reconnectPromise = null;
+      });
+    }
+    return this.reconnectPromise;
+  }
+
+  private async rebuild(): Promise<void> {
     await this.teardown();
     await this.connect();
     const session = this.session;
@@ -370,6 +391,14 @@ export class OpcuaConnection {
    * running the operation again is *safe* is not this module's to judge — the
    * caller says so with `mayRepeat`, and a caller that says no still gets the
    * connection rebuilt, so the next call finds a live session.
+   *
+   * The tool dispatcher no longer comes through here. It has to re-authorize
+   * between the two attempts — the fresh session may have renumbered the
+   * namespaces the first attempt was authorized against (issue #105) — and it
+   * reads the contract's own `retryPolicy` to decide what may follow a dead
+   * session at all (issue #106), neither of which belongs in this module. What
+   * is left is `get_server_status`, whose whole job is to reach for the
+   * connection and report what it found.
    *
    * Errors are passed through as they came. `get_server_status` reports the
    * reason a connection failed as its own output and must not have it dressed

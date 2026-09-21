@@ -78,9 +78,14 @@ async def test_reads_recover_after_the_server_restarts(impl, restartable_opcua_s
 async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_server):
     """Not just reads: the write path re-establishes a dead session too.
 
-    Worth its own test because a write is the case where retrying is a decision
-    rather than an obvious win — `write_opcua_nodes` is idempotent, so the servers
-    may repeat it on a fresh session, and this is the assertion that they do.
+    Note what recovery means here, because it changed in #106. The server does
+    *not* re-send a write whose outcome it does not know: `write_opcua_nodes` is
+    `retryPolicy: uncertainOutcome`, so a call that dies mid-request rebuilds the
+    connection and then says the outcome is unknown rather than actuating the
+    plant a second time on a guess. What is promised is that a *later* call
+    succeeds without the MCP server having been restarted — which is what the
+    loop below asks for, and is the decision a caller is entitled to take and the
+    server is not.
     """
     server = restartable_opcua_server
     async with connect(params_for(impl, server.url)) as session:

@@ -292,12 +292,45 @@ distinction between a failure of the *connection* and a failure of the
 *request*: a `BadNodeIdUnknown` would fail identically on a fresh session, so
 retrying it would only hide the real answer.
 
-Whether a failed call may be *repeated* is not the connection layer's to decide.
-It reads the contract's own `idempotentHint`, so the question is settled where
-the tool is declared and matches what `tools/list` tells the model. Every read
-and write may be repeated on a new session; `call_opcua_method` and
-`acknowledge_alarm` may not — the connection is still rebuilt, but the failure is
-reported rather than the request re-sent.
+Whether a failed call may be *repeated* is not the connection layer's to decide
+either. It is settled where the tool is declared, by `contract/tools.json` ->
+`retryPolicy`, which is deliberately **not** `annotations.idempotentHint`. Both
+runtimes used to read the annotation for it, and the two answer different
+questions: `idempotentHint` tells the *model* whether calling a tool twice is
+meaningful, while this decides whether the *transport* may put a second request
+on the wire after an outcome it does not know. `write_opcua_nodes` is idempotent
+in the first sense — writing 99.9 twice leaves 99.9 — and was therefore
+automatically re-sent after a lost response, which Part 4 §5.11.4 says nothing
+justifies: a Write may partially succeed, rollback is the client's problem and
+the operation order is undefined, so a dead session never proved the write had
+not landed.
+
+The three policies, and who has which:
+
+| Policy | Tools | What happens |
+| --- | --- | --- |
+| `resend` | the six reads | Rebuild, then run the request again. |
+| `reconnectOnly` | the four monitor tools | Rebuild, report the original failure. A subscription lives on the session, so it died with it: the failure is complete, not uncertain. |
+| `uncertainOutcome` | `write_opcua_nodes`, `call_opcua_method`, `acknowledge_alarm` | Rebuild, then fail with `errors.uncertainOutcome`, which says the request may or may not have reached the plant and names what it was aimed at. |
+
+The connection is rebuilt whatever the policy, so the next call finds a live
+session either way. What changes is only what this server is willing to claim.
+
+A re-sent request is authorized *again* before it goes out. `reconnect()` has
+just re-read the server's `NamespaceArray` and re-bound it into the policy —
+because a restarted server may have loaded its namespaces in a different order,
+which is the entire reason the `nsu=` allowlist form exists — so the mapping the
+first attempt was authorized against is not necessarily the mapping the second
+resolves against. The second attempt gets its own `allowed` audit line, and every
+line carries an `attempt` number, because one call reaching the plant twice is
+two facts and not one.
+
+The capability gate runs *after* the connection, not before it. The capability
+answers are filled in by the reconnect callback, so a process that started while
+the plant was unreachable still holds its startup defaults, and checking them
+first refused `read_opcua_history` as "the server advertises none of: history"
+without ever asking the server. Unknown is not absent. `tools/list` is unchanged
+and still does no network I/O — that distinction is the whole of #83.
 
 A rebuilt session is a *different* session, and an OPC UA subscription belongs to
 the session that created it. So both subscription managers can re-create what

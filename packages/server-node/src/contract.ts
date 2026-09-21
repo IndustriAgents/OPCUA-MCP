@@ -43,11 +43,21 @@ export interface ToolSpec {
     destructiveHint: boolean;
     idempotentHint: boolean;
   };
+  /** What this server may do when the OPC UA session dies underneath the request.
+   *
+   * Deliberately not `annotations.idempotentHint`, which this runtime used to
+   * read for it: that annotation is advice to the *model* about calling a tool
+   * twice, and this decides whether the *transport* may put a second request on
+   * the wire after an uncertain outcome. See `retryPolicies` in the contract.
+   */
+  retryPolicy: "resend" | "reconnectOnly" | "uncertainOutcome";
 }
 
 export const CONTRACT: {
   resultShapes: Record<string, any>;
   capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
+  /** Prose for each `ToolSpec.retryPolicy` value; the tools name one of its keys. */
+  retryPolicies: Record<string, string>;
   diagnostics: { serverStatusNodeId: string; namespaceArrayNodeId: string };
   subscriptions: {
     defaultPublishingIntervalMs: number;

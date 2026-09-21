@@ -276,6 +276,36 @@ async def test_a_calls_audit_lines_can_be_tied_together(impl, opcua_server):
 
 
 @pytest.mark.parametrize("impl", ["python", "node"])
+async def test_every_audit_line_says_which_attempt_it_is_about(impl, opcua_server):
+    """One call can reach the plant twice, and the trail has to count that.
+
+    A request the contract marks ``retryPolicy: resend`` is sent again on a fresh
+    session after an outage, and the fresh session is authorized again before it
+    goes out — so "allowed" is a fact about an *attempt*, not about a call. No
+    control tool is ever re-sent (every one of them is ``uncertainOutcome``), so
+    on a write the number is always 1; what is pinned here is that the field is
+    present and agrees across the runtimes, because a trail that carries it on
+    one server and not the other cannot be read by one tool.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    async with connect_capturing_stderr(operator_params(impl, opcua_server)) as (session, errlog):
+        allowed = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "29.5"}]}
+        )
+        assert not allowed.is_error, text_of(allowed)
+        denied = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=12", "value": "true"}]}
+        )
+        assert denied.is_error, impl
+        records = audit_records(errlog)
+
+    assert records, f"{impl}: nothing was audited at all"
+    for record in records:
+        assert record.get("attempt") == 1, f"{impl}: no attempt number on {record}"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
 async def test_a_refusal_and_its_outcome_share_one_id(impl, opcua_server):
     """A denial is one line, and it still carries an id.
 

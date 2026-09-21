@@ -275,6 +275,14 @@ class OpcuaConnection:
         running the operation again is *safe* is not this module's to judge — the
         caller says so with ``may_repeat``, and a caller that says no still gets
         the connection rebuilt, so the next call finds a live session.
+
+        The tool dispatcher no longer comes through here. It has to re-authorize
+        between the two attempts — the fresh session may have renumbered the
+        namespaces the first attempt was authorized against (issue #105) — and it
+        reads the contract's own ``retryPolicy`` to decide what may follow a dead
+        session at all (issue #106), neither of which belongs in this module.
+        What is left is ``get_server_status``, whose whole job is to reach for
+        the connection and report what it found.
         """
         self.ensure_connected()
         try:

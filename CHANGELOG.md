@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **A write was automatically re-sent after an outcome nobody knew** (#106). Both
+  runtimes read `annotations.idempotentHint` as their transport retry policy, and
+  `write_opcua_nodes` carries `idempotentHint: true` — correctly, because writing
+  99.9 twice leaves 99.9, which is what that annotation tells the *model*. It is
+  not what it tells the transport. OPC UA Part 4 §5.11.4 lets a Write partially
+  succeed, leaves rollback to the client and defines no operation order, so a
+  session that died before the response arrived never proved the write had not
+  landed — and the server re-sent it, a second physical actuation on a guess. The
+  contract now carries a server-private `retryPolicy` per tool: reads `resend`,
+  monitor tools `reconnectOnly`, and every control tool `uncertainOutcome`, which
+  rebuilds the connection and then says plainly that the request may or may not
+  have reached the plant, naming what it was aimed at so an operator can read the
+  targets back. `idempotentHint` is unchanged and still means what MCP says it
+  means.
+- **A re-sent request was never re-authorized** (#105). Both dispatchers
+  authorized a call, then ran it again on a *different* session after a reconnect
+  — and `reconnect()` re-reads the server's `NamespaceArray`, because a restarted
+  server may have loaded its namespaces in a different order, which is the entire
+  reason the `nsu=` allowlist form exists. An `ns=2;i=5` authorized against one
+  namespace map could be re-sent against another and reach a different physical
+  node. Authorization now runs again inside the retry, after the namespaces are
+  re-bound, and every audit line carries an `attempt` number so a call that
+  reached the plant twice is two records rather than one.
+
+### Fixed
+- **Two concurrent reconnects could tear down each other's fresh session**
+  (#107). The Node runtime's `connect()` was single-flight but `reconnect()` was
+  not, so two calls recovering from the same outage could interleave as: A tears
+  down, A opens a new session, B tears down and closes the session A had just
+  opened and was about to return. A then believed it held a live session and
+  every call after it failed. The whole teardown → open → rebind → re-establish
+  sequence is now claimed once, and concurrent callers await the same rebuild.
+- **A cold start refused the history tools without asking the server** (#108).
+  Both dispatchers checked a tool's capability gate before establishing a
+  connection, and the capability map is filled in by the reconnect callback — so
+  a process that started while the plant was unreachable still held its startup
+  defaults, and `read_opcua_history` was refused as "OPC UA server advertises
+  none of: history" with no connection ever attempted. Unknown is not absent.
+  `tools/call` now connects first and checks second; `tools/list` still does no
+  network I/O.
+
 ### Documentation
 - **The one-endpoint-per-process ceiling is now stated where someone meets it**
   (#88). `OPCUA_SERVER_URL` is read once, every tool targets it, stdio is the only

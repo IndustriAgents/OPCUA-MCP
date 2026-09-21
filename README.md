@@ -121,7 +121,7 @@ do when Claude Desktop cannot start the server:
 
 ## Tools
 
-Both servers expose the same fourteen tools, defined once in
+Both servers expose the same fifteen tools, defined once in
 [`contract/tools.json`](contract/tools.json) so they cannot drift apart.
 
 | Tool | What it does |

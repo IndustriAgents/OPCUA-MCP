@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **On Python 3.10, a session that died mid-request was not recognised as one.**
+  python-opcua waits for every response with `future.result(timeout)`, so
+  `concurrent.futures.TimeoutError` is exactly what a dying session raises — and
+  on 3.10 that is *not* the builtin `TimeoutError`. The two became the same
+  object only in 3.11, and on 3.10 it is not an `OSError` either, so none of the
+  types the dead-session check names matched it; its `str()` is empty, so the
+  text markers could not catch it afterwards either. The call came back as
+  `Failed to read nodes: ` — no reason at all — and **no reconnection happened**,
+  leaving the server dead until someone restarted it. That is the precise failure
+  the classification exists to prevent, on the oldest supported Python, and it is
+  invisible to anyone developing on 3.11+. Found by CI's version matrix. The tool
+  bodies now also report an exception's type when it carries no message, so a
+  message-less failure can never again be reported as nothing at all. The Node
+  runtime is unaffected.
+
 ### Added
 - **`read_event_history`: look backwards at an alarm burst** (#117).
   `subscribe_events` only sees what arrives after it subscribes, which is the

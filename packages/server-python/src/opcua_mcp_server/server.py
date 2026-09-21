@@ -807,7 +807,7 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
             for node_id, data_value in zip(node_ids, values, strict=True)
         ]
     except Exception as e:
-        raise ToolError(error_message("readFailed", reason=str(e))) from e
+        raise ToolError(error_message("readFailed", reason=describe_error(e))) from e
 
 
 def read_opcua_history(
@@ -845,7 +845,9 @@ def read_opcua_history(
             )
             return _history_result(history_records(values), wanted)
         except Exception as e:
-            raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
+            raise ToolError(
+                error_message("historyFailed", node_id=node_id, reason=describe_error(e))
+            ) from e
 
     if start_time is None:
         raise ToolError(error_message("aggregateNeedsStart"))
@@ -878,7 +880,9 @@ def read_opcua_history(
         # asking for one — it is how to see a week without transferring a week.
         return history_records(result.HistoryData.DataValues)
     except Exception as e:
-        raise ToolError(error_message("historyFailed", node_id=node_id, reason=str(e))) from e
+        raise ToolError(
+            error_message("historyFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
 
 
 # Registered once; tools/list gates it using the capabilities read from the
@@ -921,7 +925,9 @@ def read_event_history(
     try:
         return events.read_event_history(client, node_id, start, end, wanted, severity_min)
     except Exception as e:
-        raise ToolError(error_message("eventHistoryFailed", node_id=node_id, reason=str(e))) from e
+        raise ToolError(
+            error_message("eventHistoryFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
@@ -1319,7 +1325,9 @@ def browse_opcua_nodes(
             _fill_variable_detail(client, found)
         return _object_result({"nodes": found, "truncated": truncated, "inspected": inspected})
     except Exception as e:
-        raise ToolError(error_message("browseFailed", node_id=root, reason=str(e))) from e
+        raise ToolError(
+            error_message("browseFailed", node_id=root, reason=describe_error(e))
+        ) from e
 
 
 # --- writing ---------------------------------------------------------------------
@@ -1435,7 +1443,7 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         # when in fact this server never sent it.
         raise
     except Exception as e:
-        raise ToolError(error_message("writeFailed", reason=str(e))) from e
+        raise ToolError(error_message("writeFailed", reason=describe_error(e))) from e
 
 
 def _current_number(data_value: Any) -> float | None:
@@ -1644,7 +1652,7 @@ def call_opcua_method(
                 "methodFailed",
                 method_node_id=method_node_id,
                 object_node_id=object_node_id,
-                reason=str(e),
+                reason=describe_error(e),
             )
         ) from e
 
@@ -1722,7 +1730,9 @@ async def subscribe_opcua_nodes(
                 )
             )
         except Exception as e:
-            raise ToolError(error_message("subscribeFailed", node_id=node_id, reason=str(e))) from e
+            raise ToolError(
+                error_message("subscribeFailed", node_id=node_id, reason=describe_error(e))
+            ) from e
     return records
 
 
@@ -1822,7 +1832,7 @@ def subscribe_events(
         replaced = _EVENTS.subscribe(client, node_id, severity_min, buffer_size)
     except Exception as e:
         raise ToolError(
-            error_message("eventSubscribeFailed", node_id=node_id, reason=str(e))
+            error_message("eventSubscribeFailed", node_id=node_id, reason=describe_error(e))
         ) from e
     return _object_result(
         {
@@ -1875,7 +1885,9 @@ def list_active_alarms(
     try:
         alarms = events.list_active_alarms(client, node_id, timeout_seconds)
     except Exception as e:
-        raise ToolError(error_message("alarmsFailed", node_id=node_id, reason=str(e))) from e
+        raise ToolError(
+            error_message("alarmsFailed", node_id=node_id, reason=describe_error(e))
+        ) from e
     _EVENTS.remember(alarms)
     return alarms
 
@@ -1902,7 +1914,7 @@ def acknowledge_alarm(
         events.acknowledge_alarm(client, condition, event_id, comment)
     except Exception as e:
         raise ToolError(
-            error_message("acknowledgeFailed", condition_id=condition, reason=str(e))
+            error_message("acknowledgeFailed", condition_id=condition, reason=describe_error(e))
         ) from e
     return _object_result(
         {
@@ -1946,7 +1958,9 @@ def act_on_alarm(
         events.alarm_action(client, condition, event_id, action, comment, shelve_duration_ms)
     except Exception as e:
         raise ToolError(
-            error_message("alarmActionFailed", action=action, condition_id=condition, reason=str(e))
+            error_message(
+                "alarmActionFailed", action=action, condition_id=condition, reason=describe_error(e)
+            )
         ) from e
     return _object_result(
         {

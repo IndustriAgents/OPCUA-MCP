@@ -49,6 +49,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent import futures
 from typing import TypeVar
 
 from opcua import Client, ua
@@ -107,7 +108,24 @@ DEAD_SESSION_MARKERS: tuple[str, ...] = (
 #: closed underneath us (``[Errno 9] Bad file descriptor`` and friends), which
 #: carries no more specific type. Erring wide costs at most one needless
 #: reconnection; erring narrow leaves the server dead until it is restarted.
-_DEAD_SESSION_TYPES = (ConnectionError, TimeoutError, OSError, EOFError)
+#:
+#: ``concurrent.futures.TimeoutError`` is named separately because on Python 3.10
+#: it is *not* the builtin ``TimeoutError`` — it became an alias of it only in
+#: 3.11 — and on 3.10 it is not an ``OSError`` either, so none of the entries
+#: above match it. python-opcua waits for every response with
+#: ``future.result(timeout)``, so that is exactly what a session dying
+#: mid-request raises, and its ``str()`` is empty, so the text checks cannot
+#: catch it afterwards. The result on 3.10 was a dead session reported as an
+#: ordinary tool failure with no reason at all and no reconnection — the precise
+#: failure this list exists to prevent, on the oldest supported Python. On 3.11+
+#: this entry is the same object as ``TimeoutError`` and changes nothing.
+_DEAD_SESSION_TYPES = (
+    ConnectionError,
+    TimeoutError,
+    futures.TimeoutError,
+    OSError,
+    EOFError,
+)
 
 
 def is_connection_error(error: BaseException) -> bool:

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-21
+
+Seventeen issues from two architecture reviews, closed across four PRs. The
+theme is the gap between what this server *claimed* and what it could *know*: a
+write re-sent after an outcome nobody observed, an audit trail that could not say
+who or which plant, a policy that authorised nodes but never values, a browse
+that named a node without saying what it is, and a server that could not report
+its own health. Plus the OPC UA coverage those reviews ranked highest —
+engineering units and ranges, deadband filtering, the rest of the Alarms &
+Conditions operator workflow, server diagnostics, type definitions and historical
+events.
+
 ### Fixed
 - **On Python 3.10, a session that died mid-request was not recognised as one.**
   python-opcua waits for every response with `future.result(timeout)`, so
@@ -1248,7 +1260,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.2.1...v0.3.0

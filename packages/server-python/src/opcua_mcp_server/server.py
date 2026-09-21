@@ -28,7 +28,7 @@ from .capabilities import (
     client_supports_history,
     client_supports_history_events,
 )
-from .config import SERVER_URL, describe_reconnect, reconnect_config
+from .config import describe_reconnect, reconnect_config
 from .connection import (
     OpcuaConnection,
     describe_error,
@@ -46,20 +46,19 @@ from .limits import (
     history_was_clipped,
 )
 from .node_ids import canonical_node_id
-from .node_metadata import AnalogInfo, NodeMetadata
+from .node_metadata import AnalogInfo
 from .notices import notice
 from .policy import (
     ValueBound,
     as_number,
     describe_policy,
     format_number,
-    tool_policy,
     values_at,
 )
 from .records import history_records, scalar_to_json, variant_to_json
 from .security import describe_security, security_config
+from .state import ServerState
 from .subscriptions import (
-    SUBSCRIPTIONS,
     resolve_filter,
     unknown_subscription_message,
     unknown_subscriptions_message,
@@ -67,17 +66,6 @@ from .subscriptions import (
 from .validation import validate_arguments
 from .variant_codec import convert_for_variant
 from .version import package_version
-
-_CAPABILITIES: dict[str, Any] = {
-    "history": False,
-    "history_events": False,
-    "aggregate_functions": {},
-}
-
-#: What each node published about its own number, for the life of one session.
-#: Module-level for the same reason `_CAPABILITIES` is, and dropped by `_bind`
-#: for the same reason: a restarted server may not be the same server.
-_NODE_METADATA = NodeMetadata()
 
 
 def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -179,13 +167,8 @@ def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-#: Where the audit trail is written. stderr-only until `main` replaces it, which
-#: is the one place allowed to fail on a bad ``OPCUA_AUDIT_FILE`` — a server
-#: imported as a module (the tests do) must not need the environment to be right.
-_AUDIT = AuditSink()
-
-
 def _audit_decision(
+    state: ServerState,
     name: str,
     arguments: dict[str, Any],
     decision: str,
@@ -225,20 +208,20 @@ def _audit_decision(
         # stable across a server restart — that is the whole reason the `nsu=`
         # allowlist form exists — so "a write to ns=2;i=5 was allowed" is only
         # interpretable later alongside where it went and over which session.
-        "endpoint": SERVER_URL,
-        "session": _CONNECTION.session_id if _CONNECTION is not None else None,
+        "endpoint": state.url,
+        "session": state.session_id,
         # On whose behalf, as the deployment chose to record it. null when
         # OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion
         # of who is calling, and a name nothing verified would be worse than none.
         "operator": operator_id(),
-        "profile": tool_policy().config.profile,
+        "profile": state.policy.config.profile,
         "tool": name,
         "decision": decision,
         **_audit_targets(spec, arguments),
     }
     if reason:
         record["reason"] = reason
-    _AUDIT.write(record)
+    state.audit.write(record)
 
 
 #: What ``Tool.run`` puts in front of a ToolError raised inside a tool body.
@@ -272,13 +255,7 @@ def _without_sdk_prefix(name: str, error: BaseException) -> BaseException:
     return unwrapped
 
 
-#: The one connection the tools, the lifespan and tools/list share. Module-level
-#: for the same reason `SUBSCRIPTIONS` is: `list_tools` is handed no `Context`,
-#: so it cannot reach the lifespan state to refresh its capability probes.
-_CONNECTION: OpcuaConnection | None = None
-
-
-def _bind(state: dict, client) -> None:
+def _bind(state: ServerState, context: dict, client) -> None:
     """Point everything that holds a client at the one just established.
 
     Called by the connection whenever it produces a client — at startup and
@@ -291,44 +268,39 @@ def _bind(state: dict, client) -> None:
     session is the only moment the answer can have changed, so the catalogue is
     recomputed exactly then rather than on every catalogue request.
     """
-    state["opcua_client"] = client
-    SUBSCRIPTIONS.reattach(client)
+    context["opcua_client"] = client
+    state.subscriptions.reattach(client)
     # A new session may be a restarted server, whose nodes are not necessarily
     # the nodes the old ids named. What each one said about its unit and its
     # range was true of the session that said it.
-    _NODE_METADATA.forget()
-    _probe_capabilities(client)
+    state.node_metadata.forget()
+    _probe_capabilities(state, client)
 
 
-def _probe_capabilities(client) -> bool:
+def _probe_capabilities(state: ServerState, client) -> bool:
     """Read the optional capabilities off a live client. True if they changed.
 
     Best-effort by design: any failure yields "not supported" rather than an
     error, because an optional capability must never break `tools/list`.
     """
 
+    capabilities = state.capabilities
+
     def snapshot():
         return (
-            _CAPABILITIES["history"],
-            _CAPABILITIES["history_events"],
-            tuple(sorted(_CAPABILITIES["aggregate_functions"])),
+            capabilities["history"],
+            capabilities["history_events"],
+            tuple(sorted(capabilities["aggregate_functions"])),
         )
 
     before = snapshot()
-    _CAPABILITIES["history"] = _probe(client_supports_history, client, False)
-    _CAPABILITIES["history_events"] = _probe(client_supports_history_events, client, False)
-    _CAPABILITIES["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
+    capabilities["history"] = _probe(client_supports_history, client, False)
+    capabilities["history_events"] = _probe(client_supports_history_events, client, False)
+    capabilities["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
     return before != snapshot()
 
 
-def _forget_capabilities() -> None:
-    """Drop what was probed, because the session it was true of is gone."""
-    _CAPABILITIES["history"] = False
-    _CAPABILITIES["history_events"] = False
-    _CAPABILITIES["aggregate_functions"] = {}
-
-
-def _connect_and_probe(connection: OpcuaConnection) -> None:
+def _connect_and_probe(state: ServerState, connection: OpcuaConnection) -> None:
     """Open the first connection and read its capabilities.
 
     One connection attempt for both probes, not one each: against a server that
@@ -339,7 +311,7 @@ def _connect_and_probe(connection: OpcuaConnection) -> None:
     :meth:`PolicyMCPServer.list_tools` for why a catalogue request must not wait
     on a socket.
     """
-    _forget_capabilities()
+    state.forget_capabilities()
     try:
         connection.ensure_connected()
     except Exception:
@@ -361,18 +333,32 @@ def _probe(read, client, fallback):
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
 async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
-    """Handle OPC UA client connection lifecycle."""
-    global _CONNECTION
-    connection = OpcuaConnection(SERVER_URL)
-    _CONNECTION = connection
-    state: dict = {"opcua_client": None, "opcua_connection": connection}
-    connection.on_client_replaced = lambda client: _bind(state, client)
+    """Handle OPC UA client connection lifecycle.
+
+    ``server`` is the :class:`PolicyMCPServer` this lifespan belongs to, and its
+    :attr:`~PolicyMCPServer.state` is what everything here reads and fills in.
+    That is the whole of #116: the connection, the capability answers and the
+    managers belong to one server instance rather than to the module, so a second
+    instance in one process gets its own and a stopped one leaves nothing behind.
+
+    The state is also put in the context dict, because the tools are handed a
+    ``Context`` and no ``self``. It is the same object, not a copy.
+    """
+    state = server.state
+    connection = OpcuaConnection(state.url, policy=state.policy)
+    state.connection = connection
+    context: dict = {
+        "opcua_client": None,
+        "opcua_connection": connection,
+        "state": state,
+    }
+    connection.on_client_replaced = lambda client: _bind(state, context, client)
 
     # In a thread: python-opcua is synchronous, and for a secured connection even
     # building the client fetches the server's certificate from its endpoint
     # list, so this blocks on the network too. Connecting and probing are one
     # call so a server that is down costs one round of backoff, not two.
-    await asyncio.to_thread(_connect_and_probe, connection)
+    await asyncio.to_thread(_connect_and_probe, state, connection)
     if not connection.connected:
         # Deliberately not fatal. An MCP client starts this server when *it*
         # starts, which may be long before the plant network is reachable; dying
@@ -386,47 +372,21 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         )
 
     try:
-        yield state
+        yield context
     finally:
         # Drop the subscriptions before the session that carries them —
         # the event ones as much as the data-change ones. Disconnecting first
         # would leave the OPC UA server publishing to nobody until each
         # subscription's lifetime expired.
-        await asyncio.to_thread(SUBSCRIPTIONS.close_all)
-        await asyncio.to_thread(_EVENTS.close_all)
+        await asyncio.to_thread(state.subscriptions.close_all)
+        await asyncio.to_thread(state.events.close_all)
         # Disconnect from OPC UA server on shutdown
         await asyncio.to_thread(connection.disconnect)
-        _CAPABILITIES["history"] = False
-        _CAPABILITIES["history_events"] = False
-        _CAPABILITIES["aggregate_functions"] = {}
-        _CONNECTION = None
+        state.forget_capabilities()
+        state.connection = None
 
 
-def _available_capabilities() -> set[str]:
-    """What the connected OPC UA server reports it can do."""
-    available = set()
-    if _CAPABILITIES["history"]:
-        available.add("history")
-    if _CAPABILITIES["history_events"]:
-        available.add("historyEvents")
-    if _CAPABILITIES["aggregate_functions"]:
-        available.add("aggregate")
-    return available
-
-
-def _capabilities_met(spec: dict) -> bool:
-    """Whether a tool's capability gate is satisfied.
-
-    A tool gated on capabilities is offered when the server reports *any* of
-    them. ``read_opcua_history`` lists both: a server with only aggregates can
-    still answer an aggregate read, and gating it on ``history`` alone would hide
-    the one thing such a server is good at.
-    """
-    required = spec.get("capabilities") or []
-    return not required or bool(set(required) & _available_capabilities())
-
-
-def _advertised_schema(spec: dict) -> dict:
+def _advertised_schema(state: ServerState, spec: dict) -> dict:
     """A tool's input schema as advertised: the contract's own, capability-gated.
 
     The contract's schema, not the one ``MCPServer`` derives from the function
@@ -454,7 +414,7 @@ def _advertised_schema(spec: dict) -> dict:
     if "aggregate_function" not in properties:
         return schema
 
-    functions = _CAPABILITIES["aggregate_functions"]
+    functions = state.capabilities["aggregate_functions"]
     if not functions:
         properties.pop("aggregate_function", None)
         properties.pop("processing_interval", None)
@@ -465,7 +425,17 @@ def _advertised_schema(spec: dict) -> dict:
 
 
 class PolicyMCPServer(MCPServer):
-    """MCPServer whose advertised and callable tools obey deployment policy."""
+    """MCPServer whose advertised and callable tools obey deployment policy.
+
+    Owns a :class:`ServerState` (#116). ``list_tools`` and ``call_tool`` reach it
+    through ``self``, which is the answer to the question the old module globals
+    were the wrong answer to: they existed because ``list_tools`` is handed no
+    ``Context``, and a method has ``self`` whether or not it has a context.
+    """
+
+    def __init__(self, *args, state: ServerState | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.state = state if state is not None else ServerState()
 
     async def list_tools(self):
         """The catalogue, from what the *current* session was found to support.
@@ -489,7 +459,7 @@ class PolicyMCPServer(MCPServer):
         docs/architecture.md. The catalogue is re-listable at any time and this
         is what both runtimes can honestly promise.
         """
-        policy = tool_policy()
+        policy = self.state.policy
         specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
         listed = await super().list_tools()
         visible = []
@@ -497,7 +467,7 @@ class PolicyMCPServer(MCPServer):
             spec = specs[tool.name]
             if not policy.is_visible(spec):
                 continue
-            if not _capabilities_met(spec):
+            if not self.state.capabilities_met(spec):
                 continue
             annotations = ToolAnnotations(**spec["annotations"])
             output_schema = None
@@ -513,7 +483,7 @@ class PolicyMCPServer(MCPServer):
                     update={
                         "annotations": annotations,
                         "output_schema": output_schema,
-                        "input_schema": _advertised_schema(spec),
+                        "input_schema": _advertised_schema(self.state, spec),
                     }
                 )
             )
@@ -535,10 +505,12 @@ class PolicyMCPServer(MCPServer):
             validate_arguments(name, spec["inputSchema"], arguments)
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
-            tool_policy().authorize(name, arguments)
-            _audit_decision(name, arguments, "allowed", call_id=call_id, attempt=1)
+            self.state.policy.authorize(name, arguments)
+            _audit_decision(self.state, name, arguments, "allowed", call_id=call_id, attempt=1)
         except (PermissionError, ValueError) as exc:
-            _audit_decision(name, arguments, "denied", str(exc), call_id=call_id, attempt=1)
+            _audit_decision(
+                self.state, name, arguments, "denied", str(exc), call_id=call_id, attempt=1
+            )
             raise ToolError(str(exc)) from exc
 
         # The outcome, not only the decision. "Permitted" and "happened" are
@@ -552,6 +524,7 @@ class PolicyMCPServer(MCPServer):
             reported = _without_sdk_prefix(name, error)
             if not call.denied:
                 _audit_decision(
+                    self.state,
                     name,
                     arguments,
                     "failed",
@@ -560,17 +533,19 @@ class PolicyMCPServer(MCPServer):
                     attempt=call.attempt,
                 )
             raise reported from error.__cause__
-        _audit_decision(name, arguments, "completed", call_id=call_id, attempt=call.attempt)
+        _audit_decision(
+            self.state, name, arguments, "completed", call_id=call_id, attempt=call.attempt
+        )
         return result
 
     async def _run_tool(self, call: _Call, context):
         name, arguments = call.name, call.arguments
         # The one tool that must answer while the connection is down: it exists
         # to say so, and reaches for the connection itself.
-        if name == "get_server_status" or _CONNECTION is None:
+        connection = self.state.connection
+        if name == "get_server_status" or connection is None:
             return await super().call_tool(name, arguments, context)
 
-        connection = _CONNECTION
         # Connect *before* the capability gate, not after. The capability map is
         # filled in by the reconnect callback, so on a process that started while
         # the plant was unreachable it still holds its startup defaults — and
@@ -585,7 +560,7 @@ class PolicyMCPServer(MCPServer):
         # session died" from "someone else already replaced it".
         call.session = connection.session_id
 
-        if not _capabilities_met(call.spec):
+        if not self.state.capabilities_met(call.spec):
             raise ToolError(
                 error_message(
                     "capabilityMissing", capabilities=", ".join(call.spec["capabilities"])
@@ -659,33 +634,35 @@ class PolicyMCPServer(MCPServer):
         # allowed (issue #105). It touches no network.
         call.attempt = 2
         try:
-            tool_policy().authorize(name, arguments)
+            self.state.policy.authorize(name, arguments)
         except (PermissionError, ValueError) as exc:
             call.denied = True
-            _audit_decision(name, arguments, "denied", str(exc), call_id=call.call_id, attempt=2)
+            _audit_decision(
+                self.state, name, arguments, "denied", str(exc), call_id=call.call_id, attempt=2
+            )
             raise ToolError(str(exc)) from exc
-        _audit_decision(name, arguments, "allowed", call_id=call.call_id, attempt=2)
+        _audit_decision(self.state, name, arguments, "allowed", call_id=call.call_id, attempt=2)
 
         return await super().call_tool(name, arguments, context)
 
 
-# Create an MCP server instance. The server identity must match the Node server's
-# so both runtimes present themselves as the same product to MCP clients, and the
-# version must be a real one rather than the null the Node server never reports.
-mcp = PolicyMCPServer("opcua-mcp-server", version=package_version(), lifespan=opcua_lifespan)
-
-
 # --- helpers shared by the tool bodies ------------------------------------------
+
+
+def _state(ctx: Context) -> ServerState:
+    """This server's state, as a tool body reaches it.
+
+    The tools are handed a ``Context`` and no ``self``, so they come at the state
+    through the lifespan rather than through the instance. It is the same object
+    :attr:`PolicyMCPServer.state` returns, put there by :func:`opcua_lifespan`.
+    """
+    return ctx.request_context.lifespan_context["state"]
+
 
 _TRAVERSAL = CONTRACT["traversal"]
 
 #: The standard Root folder, which an absolute browse path is written from.
 _ROOT_FOLDER = "ns=0;i=84"
-
-#: The event buffers, module-level for the same reason `SUBSCRIPTIONS` is: a
-#: resource handler and `list_tools` are handed no `Context` to reach them
-#: through.
-_EVENTS = events.EventSubscriptions()
 
 
 def _clamp_int(value: int, low: int, high: int) -> int:
@@ -765,7 +742,6 @@ def _object_result(record: Any) -> CallToolResult:
 # --- reading --------------------------------------------------------------------
 
 
-@mcp.tool(description=DESC["read_opcua_nodes"])
 def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
     """
     Read the current value of one or more OPC UA nodes in a single request.
@@ -801,7 +777,7 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
         )
         # Two extra round trips on a cold cache for the whole batch, none on a
         # warm one, and never a reason for the read to fail. See node_metadata.
-        engineering = _NODE_METADATA.for_nodes(client, node_ids)
+        engineering = _state(ctx).node_metadata.for_nodes(client, node_ids)
         return [
             _node_value_record(node_id, data_value, engineering.get(node_id))
             for node_id, data_value in zip(node_ids, values, strict=True)
@@ -852,7 +828,7 @@ def read_opcua_history(
     if start_time is None:
         raise ToolError(error_message("aggregateNeedsStart"))
 
-    aggregate_functions = _CAPABILITIES["aggregate_functions"]
+    aggregate_functions = _state(ctx).capabilities["aggregate_functions"]
     # Both runtimes reject an unsupported function with the same sentence, so the
     # message is part of the contract and must reach the client rather than be
     # masked as a crash — hence ToolError. See `validate_aggregate_function`.
@@ -888,10 +864,8 @@ def read_opcua_history(
 # Registered once; tools/list gates it using the capabilities read from the
 # lifecycle's active session. This avoids network I/O during import and prevents
 # startup from opening throwaway OPC UA sessions.
-read_opcua_history = mcp.tool(description=DESC["read_opcua_history"])(read_opcua_history)
 
 
-@mcp.tool(description=DESC["read_event_history"])
 def read_event_history(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
@@ -931,7 +905,6 @@ def read_event_history(
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
-@mcp.tool(description=DESC["get_server_status"])
 def get_server_status(ctx: Context) -> CallToolResult:
     """
     Report connection state, server status and the namespace array.
@@ -1204,7 +1177,6 @@ def _fill_variable_detail(client, records: list[dict]) -> None:
         record["description"] = text if text else None
 
 
-@mcp.tool(description=DESC["browse_opcua_nodes"])
 def browse_opcua_nodes(
     ctx: Context,
     node_id: str = _TRAVERSAL["rootNodeId"],
@@ -1333,7 +1305,6 @@ def browse_opcua_nodes(
 # --- writing ---------------------------------------------------------------------
 
 
-@mcp.tool(description=DESC["write_opcua_nodes"])
 def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     """
     Write a value to one or more OPC UA nodes.
@@ -1352,7 +1323,8 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     if not nodes:
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     client = ctx.request_context.lifespan_context["opcua_client"]
-    policy = tool_policy()
+    state = _state(ctx)
+    policy = state.policy
     bounds = {
         index: policy.bound_for(str(node.get("node_id", ""))) for index, node in enumerate(nodes)
     }
@@ -1390,7 +1362,7 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         # Before anything is sent, and raising rather than marking one record:
         # the whole batch is refused so it can never end up partially applied,
         # which is the property the identity allowlist already had.
-        check_write_bounds(nodes, bounds, current, client)
+        check_write_bounds(state, nodes, bounds, current, client)
 
         write_ids = []
         write_values = []
@@ -1522,6 +1494,7 @@ def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: An
 
 
 def check_write_bounds(
+    state: ServerState,
     nodes: list[dict[str, Any]],
     bounds: dict[int, ValueBound | None],
     current: dict[int, Any],
@@ -1537,8 +1510,8 @@ def check_write_bounds(
     node_ids = [str(node.get("node_id", "")) for node in nodes]
     engineering = (
         {}
-        if tool_policy().config.allow_out_of_range_writes
-        else _NODE_METADATA.for_nodes(client, node_ids)
+        if state.policy.config.allow_out_of_range_writes
+        else state.node_metadata.for_nodes(client, node_ids)
     )
     for index, node in enumerate(nodes):
         node_id = node_ids[index]
@@ -1594,7 +1567,6 @@ def _guess_variant(value: Any) -> Any:
             return text
 
 
-@mcp.tool(description=DESC["call_opcua_method"])
 def call_opcua_method(
     object_node_id: str,
     method_node_id: str,
@@ -1660,7 +1632,6 @@ def call_opcua_method(
 # --- data-change subscriptions ---------------------------------------------------
 
 
-@mcp.tool(description=DESC["subscribe_opcua_nodes"])
 async def subscribe_opcua_nodes(
     node_ids: list[str],
     ctx: Context,
@@ -1690,7 +1661,8 @@ async def subscribe_opcua_nodes(
     # unsubscribe take the whole thing down — and it is also what makes an
     # unbounded subscribe ask a PLC for one subscription per node, past whatever
     # it is willing to hold, with nothing here counting them.
-    active = len(SUBSCRIPTIONS.list())
+    subscriptions = _state(ctx).subscriptions
+    active = len(subscriptions.list())
     if active + len(node_ids) > MAX_SUBSCRIPTIONS:
         raise ToolError(
             error_message(
@@ -1706,7 +1678,7 @@ async def subscribe_opcua_nodes(
         # subscription is created, so a batch is refused whole rather than
         # leaving some nodes monitored and some not.
         client = ctx.request_context.lifespan_context["opcua_client"]
-        engineering = _NODE_METADATA.for_nodes(client, node_ids)
+        engineering = _state(ctx).node_metadata.for_nodes(client, node_ids)
         for node_id in node_ids:
             info = engineering.get(node_id)
             if info is None or info.eu_range is None:
@@ -1721,7 +1693,7 @@ async def subscribe_opcua_nodes(
         try:
             records.append(
                 await asyncio.to_thread(
-                    SUBSCRIPTIONS.subscribe,
+                    subscriptions.subscribe,
                     node_id,
                     publishing_interval,
                     sampling_interval,
@@ -1736,8 +1708,7 @@ async def subscribe_opcua_nodes(
     return records
 
 
-@mcp.tool(description=DESC["list_subscriptions"])
-def list_subscriptions() -> list[dict]:
+def list_subscriptions(ctx: Context) -> list[dict]:
     """
     List the active OPC UA data-change subscriptions and their buffered changes.
 
@@ -1748,11 +1719,10 @@ def list_subscriptions() -> list[dict]:
     """
     # No thread hop and no OPC UA call: this reads buffers already filled by
     # python-opcua's publishing thread, so it answers even if the server is down.
-    return SUBSCRIPTIONS.list()
+    return _state(ctx).subscriptions.list()
 
 
-@mcp.tool(description=DESC["unsubscribe_opcua_nodes"])
-async def unsubscribe_opcua_nodes(subscription_ids: list[str]) -> list[dict]:
+async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> list[dict]:
     """
     Cancel one or more subscriptions, reporting each as it was when cancelled.
 
@@ -1769,7 +1739,8 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str]) -> list[dict]:
         raise ToolError(
             error_message("emptyArray", tool="unsubscribe_opcua_nodes", argument="subscription_ids")
         )
-    active = {record["subscription_id"] for record in SUBSCRIPTIONS.list()}
+    subscriptions = _state(ctx).subscriptions
+    active = {record["subscription_id"] for record in subscriptions.list()}
     unknown = [entry for entry in subscription_ids if entry not in active]
     if unknown:
         # Both runtimes word an unknown ID identically; see subscriptions.py.
@@ -1778,7 +1749,7 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str]) -> list[dict]:
     records = []
     for subscription_id in subscription_ids:
         try:
-            records.append(await asyncio.to_thread(SUBSCRIPTIONS.unsubscribe, subscription_id))
+            records.append(await asyncio.to_thread(subscriptions.unsubscribe, subscription_id))
         except KeyError as e:
             raise ToolError(unknown_subscription_message(subscription_id)) from e
         except RuntimeError as e:
@@ -1788,27 +1759,9 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str]) -> list[dict]:
     return records
 
 
-# Resource: the same subscription records, re-readable without a tool call.
-#
-# No `ctx: Context` parameter — MCPServer refuses to inject one into a static
-# resource — which is why the manager is module-level state rather than
-# something held in the lifespan context.
-@mcp.resource(
-    SUBSCRIPTIONS_RESOURCE["uri"],
-    name=SUBSCRIPTIONS_RESOURCE["name"],
-    description=SUBSCRIPTIONS_RESOURCE["description"],
-    mime_type=SUBSCRIPTIONS_RESOURCE["mimeType"],
-)
-def subscriptions_resource() -> str:
-    """The active subscriptions and their buffered changes, as JSON."""
-    key = SUBSCRIPTIONS_RESOURCE["body"]["recordsKey"]
-    return json.dumps({key: SUBSCRIPTIONS.list()}, indent=2)
-
-
 # --- events and Alarms & Conditions -----------------------------------------------
 
 
-@mcp.tool(description=DESC["subscribe_events"])
 def subscribe_events(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
@@ -1829,7 +1782,7 @@ def subscribe_events(
     buffer_size = buffer_size or events.DEFAULTS["bufferSize"]
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
-        replaced = _EVENTS.subscribe(client, node_id, severity_min, buffer_size)
+        replaced = _state(ctx).events.subscribe(client, node_id, severity_min, buffer_size)
     except Exception as e:
         raise ToolError(
             error_message("eventSubscribeFailed", node_id=node_id, reason=describe_error(e))
@@ -1844,8 +1797,8 @@ def subscribe_events(
     )
 
 
-@mcp.tool(description=DESC["read_events"])
 def read_events(
+    ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
     limit: int = events.DEFAULTS["readLimit"],
 ) -> CallToolResult:
@@ -1856,7 +1809,7 @@ def read_events(
         CallToolResult: Event records in text and structured form, plus a
             plain-text compatibility notice when the buffer overflowed.
     """
-    drained = _EVENTS.drain(node_id, limit or events.DEFAULTS["readLimit"])
+    drained = _state(ctx).events.drain(node_id, limit or events.DEFAULTS["readLimit"])
     if drained is None:
         raise ToolError(error_message("notSubscribedToEvents", node_id=node_id))
     records, _remaining, dropped, size = drained
@@ -1868,7 +1821,6 @@ def read_events(
     return CallToolResult(content=content, structured_content={"result": records})
 
 
-@mcp.tool(description=DESC["list_active_alarms"])
 def list_active_alarms(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
@@ -1888,11 +1840,10 @@ def list_active_alarms(
         raise ToolError(
             error_message("alarmsFailed", node_id=node_id, reason=describe_error(e))
         ) from e
-    _EVENTS.remember(alarms)
+    _state(ctx).events.remember(alarms)
     return alarms
 
 
-@mcp.tool(description=DESC["acknowledge_alarm"])
 def acknowledge_alarm(
     event_id: str,
     ctx: Context,
@@ -1905,7 +1856,7 @@ def acknowledge_alarm(
     Returns:
         CallToolResult: One record of ``resultShapes.acknowledgement``.
     """
-    condition = condition_id or _EVENTS.condition_for(event_id)
+    condition = condition_id or _state(ctx).events.condition_for(event_id)
     if not condition:
         raise ToolError(error_message("unknownEventId", event_id=event_id))
 
@@ -1925,7 +1876,6 @@ def acknowledge_alarm(
     )
 
 
-@mcp.tool(description=DESC["act_on_alarm"])
 def act_on_alarm(
     event_id: str,
     action: str,
@@ -1949,7 +1899,7 @@ def act_on_alarm(
     if action != "shelveFor" and shelve_duration_ms is not None:
         raise ToolError(error_message("shelveDurationNotAllowed", action=action))
 
-    condition = condition_id or _EVENTS.condition_for(event_id)
+    condition = condition_id or _state(ctx).events.condition_for(event_id)
     if not condition:
         raise ToolError(error_message("unknownEventId", event_id=event_id))
 
@@ -1972,6 +1922,81 @@ def act_on_alarm(
     )
 
 
+# --- building a server ------------------------------------------------------------
+
+#: The tools, in the order they are registered. Names rather than the functions
+#: themselves so the registration and the contract can be compared directly:
+#: `tests/unit/test_contract.py` asserts this list against `contract/tools.json`,
+#: which is what stops a tool being defined and never registered — a failure that
+#: is otherwise invisible, because an unregistered tool is simply a tool the
+#: server does not have.
+TOOL_NAMES: tuple[str, ...] = (
+    "read_opcua_nodes",
+    "browse_opcua_nodes",
+    "read_opcua_history",
+    "read_event_history",
+    "get_server_status",
+    "list_subscriptions",
+    "list_active_alarms",
+    "write_opcua_nodes",
+    "call_opcua_method",
+    "subscribe_opcua_nodes",
+    "unsubscribe_opcua_nodes",
+    "subscribe_events",
+    "read_events",
+    "acknowledge_alarm",
+    "act_on_alarm",
+)
+
+
+def create_server(state: ServerState | None = None) -> PolicyMCPServer:
+    """One MCP server, with its own state and its own registered tools (#116).
+
+    Registration happens here rather than through module-level decorators,
+    because a decorator binds a tool to whichever instance existed at import.
+    With one instance that is invisible; with two it means the second server has
+    no tools. Threading the state through the lifespan was only half of making
+    this instantiable twice — this is the other half.
+
+    The server identity must match the Node server's, so both runtimes present
+    themselves as the same product to MCP clients, and the version must be a real
+    one rather than the null the Node server never reports.
+    """
+    mcp = PolicyMCPServer(
+        "opcua-mcp-server",
+        version=package_version(),
+        lifespan=opcua_lifespan,
+        state=state,
+    )
+    for name in TOOL_NAMES:
+        mcp.tool(description=DESC[name])(globals()[name])
+
+    # The same subscription records as `list_subscriptions`, re-readable without a
+    # tool call. A closure rather than a module-level function because `MCPServer`
+    # refuses to inject a `Context` into a static resource — which is exactly why
+    # the subscription manager used to be module-level state. Closing over the
+    # server gives it the one thing it needs without giving the module a
+    # singleton.
+    @mcp.resource(
+        SUBSCRIPTIONS_RESOURCE["uri"],
+        name=SUBSCRIPTIONS_RESOURCE["name"],
+        description=SUBSCRIPTIONS_RESOURCE["description"],
+        mime_type=SUBSCRIPTIONS_RESOURCE["mimeType"],
+    )
+    def subscriptions_resource() -> str:
+        """The active subscriptions and their buffered changes, as JSON."""
+        key = SUBSCRIPTIONS_RESOURCE["body"]["recordsKey"]
+        return json.dumps({key: mcp.state.subscriptions.list()}, indent=2)
+
+    return mcp
+
+
+#: The instance the console script serves. One per process is what a stdio MCP
+#: server is; what changed in #116 is that this is now an instance rather than the
+#: only possible one.
+mcp = create_server()
+
+
 # Run the server
 def main() -> None:
     """Run the MCP server on stdio.
@@ -1985,10 +2010,9 @@ def main() -> None:
     # Fail fast and readably on a bad security configuration: an MCP client only
     # ever shows the server's stderr, so letting it surface from a best-effort
     # capability probe (which swallows it) would leave nothing to go on.
-    global _AUDIT
     try:
         security_config()
-        policy = tool_policy()
+        policy = mcp.state.policy
         reconnect = reconnect_config()
         # Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
         # cannot be given one has to be told now, not at the first control call
@@ -1997,7 +2021,7 @@ def main() -> None:
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
-    _AUDIT = audit
+    mcp.state.audit = audit
 
     print(f"Tool policy: {describe_policy(policy)}", file=sys.stderr)
     print(f"Control audit: {describe_audit(audit)}", file=sys.stderr)

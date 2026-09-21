@@ -57,7 +57,7 @@ from opcua import Client, ua
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
 from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID
 from .errors import message
-from .policy import tool_policy
+from .policy import ToolPolicy, tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
 from .transport_limits import install_receive_guard
 
@@ -181,9 +181,22 @@ class _Rebuild:
 class OpcuaConnection:
     """The OPC UA client this server talks through, and its recovery."""
 
-    def __init__(self, url: str, config: ReconnectConfig | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        config: ReconnectConfig | None = None,
+        policy: ToolPolicy | None = None,
+    ) -> None:
         self._url = url
         self._config = config or reconnect_config()
+        #: The policy whose namespace mapping this connection re-binds on every
+        #: (re)connect. Injected rather than fetched, and it has to be the same
+        #: object the server authorizes against: binding one policy and
+        #: authorizing against another would leave every `nsu=<uri>;i=…` allowlist
+        #: entry unresolved and so denied. That used to hold because
+        #: `tool_policy()` memoised one instance for the process; it holds now
+        #: because `ServerState` owns one and passes it here (#116).
+        self._policy = policy if policy is not None else tool_policy()
         #: Guards ``_client`` and ``_rebuilding``, and nothing else. Deliberately
         #: a plain ``Lock``: it is never held across a network call or a sleep, so
         #: there is nothing re-entrant left to support, and a plain lock is one
@@ -300,12 +313,11 @@ class OpcuaConnection:
         self._bind_policy_namespaces(client)
         return client
 
-    @staticmethod
-    def _bind_policy_namespaces(client: Client) -> None:
+    def _bind_policy_namespaces(self, client: Client) -> None:
         """Tell the tool policy which namespace URI is at which index here."""
         try:
             uris = client.get_node(NAMESPACE_ARRAY_NODE_ID).get_value()
-            tool_policy().bind_namespaces([str(uri) for uri in (uris or [])])
+            self._policy.bind_namespaces([str(uri) for uri in (uris or [])])
         except Exception as error:
             print(
                 "WARNING: could not read the server's NamespaceArray, so policy entries "

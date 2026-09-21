@@ -12,7 +12,7 @@ import { realpathSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 
 import { AUDIT_FILE_ENV, AuditSink, describeAudit } from "./audit.js";
-import { describeReconnect, reconnectConfig } from "./config.js";
+import { SERVER_URL, describeReconnect, reconnectConfig } from "./config.js";
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
 import { parseArgs, runCli } from "./install.js";
@@ -31,11 +31,23 @@ console.log = (...args: any[]) => console.error(...args);
 /** Wires the MCP protocol surface to the OPC UA tools. */
 class OPCUAMCPServer {
   private server: Server;
-  private conn = new OpcuaConnection();
+  private conn: OpcuaConnection;
   private tools: OpcuaTools;
 
   constructor(audit: AuditSink = new AuditSink()) {
-    this.tools = new OpcuaTools(this.conn, toolPolicy(), audit);
+    // One policy object, wired into both halves rather than fetched twice.
+    //
+    // This is the part of #116 that is not cosmetic. The connection re-binds the
+    // policy's namespace mapping on every (re)connect, and the tools authorize
+    // against it — so they have to be the *same* object. They used to be, only
+    // because `toolPolicy()` memoised one for the process: two independent calls
+    // that happened to return one instance. Constructing it here and passing it
+    // down makes that a property of the wiring instead of a property of a cache,
+    // which is what lets a second instance exist without the two silently
+    // authorizing against different namespace mappings.
+    const policy = toolPolicy();
+    this.conn = new OpcuaConnection(SERVER_URL, policy, reconnectConfig());
+    this.tools = new OpcuaTools(this.conn, policy, audit);
     this.server = new Server(
       {
         name: "opcua-mcp-server",

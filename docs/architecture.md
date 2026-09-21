@@ -44,6 +44,45 @@ twice and fixed twice. The answer is not to drop one but to keep pushing decisio
 schema, the retry policy — so each runtime shrinks toward a thin adapter over its
 own client library, and the thing that has to be written twice gets smaller.
 
+**One structural difference used to survive all of that**, because the contract
+pins the tool surface and the tests pin the semantics and neither pins the shape
+of the code. Node kept its state on objects — the connection, the tools and the
+policy constructed in `index.ts` and passed down — while Python kept the same
+state in module globals: the connection, the capability answers, the subscription
+and event managers, the per-session node metadata, the audit sink, and a memoised
+policy. So the Python server could not be instantiated twice in one process and
+the Node one nearly could.
+
+Both are instance-scoped now (#116). Python's state lives on a `ServerState` that
+`PolicyMCPServer` owns; `list_tools` and `call_tool` reach it through `self`, and
+the tools reach the same object through the lifespan context. The globals had been
+justified on the grounds that `list_tools` is handed no `Context` — which is an
+argument for putting them on the server instance, not in the module. Tool
+*registration* moved into `create_server()` for the second half of the same
+reason: a module-level `@mcp.tool` decorator binds a tool to whichever instance
+existed at import, so with two instances the second would have had no tools at
+all. On the Node side the two memoised singletons (`policy.ts` and `config.ts`)
+became plain factories, with `index.ts` constructing one policy and passing it to
+both halves.
+
+That last part is not cosmetic, and it is the one place this refactor could have
+introduced a bug rather than only moving code. The connection re-binds the
+policy's namespace mapping on every (re)connect and `call_tool` authorizes against
+it, so the two have to be the *same object* — otherwise an `nsu=<uri>;i=…`
+allowlist entry is bound on one policy and resolved against another that has never
+seen a NamespaceArray, and every write to it is silently denied. That held before
+only because both callers happened to receive one memoised instance. It holds now
+because the state owns one and hands it over. `tests/e2e/test_policy_e2e.py` drives
+the `nsu=` form end to end on both runtimes for the first time, which is what turns
+that from a claim into a check — it had no end-to-end coverage at all before,
+because the bundled mock created its nodes at a bare namespace index without
+publishing a URI for it. The mock registers one now.
+
+None of this changes behaviour today; one stdio server per process is what MCP
+asks for. What changed is that this is now one instance rather than the only
+possible one, which is the precondition for pooled sessions and per-endpoint
+policy.
+
 That interchangeability is not maintained by discipline. It is maintained by
 `contract/tools.json`, the single source of truth for the tool surface:
 

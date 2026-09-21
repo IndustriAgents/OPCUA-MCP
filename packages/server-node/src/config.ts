@@ -85,12 +85,16 @@ export function reconnectBudgetMs(config: ReconnectConfig): number {
   return Math.max(total, config.initialDelay);
 }
 
-let cached: ReconnectConfig | null = null;
-
-/** The process-wide reconnection settings, parsed once. */
+/** Reconnection settings read from the environment.
+ *
+ * Uncached, for the reason given on `toolPolicy()`: a memoised instance is what
+ * made per-process state structural. These are immutable once parsed, so unlike
+ * the policy nothing depends on two holders having the same object — but a
+ * module-level cache here would still be a second thing to unpick before a
+ * process can serve two endpoints.
+ */
 export function reconnectConfig(): ReconnectConfig {
-  if (!cached) cached = parseReconnectConfig(process.env);
-  return cached;
+  return parseReconnectConfig(process.env);
 }
 
 /** One-line, secret-free summary for the startup log. */

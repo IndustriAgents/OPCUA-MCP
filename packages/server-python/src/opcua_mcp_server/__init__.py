@@ -25,8 +25,8 @@ from .security import (
     parse_security_config,
     security_config,
 )
+from .state import ServerState
 from .subscriptions import (
-    SUBSCRIPTIONS,
     SubscriptionManager,
     delete_failed_message,
     resolve_options,
@@ -39,9 +39,9 @@ __all__ = [
     "HISTORY_NODE_ID",
     "RESOURCES",
     "SERVER_URL",
-    "SUBSCRIPTIONS",
     "EventSubscriptions",
     "SecurityConfig",
+    "ServerState",
     "SubscriptionManager",
     "certificate_application_uri",
     "create_client",

@@ -468,7 +468,3 @@ def _delete_quietly(subscription: Any) -> None:
         subscription.delete()
     except Exception as error:
         print(f"Error deleting OPC UA subscription: {error}", file=sys.stderr)
-
-
-#: The one manager the tools and the `opcua://subscriptions` resource share.
-SUBSCRIPTIONS = SubscriptionManager()

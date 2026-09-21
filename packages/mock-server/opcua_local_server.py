@@ -115,8 +115,25 @@ class IndustrialControlSystem:
         self.alarm_reason = ""
         self._alarm_was_active = False
 
+    #: The URI for namespace index 2, where every node in this mock lives.
+    #:
+    #: Registered rather than left implicit. python-opcua lets a node be created
+    #: at a bare index, so every node here sat at `ns=2` while the server's own
+    #: NamespaceArray listed only indexes 0 and 1 — a server whose node ids point
+    #: at a namespace it does not admit to having. Real servers publish a URI for
+    #: every namespace they use, and the `nsu=<uri>;i=…` policy allowlist form
+    #: exists precisely so an entry survives a server reordering them. Without a
+    #: URI here that form could not be exercised end to end at all.
+    NAMESPACE_URI = "http://examples.freeopcua.github.io"
+
     def setup_address_space(self):
         """Setup the OPC UA address space with industrial control structure."""
+
+        # Index 2, matching where every node below is created. Asserted rather
+        # than assumed: python-opcua appends, so a namespace registered earlier
+        # would silently shift this and leave every `ns=2` id pointing elsewhere.
+        index = self.server.register_namespace(self.NAMESPACE_URI)
+        assert index == 2, f"expected namespace index 2 for {self.NAMESPACE_URI}, got {index}"
 
         # Get the root object node
         objects = self.server.get_objects_node()

@@ -31,9 +31,9 @@ import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
 
-import { SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
+import { ReconnectConfig, SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
 import { CONTRACT } from "./contract.js";
-import { toolPolicy } from "./policy.js";
+import { ToolPolicy, toolPolicy } from "./policy.js";
 import {
   clientSecurityOptions,
   describeSecurity,
@@ -152,6 +152,25 @@ export function notConnectedMessage(url: string, reason: string): string {
 }
 
 export class OpcuaConnection {
+  /** Everything this connection used to read off a module-level singleton.
+   *
+   * The endpoint, the reconnection settings and the policy were all reached for
+   * globally — `SERVER_URL`, `reconnectConfig()`, `toolPolicy()` — which is what
+   * made "one connection per process" structural rather than merely current. A
+   * second endpoint would have needed a second process. They are constructor
+   * arguments now, defaulted to the same environment-derived values so nothing
+   * about a single-endpoint deployment changes.
+   *
+   * `policy` is held because a *reconnect* has to re-bind it: a restarted server
+   * may have loaded its namespaces in a different order, and a policy still
+   * holding the old mapping would authorize against the wrong nodes (#105).
+   */
+  constructor(
+    private readonly endpoint: string = SERVER_URL,
+    private readonly policy: ToolPolicy = toolPolicy(),
+    private readonly reconnectSettings: ReconnectConfig = reconnectConfig()
+  ) {}
+
   private opcuaClient: OPCUAClient | null = null;
   private connectPromise: Promise<void> | null = null;
   /** The rebuild in flight, so concurrent callers join it rather than start one. */
@@ -198,7 +217,7 @@ export class OpcuaConnection {
 
   /** The endpoint this server is configured to talk to. */
   get endpointUrl(): string {
-    return SERVER_URL;
+    return this.endpoint;
   }
 
   async connect(): Promise<void> {
@@ -220,7 +239,7 @@ export class OpcuaConnection {
         console.error(`WARNING: ${warning}`);
       }
 
-      const reconnect = reconnectConfig();
+      const reconnect = this.reconnectSettings;
       client = OPCUAClient.create({
         applicationName: "OPC UA MCP Client",
         connectionStrategy: {
@@ -244,7 +263,7 @@ export class OpcuaConnection {
       });
       this.watch(client);
 
-      await client.connect(SERVER_URL);
+      await client.connect(this.endpoint);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
       const session = await client.createSession(userIdentity(security));
@@ -375,7 +394,7 @@ export class OpcuaConnection {
     try {
       const value = await session.readVariableValue(CONTRACT.diagnostics.namespaceArrayNodeId);
       const uris: unknown = value?.value?.value ?? null;
-      toolPolicy().bindNamespaces(Array.isArray(uris) ? uris.map(String) : []);
+      this.policy.bindNamespaces(Array.isArray(uris) ? uris.map(String) : []);
     } catch (error) {
       console.error(
         `WARNING: could not read the server's NamespaceArray, so policy entries written as ` +
@@ -439,7 +458,7 @@ export class OpcuaConnection {
    * up.
    */
   private async awaitReconnection(): Promise<boolean> {
-    const deadline = Date.now() + reconnectBudgetMs(reconnectConfig());
+    const deadline = Date.now() + reconnectBudgetMs(this.reconnectSettings);
     while (Date.now() < deadline) {
       if (this.connected) return true;
       if (this.state !== "reconnecting") return false;

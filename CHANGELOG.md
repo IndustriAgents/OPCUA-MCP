@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Every reading now says what its number means** (#110). `AnalogItemType`
+  publishes `EngineeringUnits`, `EURange` and `InstrumentRange` — OPC UA Part 8
+  §5.3 introduces the first by citing the Mars Climate Orbiter — and nothing here
+  read them, so a model handed `51.75` could not tell °C from PSI from %, or a
+  reading from a trip. `resultShapes.nodeValues` gains an `engineering` field
+  carrying all three (`null` for a node that publishes none, which is most). It
+  costs two extra round trips for a whole batch on a cold cache — one
+  `TranslateBrowsePathsToNodeIds`, one `Read` — and none on a warm one; the cache
+  is dropped when the session is replaced.
+- **A write outside the range the plant itself published is refused** (#110),
+  before anything is sent. This is a safety bound the equipment declared rather
+  than one a human retyped into a policy file, and it is the only value bound that
+  exists on a deployment with no policy file at all.
+  `OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true` turns it off for the deployments —
+  commissioning, forcing a value during a test — that write outside normal
+  operation on purpose.
+
 ### Security
+- **The policy authorised nodes and never values** (#109). `writable_nodes` asked
+  one question: is this node on the list? An allowlisted setpoint then accepted
+  any number the variant codec would encode, so a model that correctly identified
+  the right node and hallucinated `9999` instead of `99.9` was fully authorised —
+  the codec range-checks integers and refuses a lossy Int64, but that is *type*
+  safety and `9999` is a perfectly good Double. A `writable_nodes` entry may now
+  be an object carrying `min`, `max`, `enum` or `max_change`; a bare node id stays
+  legal and means exactly what it meant. `min`, `max` and `enum` are decidable
+  from the call alone and are refused before the network is touched; `max_change`
+  is a bound on the *move* and is checked in the write path against the read the
+  type inference already does. Both these and the server's own `EURange` apply, so
+  a policy file can only ever narrow what the equipment allows, and one
+  out-of-bounds value rejects the whole batch as one forbidden target already did.
+
 - **A write was automatically re-sent after an outcome nobody knew** (#106). Both
   runtimes read `annotations.idempotentHint` as their transport retry policy, and
   `write_opcua_nodes` carries `idempotentHint: true` — correctly, because writing

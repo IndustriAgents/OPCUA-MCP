@@ -150,19 +150,37 @@ def test_result_shape_records_are_coherent(name):
     assert shape["type"] in {"array", "object"}, (
         f"{name} must describe a record or an array of them"
     )
-    record = record_schema(shape)
-    assert record["type"] == "object"
-    properties = record["properties"]
-    assert set(record["required"]) == set(properties), (
-        f"{name}: every field must be required, so neither server may omit one"
+    _assert_object_schema_is_strict(record_schema(shape), name)
+
+
+def _assert_object_schema_is_strict(schema: dict, where: str) -> None:
+    """Every field required, nothing extra allowed, everything documented.
+
+    Applied to nested objects too, not only the record: `nodeValues.engineering`
+    is an object of objects, and a nested field with no description or a nested
+    schema that allowed extras would be a place the two servers could diverge
+    with nothing looking.
+    """
+    assert "object" in _declared_types(schema), f"{where} must describe an object"
+    properties = schema["properties"]
+    assert set(schema["required"]) == set(properties), (
+        f"{where}: every field must be required, so neither server may omit one"
     )
-    assert record.get("additionalProperties") is False, (
-        f"{name}: extra fields must be forbidden, or the servers can still diverge"
+    assert schema.get("additionalProperties") is False, (
+        f"{where}: extra fields must be forbidden, or the servers can still diverge"
     )
     for field, spec in properties.items():
         assert spec.get("description", "").strip(), (
-            f"{name}.{field} has no description — the model relies on it"
+            f"{where}.{field} has no description — the model relies on it"
         )
+        if "properties" in spec:
+            _assert_object_schema_is_strict(spec, f"{where}.{field}")
+
+
+def _declared_types(schema: dict) -> set[str]:
+    """A schema's `type`, whether it is a name or a union with null."""
+    declared = schema.get("type")
+    return {declared} if isinstance(declared, str) else set(declared or [])
 
 
 # --- the Alarms & Conditions section -------------------------------------------

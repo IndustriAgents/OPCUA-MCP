@@ -50,6 +50,30 @@ def answer_writes_to_unknown_nodes():
     AttributeService.write = write
 
 
+def _engineering_units(display: str, description: str) -> ua.EUInformation:
+    """One ``EUInformation``, built field by field.
+
+    python-opcua's generated structures take no keyword arguments, so this is
+    what constructing one looks like. ``UnitId`` is the UNECE code the spec
+    points at — 4408652 is "CEL", degree Celsius — and a real server publishes
+    it, so a mock that omitted it would teach the wrong shape.
+    """
+    units = ua.EUInformation()
+    units.NamespaceUri = "http://www.opcfoundation.org/UA/units/un/cefact"
+    units.UnitId = 4408652
+    units.DisplayName = ua.LocalizedText(display)
+    units.Description = ua.LocalizedText(description)
+    return units
+
+
+def _range(low: float, high: float) -> ua.Range:
+    """One ``Range``, the two-number structure EURange and InstrumentRange are."""
+    value = ua.Range()
+    value.Low = low
+    value.High = high
+    return value
+
+
 class IndustrialControlSystem:
     """Mock Industrial Control System with sensors, actuators, and control methods."""
 
@@ -256,6 +280,49 @@ class IndustrialControlSystem:
         scratch_bool = parent_folder.add_variable(2, "ScratchBoolean", False)
         scratch_bool.set_writable(True)
         self.scratch_bool = scratch_bool
+
+        self._create_analog_scratch(parent_folder)
+
+    def _create_analog_scratch(self, parent_folder: Node):
+        """A scratch variable that says what its number *means*.
+
+        Every other node here is a bare value, which is how most of an address
+        space looks and is exactly the problem: an agent handed `51.75` cannot
+        tell °C from PSI from %, and cannot tell a reading from a trip. OPC UA
+        Part 8 §5.3 answers that with `AnalogItemType` — `EngineeringUnits`,
+        `EURange` for what the value holds in normal operation, and
+        `InstrumentRange` for what the device can physically return — and a real
+        PLC or SCADA server publishes all three on an analogue tag.
+
+        The node id is explicit rather than assigned in sequence. Every other
+        node here takes whatever number it happens to get, which means adding one
+        in the middle renumbers everything after it and silently breaks the map
+        in `tests/e2e/test_mcp_e2e.py`. A node added later should not be able to
+        do that.
+
+        `EURange` is deliberately narrower than `InstrumentRange`: the write path
+        enforces the first and reports the second, and if they were equal no test
+        could tell which one it had enforced.
+        """
+        node = parent_folder.add_variable(
+            ua.NodeId(90, 2), ua.QualifiedName("ScratchAnalog", 2), 50.0
+        )
+        node.set_writable(True)
+        node.add_property(
+            ua.NodeId(91, 2),
+            ua.QualifiedName("EngineeringUnits", 0),
+            _engineering_units("°C", "degree Celsius"),
+        )
+        node.add_property(ua.NodeId(92, 2), ua.QualifiedName("EURange", 0), _range(0.0, 150.0))
+        node.add_property(
+            ua.NodeId(93, 2), ua.QualifiedName("InstrumentRange", 0), _range(-50.0, 250.0)
+        )
+        # What makes it an AnalogItem rather than a Variable that happens to have
+        # three properties. Nothing in this project reads the type definition
+        # yet, but a mock that lies about what it is teaches the wrong lesson to
+        # whatever reads it next.
+        node.add_reference(ua.NodeId(ua.ObjectIds.AnalogItemType), ua.ObjectIds.HasTypeDefinition)
+        self.scratch_analog = node
 
     def _create_actuator_variables(self, parent_folder: Node):
         """Create actuator variables that can be controlled."""

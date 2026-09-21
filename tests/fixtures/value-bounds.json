@@ -1,0 +1,156 @@
+{
+  "$comment": "One table of writes and the verdict each must get from the operator policy's value bounds, driven through BOTH runtimes: tests/unit/test_value_bounds.py and packages/server-node/test/value-bounds.test.mjs read this file and assert the same verdict and the same sentence. The same pattern as argument-validation.json, and for the same reason — two hand-written copies of a rule are two rules. `error` is the exact message the write must be refused with, sourced from contract/tools.json -> errors; `error: null` means the policy allows it. Nothing here touches an OPC UA server: min, max and enum are decided entirely from the call, which is what lets them be enforced before a single byte reaches the plant. `max_change` is deliberately absent — it is a bound on the *move*, so it needs the node's current value, and it is enforced in the write path instead; tests/unit/test_value_bounds.py covers that half separately.",
+  "policy": {
+    "profile": "operator",
+    "secure": true,
+    "writable_nodes": [
+      "ns=2;i=1",
+      { "node": "ns=2;i=2", "min": 0, "max": 100 },
+      { "node": "ns=2;i=3", "min": -20.5 },
+      { "node": "ns=2;i=4", "max": 100 },
+      { "node": "ns=2;i=5", "enum": [0, 1, 2] },
+      { "node": "ns=2;i=6", "enum": ["AUTO", "MANUAL"] },
+      { "node": "ns=2;i=7", "enum": [true] }
+    ]
+  },
+  "cases": [
+    {
+      "name": "an allowlisted node with no bound accepts anything the codec will encode",
+      "node_id": "ns=2;i=1",
+      "value": 999999,
+      "error": null
+    },
+    {
+      "name": "a value inside the bound",
+      "node_id": "ns=2;i=2",
+      "value": 99.9,
+      "error": null
+    },
+    {
+      "name": "the bound is inclusive at the bottom",
+      "node_id": "ns=2;i=2",
+      "value": 0,
+      "error": null
+    },
+    {
+      "name": "the bound is inclusive at the top",
+      "node_id": "ns=2;i=2",
+      "value": 100,
+      "error": null
+    },
+    {
+      "name": "the hallucinated setpoint: right node, wrong number",
+      "node_id": "ns=2;i=2",
+      "value": 9999,
+      "error": "9999 is outside the range node ns=2;i=2 accepts (0 to 100), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "below the bound",
+      "node_id": "ns=2;i=2",
+      "value": -0.5,
+      "error": "-0.5 is outside the range node ns=2;i=2 accepts (0 to 100), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "a number sent as a string is still the number it is",
+      "node_id": "ns=2;i=2",
+      "value": "9999",
+      "error": "9999 is outside the range node ns=2;i=2 accepts (0 to 100), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "a string that is not a number cannot be compared to a bound",
+      "node_id": "ns=2;i=2",
+      "value": "quite warm",
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"quite warm\". Nothing was written."
+    },
+    {
+      "name": "a boolean is not a number, even where the language says it is",
+      "node_id": "ns=2;i=2",
+      "value": true,
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got true. Nothing was written."
+    },
+    {
+      "name": "one element outside the bound rejects the whole array",
+      "node_id": "ns=2;i=2",
+      "value": [0, 50, 9999],
+      "error": "9999 is outside the range node ns=2;i=2 accepts (0 to 100), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "a floor with no ceiling has no upper end",
+      "node_id": "ns=2;i=3",
+      "value": 1000000,
+      "error": null
+    },
+    {
+      "name": "a floor with no ceiling still has a floor",
+      "node_id": "ns=2;i=3",
+      "value": -21,
+      "error": "-21 is outside the range node ns=2;i=3 accepts (-20.5 to infinity), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "a ceiling with no floor has no lower end",
+      "node_id": "ns=2;i=4",
+      "value": -1000000,
+      "error": null
+    },
+    {
+      "name": "a ceiling with no floor still has a ceiling",
+      "node_id": "ns=2;i=4",
+      "value": 101,
+      "error": "101 is outside the range node ns=2;i=4 accepts (-infinity to 100), set by the operator policy. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+    },
+    {
+      "name": "a numeric enum accepts one of its members",
+      "node_id": "ns=2;i=5",
+      "value": 2,
+      "error": null
+    },
+    {
+      "name": "a numeric enum accepts a member sent as a string",
+      "node_id": "ns=2;i=5",
+      "value": "1",
+      "error": null
+    },
+    {
+      "name": "a numeric enum refuses anything else",
+      "node_id": "ns=2;i=5",
+      "value": 3,
+      "error": "3 is not one of the values node ns=2;i=5 accepts under the operator policy (0, 1, 2). Nothing was written."
+    },
+    {
+      "name": "a string enum accepts one of its members",
+      "node_id": "ns=2;i=6",
+      "value": "MANUAL",
+      "error": null
+    },
+    {
+      "name": "a string enum is case-sensitive, because a mode name is an identifier",
+      "node_id": "ns=2;i=6",
+      "value": "manual",
+      "error": "\"manual\" is not one of the values node ns=2;i=6 accepts under the operator policy (\"AUTO\", \"MANUAL\"). Nothing was written."
+    },
+    {
+      "name": "a boolean enum accepts the boolean it names",
+      "node_id": "ns=2;i=7",
+      "value": true,
+      "error": null
+    },
+    {
+      "name": "a boolean enum refuses the other one",
+      "node_id": "ns=2;i=7",
+      "value": false,
+      "error": "false is not one of the values node ns=2;i=7 accepts under the operator policy (true). Nothing was written."
+    },
+    {
+      "name": "a boolean enum refuses 1, because true is not 1 to an operator",
+      "node_id": "ns=2;i=7",
+      "value": 1,
+      "error": "1 is not one of the values node ns=2;i=7 accepts under the operator policy (true). Nothing was written."
+    },
+    {
+      "name": "a node nobody allowlisted is still refused first, bound or no bound",
+      "node_id": "ns=2;i=99",
+      "value": 1,
+      "error": "Node ns=2;i=99 is not writable under the operator policy"
+    }
+  ]
+}

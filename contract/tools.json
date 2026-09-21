@@ -30,9 +30,53 @@
           "server_timestamp": {
             "type": ["string", "null"],
             "description": "When the OPC UA server received or produced the value, ISO-8601 UTC. Differs from source_timestamp on a value that sat in a device before the server saw it. null when the server supplied none."
+          },
+          "engineering": {
+            "type": ["object", "null"],
+            "description": "What the plant says this number means: its unit, and the ranges it is expected and able to occupy. null for a node that publishes none, which is most nodes — only an AnalogItemType carries them. A bare 51.75 cannot be told from °C, PSI or %, and cannot be told from a trip; see contract analog.",
+            "properties": {
+              "unit": {
+                "type": ["string", "null"],
+                "description": "The engineering unit as the server displays it: '°C', 'bar', '%'. The DisplayName of the node's EngineeringUnits property (Part 8 §5.3), which is the abbreviation an operator would recognise. null when the node publishes a range but no unit."
+              },
+              "unit_description": {
+                "type": ["string", "null"],
+                "description": "The unit spelled out: 'degree Celsius'. The Description of the same property, for when the abbreviation is ambiguous. null when the server supplies none."
+              },
+              "eu_range": {
+                "type": ["object", "null"],
+                "description": "The range the value is expected to occupy in normal operation (Part 8 §5.3, EURange). This is what says whether 200 is a reading or a trip, and it is what a write is checked against unless OPCUA_ALLOW_OUT_OF_RANGE_WRITES says otherwise. null when the node publishes none.",
+                "properties": {
+                  "low": { "type": "number", "description": "The bottom of the range, inclusive." },
+                  "high": { "type": "number", "description": "The top of the range, inclusive." }
+                },
+                "required": ["low", "high"],
+                "additionalProperties": false
+              },
+              "instrument_range": {
+                "type": ["object", "null"],
+                "description": "What the instrument can physically return, which is usually wider than eu_range: a sensor may read below zero on a scale whose normal operation starts there. Reported, never enforced — the edge of what a device can represent is not the same as what the process expects. null when the node publishes none.",
+                "properties": {
+                  "low": { "type": "number", "description": "The bottom of the range, inclusive." },
+                  "high": { "type": "number", "description": "The top of the range, inclusive." }
+                },
+                "required": ["low", "high"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["unit", "unit_description", "eu_range", "instrument_range"],
+            "additionalProperties": false
           }
         },
-        "required": ["node_id", "value", "data_type", "status", "source_timestamp", "server_timestamp"],
+        "required": [
+          "node_id",
+          "value",
+          "data_type",
+          "status",
+          "source_timestamp",
+          "server_timestamp",
+          "engineering"
+        ],
         "additionalProperties": false
       }
     },
@@ -450,6 +494,14 @@
     "reconnectOnly": "Rebuild the connection and report the original failure. Honest for the monitor tools: a subscription lives on the session, so it died with it and the failure is complete rather than uncertain.",
     "uncertainOutcome": "Rebuild the connection and fail with errors.uncertainOutcome, which says the request may or may not have reached the plant and names what it was aimed at. For every control tool: re-sending would be a second physical actuation on a guess, and reporting a plain failure would claim knowledge this server does not have."
   },
+  "analog": {
+    "$comment": "Where a node says what its number means. OPC UA Part 8 §5.3 defines AnalogItemType and introduces EngineeringUnits by citing the Mars Climate Orbiter; these three properties are how a server publishes the unit and the two ranges. Both runtimes resolve them with one TranslateBrowsePathsToNodeIds for the whole batch and one Read of whatever resolved, in chunks of `maxPropertiesPerRequest` (a 500-node read is 1500 browse paths, and MaxNodesPerTranslateBrowsePathsToNodeIds is an operational limit servers publish and enforce, so one request that large is one a conformant server may refuse), then cache the answer for the life of the session — a node's unit does not change while a session lasts, and re-reading it per call would put two round trips on every read. The cache is dropped when the session is replaced, because a restarted server may be a different server. `enforceEuRangeOnWrite` is the safety half: a value outside the range the plant itself published is refused before anything is sent, which is a bound the equipment declares rather than one a human retyped into a policy file. OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true turns it off for deployments that have to write outside normal operation on purpose.",
+    "engineeringUnitsBrowseName": "0:EngineeringUnits",
+    "euRangeBrowseName": "0:EURange",
+    "instrumentRangeBrowseName": "0:InstrumentRange",
+    "enforceEuRangeOnWrite": true,
+    "maxPropertiesPerRequest": 300
+  },
   "capabilities": {
     "history": {
       "nodeId": "ns=0;i=11193",
@@ -473,6 +525,11 @@
     "tooManyNodes": "{tool} accepts at most {limit} nodes in one call, got {count}. Split the request.",
     "tooManySubscriptions": "This server already holds {active} of at most {limit} subscriptions; subscribing to {wanted} more would exceed it. Cancel some with unsubscribe_opcua_nodes.",
     "nodeNotWritable": "Node {node_id} is not writable under the operator policy",
+    "valueOutOfRange": "{value} is outside the range node {node_id} accepts ({low} to {high}{unit}), set by {source}. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate.",
+    "valueNotAllowed": "{value} is not one of the values node {node_id} accepts under the operator policy ({allowed}). Nothing was written.",
+    "valueChangeTooLarge": "Moving node {node_id} from {current} to {value} is a change of {change}, and the operator policy allows at most {limit} in one write. Nothing was written. Make the move in steps if it is deliberate.",
+    "valueNotComparable": "Node {node_id} is bounded, so it only accepts a number; got {value}. Nothing was written.",
+    "currentValueUnreadable": "Node {node_id} has a max_change bound, which can only be checked against its current value — and reading it failed ({reason}). Nothing was written.",
     "methodNotAllowed": "Method {object_node_id}|{method_node_id} is not allowed by the operator policy",
     "guardMissing": "Tool \"{tool}\" declares no policy guard, so it cannot be authorized",
     "notConnected": "Not connected to the OPC UA server at {url}: {reason}. Call get_server_status for details.",
@@ -663,8 +720,9 @@
       "name": "write_opcua_nodes",
       "accessClass": "control",
       "guard": {
-        "$comment": "Every node id reached by nodeIdPaths must be in the operator profile's writable-node allowlist. `[]` means every element of that array. One forbidden target rejects the whole batch before a single write is sent, so a batch can never end up partially authorised. The policy layer walks this declaration; it does not know this tool's name. A control tool with no `guard` is denied, so a new one cannot become callable by being added to the contract alone.",
-        "nodeIdPaths": ["nodes[].node_id"]
+        "$comment": "Every node id reached by nodeIdPaths must be in the operator profile's writable-node allowlist. `[]` means every element of that array. One forbidden target rejects the whole batch before a single write is sent, so a batch can never end up partially authorised. The policy layer walks this declaration; it does not know this tool's name. A control tool with no `guard` is denied, so a new one cannot become callable by being added to the contract alone. `valuePaths` is the second half of that: node identity is not the whole of a write, because an allowlisted setpoint that accepts any number is authorised for 9999 as readily as for 99.9. It names the array whose elements pair a target with the value aimed at it, so the policy can check both together — element-wise, unlike nodeIdPaths, which only has to collect ids.",
+        "nodeIdPaths": ["nodes[].node_id"],
+        "valuePaths": [{ "array": "nodes", "nodeIdField": "node_id", "valueField": "value" }]
       },
       "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
       "retryPolicy": "uncertainOutcome",

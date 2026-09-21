@@ -107,24 +107,38 @@ def assert_matches_result_shape(records: list[dict], shape_name: str, context: s
     """
     shape = RESULT_SHAPES[shape_name]
     record_schema = shape["items"] if shape["type"] == "array" else shape
-    properties = record_schema["properties"]
-    required = set(record_schema["required"])
 
     for record in records:
-        assert isinstance(record, dict), f"{context}: record is not an object: {record!r}"
-        assert set(record) >= required, (
-            f"{context}: record is missing {sorted(required - set(record))}: {record!r}"
+        _assert_matches_object(record, record_schema, context)
+
+
+def _assert_matches_object(record, schema: dict, context: str) -> None:
+    """One object against one object schema, descending into nested ones.
+
+    Nested rather than top-level-only because `nodeValues.engineering` is an
+    object of objects: checking only that it *is* an object would let the two
+    runtimes name its fields differently, which is the exact divergence this file
+    exists to catch.
+    """
+    properties = schema["properties"]
+    required = set(schema["required"])
+
+    assert isinstance(record, dict), f"{context}: record is not an object: {record!r}"
+    assert set(record) >= required, (
+        f"{context}: record is missing {sorted(required - set(record))}: {record!r}"
+    )
+    if schema.get("additionalProperties") is False:
+        assert set(record) <= set(properties), (
+            f"{context}: record has fields outside the contract "
+            f"{sorted(set(record) - set(properties))}: {record!r}"
         )
-        if record_schema.get("additionalProperties") is False:
-            assert set(record) <= set(properties), (
-                f"{context}: record has fields outside the contract "
-                f"{sorted(set(record) - set(properties))}: {record!r}"
-            )
-        for field, spec in properties.items():
-            assert _matches_type(record[field], spec.get("type")), (
-                f"{context}: {field}={record[field]!r} does not match "
-                f"declared type {spec.get('type')!r}"
-            )
+    for field, spec in properties.items():
+        assert _matches_type(record[field], spec.get("type")), (
+            f"{context}: {field}={record[field]!r} does not match "
+            f"declared type {spec.get('type')!r}"
+        )
+        if isinstance(record[field], dict) and "properties" in spec:
+            _assert_matches_object(record[field], spec, f"{context}.{field}")
 
 
 @pytest.fixture(params=["python", "node"])

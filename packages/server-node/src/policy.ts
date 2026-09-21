@@ -7,26 +7,136 @@ import { message } from "./errors.js";
 
 export type ToolProfile = "observe" | "operator" | "full";
 
+/** One `writable_nodes` entry when it carries a bound rather than only a node. */
+interface WritableNodeEntry {
+  node: string;
+  min?: number;
+  max?: number;
+  enum?: unknown[];
+  max_change?: number;
+}
+
 interface PolicyFile {
   version?: number;
   profile?: string;
   allowed_tools?: string[];
   allow_insecure_control?: boolean;
+  allow_out_of_range_writes?: boolean;
   control?: {
-    writable_nodes?: string[];
+    writable_nodes?: Array<string | WritableNodeEntry>;
     callable_methods?: Array<{ object_id: string; method_id: string }>;
     acknowledge_alarms?: boolean;
   };
+}
+
+/** What an allowlisted node may be written, beyond being the right node.
+ *
+ * Node identity was the whole of write authorization, and it is the weakest link
+ * in the safety story: a model that correctly identified the right setpoint and
+ * hallucinated `9999` instead of `99.9` was fully authorized. The variant codec
+ * range-checks integers and refuses a lossy Int64, but that is *type* safety —
+ * `9999` is a perfectly good Double.
+ *
+ * `minimum`, `maximum` and `allowed` are checked by `ToolPolicy.authorize`,
+ * before the OPC UA network is touched at all. `maxChange` cannot be: it is a
+ * bound on the *move*, so it needs the node's current value, and it is enforced
+ * in the write path where that read already happens.
+ */
+export interface ValueBound {
+  minimum: number | null;
+  maximum: number | null;
+  /** The only values this node accepts. Numbers, strings or booleans — a
+   *  discrete node is usually the latter two. */
+  allowed: readonly unknown[] | null;
+  /** The largest absolute difference from the node's current value one write may
+   *  make. */
+  maxChange: number | null;
+}
+
+const EMPTY_BOUND: ValueBound = {
+  minimum: null,
+  maximum: null,
+  allowed: null,
+  maxChange: null,
+};
+
+export function isEmptyBound(bound: ValueBound): boolean {
+  return (
+    bound.minimum === null &&
+    bound.maximum === null &&
+    bound.allowed === null &&
+    bound.maxChange === null
+  );
+}
+
+const BOUND_KEYS = ["node", "min", "max", "enum", "max_change"];
+
+function boundNumber(entry: WritableNodeEntry, key: "min" | "max" | "max_change"): number | null {
+  const value = entry[key];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`writable_nodes entry "${entry.node}" has a non-numeric ${key}`);
+  }
+  return value;
+}
+
+/** One `writable_nodes` entry as a [node id, bound] pair.
+ *
+ * A bare string stays legal and carries no bound, so every policy file written
+ * before this existed keeps working and means exactly what it meant.
+ */
+function valueBound(entry: string | WritableNodeEntry): [string, ValueBound] {
+  if (typeof entry === "string") return [entry, EMPTY_BOUND];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error("writable_nodes entry must be a node id or an object");
+  }
+  const unknown = Object.keys(entry).filter((key) => !BOUND_KEYS.includes(key));
+  if (unknown.length > 0) {
+    // Loud, because the failure it prevents is silent: an operator who writes
+    // "minimum" instead of "min" believes a bound is in force and none is.
+    throw new Error(
+      `Unknown key in a writable_nodes entry: ${unknown.sort()[0]}. ` +
+        `Use one of: ${[...BOUND_KEYS].sort().join(", ")}`
+    );
+  }
+  if (typeof entry.node !== "string" || entry.node.trim() === "") {
+    throw new Error("A writable_nodes entry must name a node");
+  }
+  if (entry.enum !== undefined && (!Array.isArray(entry.enum) || entry.enum.length === 0)) {
+    throw new Error(`writable_nodes entry "${entry.node}" has an empty or non-list enum`);
+  }
+  const bound: ValueBound = {
+    minimum: boundNumber(entry, "min"),
+    maximum: boundNumber(entry, "max"),
+    allowed: entry.enum ?? null,
+    maxChange: boundNumber(entry, "max_change"),
+  };
+  if (bound.minimum !== null && bound.maximum !== null && bound.minimum > bound.maximum) {
+    throw new Error(`writable_nodes entry "${entry.node}" has min above max`);
+  }
+  if (bound.maxChange !== null && bound.maxChange < 0) {
+    throw new Error(`writable_nodes entry "${entry.node}" has a negative max_change`);
+  }
+  return [entry.node, bound];
 }
 
 export interface PolicyConfig {
   profile: ToolProfile;
   allowedTools: Set<string> | null;
   writableNodes: Set<string>;
+  /** Per-node value bounds, keyed by the allowlist entry exactly as written.
+   *  Resolved against the live NamespaceArray at check time, the same way the
+   *  identity allowlist is, so an `nsu=` entry follows a renumbered server. */
+  valueBounds: Map<string, ValueBound>;
   callableMethods: Set<string>;
   acknowledgeAlarms: boolean;
   allowInsecureControl: boolean;
   secureChannel: boolean;
+  /** Whether a write outside the range the OPC UA server itself published
+   *  (`EURange`) is allowed through. Refused by default: a bound the equipment
+   *  declares is worth more than one a human retyped, and it is the only value
+   *  bound that exists on a deployment with no policy file at all. */
+  allowOutOfRangeWrites: boolean;
 }
 
 function value(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -99,9 +209,18 @@ export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
   const allowedTools = validateToolNames(
     parseCsv(value(env, "OPCUA_ALLOWED_TOOLS")) ?? file.allowed_tools
   );
-  const writableNodes = new Set(
-    parseCsv(value(env, "OPCUA_ALLOWED_WRITE_NODES")) ?? control.writable_nodes ?? []
-  );
+  // The environment variable is a comma-separated list of node ids and can carry
+  // no bounds; a bounded node needs the policy file. Setting it replaces the
+  // file's list outright rather than merging, as every other override here does
+  // — a half-overridden allowlist is the kind of thing nobody can reason about
+  // at three in the morning.
+  const writableEntries: Array<string | WritableNodeEntry> =
+    parseCsv(value(env, "OPCUA_ALLOWED_WRITE_NODES")) ?? control.writable_nodes ?? [];
+  if (!Array.isArray(writableEntries)) {
+    throw new Error("OPCUA_POLICY_FILE control.writable_nodes must be a list");
+  }
+  const valueBounds = new Map<string, ValueBound>(writableEntries.map(valueBound));
+  const writableNodes = new Set(valueBounds.keys());
 
   const fileMethods = (control.callable_methods ?? []).map(
     ({ object_id, method_id }) => `${object_id}|${method_id}`
@@ -125,16 +244,23 @@ export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
     "OPCUA_ALLOW_INSECURE_CONTROL",
     file.allow_insecure_control ?? false
   );
+  const allowOutOfRangeWrites = parseBoolean(
+    value(env, "OPCUA_ALLOW_OUT_OF_RANGE_WRITES"),
+    "OPCUA_ALLOW_OUT_OF_RANGE_WRITES",
+    file.allow_out_of_range_writes ?? false
+  );
   const policy = value(env, "OPCUA_SECURITY_POLICY") ?? "None";
 
   return {
     profile,
     allowedTools,
     writableNodes,
+    valueBounds,
     callableMethods,
     acknowledgeAlarms,
     allowInsecureControl,
     secureChannel: policy.toLowerCase() !== "none",
+    allowOutOfRangeWrites,
   };
 }
 
@@ -216,6 +342,85 @@ export function valuesAt(args: Record<string, unknown>, path: string): string[] 
   return typeof value === "string" ? [value] : [];
 }
 
+/** Every (node id, value) a `valuePaths` declaration selects, element-wise.
+ *
+ * Unlike `valuesAt`, which flattens because it only has to *collect* ids, this
+ * has to keep each target with the value aimed at it: a batch write is a list of
+ * independent (where, what) pairs and checking them crosswise would authorise a
+ * value against the wrong node's bound.
+ *
+ * An element carrying no node id yields nothing. That is not a hole — the node
+ * id is `required` by the contract schema and the identity allowlist has already
+ * refused a write whose target cannot be located.
+ */
+export function pairsAt(
+  args: Record<string, unknown>,
+  spec: { array: string; nodeIdField: string; valueField: string }
+): Array<[string, unknown]> {
+  const items = args[spec.array];
+  if (!Array.isArray(items)) return [];
+  const found: Array<[string, unknown]> = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const nodeId = entry[spec.nodeIdField];
+    if (typeof nodeId === "string") found.push([nodeId, entry[spec.valueField]]);
+  }
+  return found;
+}
+
+/** `value` as a number for comparison, or null if it is not one.
+ *
+ * A string is parsed, because the write path accepts one for a numeric node and
+ * parses it — `"42.5"` reaches the plant as 42.5, so a bound that did not look
+ * inside the string would be trivially bypassed by quoting the number.
+ *
+ * A boolean is not a number here. `true` is not 1 to an operator writing a
+ * bound, and letting it compare as one is the same coercion the typed-argument
+ * work removed from method calls.
+ */
+export function asNumber(value: unknown): number | null {
+  if (typeof value === "boolean") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "") return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/** A number as a refusal should read it: 100 rather than 100.0.
+ *
+ * `format_number` in `policy.py` is the other half, and the two must agree
+ * character for character — the refusals they build are compared by
+ * `tests/e2e/test_runtime_differential.py`.
+ */
+export function formatNumber(value: number): string {
+  if (value === Infinity) return "infinity";
+  if (value === -Infinity) return "-infinity";
+  if (Number.isInteger(value) && Math.abs(value) < 1e16) return String(value);
+  // Python's repr(float) and JavaScript's String(number) both produce the
+  // shortest round-tripping decimal, so they agree on everything this can see.
+  return String(value);
+}
+
+/** Whether a written value is one of an `enum` entry.
+ *
+ * Booleans and numbers are kept apart deliberately (`true` is not 1), and a
+ * numeric string matches a numeric entry, because the write path parses it and
+ * the plant sees the number.
+ */
+function sameJsonValue(value: unknown, candidate: unknown): boolean {
+  if (typeof value === "boolean" || typeof candidate === "boolean") return value === candidate;
+  if (typeof candidate === "number") {
+    const number = asNumber(value);
+    return number !== null && number === candidate;
+  }
+  return value === candidate;
+}
+
 export class ToolPolicy {
   /** The server's NamespaceArray, once a session has reported it.
    *
@@ -284,7 +489,85 @@ export class ToolPolicy {
     }
 
     this.authorizeNodes(name, guard, args);
+    this.authorizeValues(guard, args);
     this.authorizeMethods(name, guard, args);
+  }
+
+  /** Check every write in a call against the operator's bound for its target.
+   *
+   * And what is being written, not only where. Everything here is decidable
+   * without touching the network, which is what keeps it in the authorization
+   * layer: a refusal happens before a single byte is sent, so a batch can never
+   * end up partially applied — the same property the identity allowlist had.
+   */
+  private authorizeValues(guard: ToolGuard, args: Record<string, unknown>): void {
+    for (const spec of guard.valuePaths ?? []) {
+      for (const [nodeId, value] of pairsAt(args, spec)) {
+        const bound = this.boundFor(nodeId);
+        if (!bound) continue;
+        // An array write is checked element by element. Writing [0, 9999] to a
+        // bounded node is writing 9999 to it.
+        for (const element of Array.isArray(value) ? value : [value]) {
+          this.checkOne(nodeId, element, bound);
+        }
+      }
+    }
+  }
+
+  private checkOne(nodeId: string, value: unknown, bound: ValueBound): void {
+    if (bound.allowed && !bound.allowed.some((candidate) => sameJsonValue(value, candidate))) {
+      throw new Error(
+        message("valueNotAllowed", {
+          value: JSON.stringify(value) ?? String(value),
+          node_id: nodeId,
+          allowed: bound.allowed.map((item) => JSON.stringify(item)).join(", "),
+        })
+      );
+    }
+    if (bound.minimum === null && bound.maximum === null) return;
+    const number = asNumber(value);
+    if (number === null) {
+      throw new Error(
+        message("valueNotComparable", {
+          node_id: nodeId,
+          value: JSON.stringify(value) ?? String(value),
+        })
+      );
+    }
+    const low = bound.minimum ?? -Infinity;
+    const high = bound.maximum ?? Infinity;
+    if (number < low || number > high) {
+      throw new Error(
+        message("valueOutOfRange", {
+          value: formatNumber(number),
+          node_id: nodeId,
+          low: formatNumber(low),
+          high: formatNumber(high),
+          unit: "",
+          source: "the operator policy",
+        })
+      );
+    }
+  }
+
+  /** The operator's value bound for `nodeId`, or null if it has none.
+   *
+   * Resolved rather than compared literally, for the same reason
+   * `requireWritableNode` is: `nsu=…;i=5` and `ns=2;i=5` are the same node on a
+   * server that publishes that URI at index 2, and a bound that only matched one
+   * spelling would be a bound an operator believes is in force and is not.
+   *
+   * Public because the write path needs it too: `maxChange` is a bound on the
+   * *move*, so it can only be checked against the node's current value, which is
+   * a read and does not belong in the authorization layer.
+   */
+  boundFor(nodeId: string): ValueBound | null {
+    const wanted = this.resolve(nodeId);
+    if (wanted === null) return null;
+    for (const [entry, bound] of this.config.valueBounds) {
+      if (!isEmptyBound(bound) && this.resolve(entry) === wanted) return bound;
+    }
+    return null;
   }
 
   private authorizeNodes(name: string, guard: ToolGuard, args: Record<string, unknown>): void {

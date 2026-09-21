@@ -152,6 +152,51 @@ unless the OPC UA channel is secured or a conspicuous lab-only override is set.
 An optional versioned JSON policy makes the same rules deployable through normal
 configuration management; environment variables can narrow or override it.
 
+### What a value means, and what a value may be
+
+An allowlist authorises a *node*. That was all of write authorization, and it is
+the weakest link in the safety story rather than the strongest: an allowlisted
+setpoint accepted any number the variant codec would encode, so a model that
+correctly identified the right node and hallucinated `9999` instead of `99.9` was
+fully authorised. The codec does range-check integers and refuse a lossy Int64 —
+but that is *type* safety, and `9999` is a perfectly good Double.
+
+The better bound was already in the address space. OPC UA Part 8 §5.3 defines
+`AnalogItemType` with three properties — `EngineeringUnits`, `EURange` (what the
+value holds in normal operation) and `InstrumentRange` (what the device can
+physically return) — and introduces the first by citing the Mars Climate Orbiter.
+A real PLC or SCADA server publishes all three on an analogue tag and nothing
+here was reading them.
+
+`node_metadata.py` / `node-metadata.ts` now do, and `resultShapes.nodeValues`
+carries them as `engineering`. Two things follow from one piece of work:
+
+- **A reading says what it means.** `51.75` becomes `51.75 °C, normal range 0 to
+  150`, which is the difference between a number and a fact. `null` for a node
+  that publishes none, which is most nodes.
+- **A write is checked against the range the plant itself declared**, before
+  anything is sent, unless `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` says otherwise. A
+  bound the equipment set beats one a human retyped into a policy file and has to
+  keep in step — and it is the only value bound that exists on a deployment with
+  no policy file at all.
+
+The policy file adds the bounds the address space cannot express: `min`, `max`,
+`enum` and `max_change` per allowlisted node. Both apply, so a policy can only
+ever *narrow* what the equipment allows. The split between them is the same one
+that keeps the identity allowlist honest — `min`, `max` and `enum` are decidable
+from the call alone, so `ToolPolicy.authorize` refuses with nothing sent, while
+`max_change` is a bound on the *move* and needs a read, so it lives in the write
+path beside the read the type inference already does. A refusal from either
+rejects the whole batch.
+
+Cost: two extra round trips for a whole batch on a cold cache — one
+`TranslateBrowsePathsToNodeIds` for every property of every uncached node, one
+`Read` of whatever resolved — and none on a warm one. Resolving three properties
+per node by browsing would have been three round trips per node, which would make
+a 500-node read unusable. The cache is dropped when the session is replaced, for
+the same reason the capability probes are: a restarted server may not be the same
+server.
+
 Capability is re-checked at invocation time as well, for the same reason policy
 is: a client may hold a `tools/list` from when the server still reported
 HistoricalAccess.

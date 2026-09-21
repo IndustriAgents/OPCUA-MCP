@@ -650,11 +650,19 @@ export class ToolPolicy {
   }
 }
 
-let cached: ToolPolicy | null = null;
-
+/** A policy read from the environment.
+ *
+ * A *factory*, not a singleton. This memoised one instance for the process,
+ * which made two unrelated callers share a policy by accident rather than by
+ * wiring — and the connection re-binds that policy's namespace mapping while the
+ * tools authorize against it, so "the same object" is a correctness requirement
+ * and not a convenience. `index.ts` now constructs one and passes it to both;
+ * see #116 and the note there.
+ *
+ * Python's `tool_policy()` is the other half and is likewise uncached.
+ */
 export function toolPolicy(): ToolPolicy {
-  if (!cached) cached = new ToolPolicy(parsePolicyConfig(process.env));
-  return cached;
+  return new ToolPolicy(parsePolicyConfig(process.env));
 }
 
 /** One-line summary for the startup log.

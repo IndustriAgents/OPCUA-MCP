@@ -57,6 +57,32 @@ def observe_params(impl: str, url: str) -> StdioServerParameters:
     return StdioServerParameters(command="node", args=[str(NODE_BUILD)], env=env)
 
 
+#: The URI the bundled mock publishes for namespace index 2, where all its nodes
+#: live. Registered by the mock rather than assumed here — see its
+#: `NAMESPACE_URI`.
+MOCK_NAMESPACE_URI = "http://examples.freeopcua.github.io"
+
+
+def uri_pinned_params(impl: str, url: str, allowed: str) -> StdioServerParameters:
+    """An operator deployment whose write allowlist is spelled however `allowed` says."""
+    env = {key: value for key, value in os.environ.items() if key not in POLICY_ENV}
+    env.update(
+        {
+            "OPCUA_SERVER_URL": url,
+            "OPCUA_PROFILE": "operator",
+            "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+            "OPCUA_ALLOWED_WRITE_NODES": allowed,
+        }
+    )
+    if impl == "python":
+        return StdioServerParameters(
+            command="uv",
+            args=["--directory", str(ROOT), "run", "--no-sync", "opcua-mcp-server"],
+            env=env,
+        )
+    return StdioServerParameters(command="node", args=[str(NODE_BUILD)], env=env)
+
+
 def operator_params(impl: str, url: str) -> StdioServerParameters:
     env = {key: value for key, value in os.environ.items() if key not in POLICY_ENV}
     env.update(
@@ -475,3 +501,98 @@ async def test_both_runtimes_write_the_same_record_shape(opcua_server):
         f"the two runtimes write different audit records:\n"
         f"  python: {shapes['python']}\n  node:   {shapes['node']}"
     )
+
+
+# --- the `nsu=` allowlist form, end to end --------------------------------------
+#
+# Untested end to end until #116, and the gap was structural rather than an
+# oversight: the bundled mock created every node at a bare namespace index 2
+# without publishing a URI for it, so there was no URI an `nsu=` entry could name.
+# The mock registers one now.
+#
+# It is worth real coverage because it is the form that exists for a specific
+# failure — a server that restarts and loads its namespaces in a different order,
+# after which `ns=2;i=13` names a different physical node and a URI-pinned entry
+# still names the right one. And it is the form that breaks if the policy object
+# the connection binds a NamespaceArray into is not the object `call_tool`
+# authorizes against, which is precisely what #116 moved.
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_uri_pinned_allowlist_entry_authorizes_the_node_it_names(impl, opcua_server):
+    """`nsu=<uri>;i=13` must permit exactly what `ns=2;i=13` permits.
+
+    The write has to succeed rather than merely be authorized: an entry that
+    resolved to the wrong index would be authorized and then write somewhere else.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    allowed = f"nsu={MOCK_NAMESPACE_URI};i=13"
+
+    async with connect(uri_pinned_params(impl, opcua_server, allowed)) as session:
+        result = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": 42.5}]}
+        )
+
+    assert not result.is_error, f"{impl}: {text_of(result)}"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_uri_pinned_entry_still_denies_every_other_node(impl, opcua_server):
+    """The negative half, without which the test above proves nothing.
+
+    A policy that resolved the entry to "everything", or that failed open, would
+    pass the previous test and this one is what notices.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    allowed = f"nsu={MOCK_NAMESPACE_URI};i=13"
+
+    async with connect(uri_pinned_params(impl, opcua_server, allowed)) as session:
+        result = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=15", "value": 42.5}]}
+        )
+
+    assert result.is_error is True, impl
+    assert "not writable" in text_of(result), f"{impl}: {text_of(result)}"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_uri_this_server_does_not_publish_denies_and_says_so(impl, opcua_server):
+    """Unknown denies, and loudly.
+
+    Resolving an unknown URI to *anything* would authorize a write to whatever
+    node happens to sit at that index. The refusal is the correct behaviour; the
+    warning on stderr is what stops an operator believing the entry works.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    allowed = "nsu=http://not.published.example/plant;i=13"
+
+    async with connect(uri_pinned_params(impl, opcua_server, allowed)) as session:
+        result = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": 42.5}]}
+        )
+
+    assert result.is_error is True, impl
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_the_mock_publishes_the_namespace_its_nodes_live_in(impl, opcua_server):
+    """The precondition for all of the above, asserted rather than assumed.
+
+    If the mock ever stops publishing this URI, the three tests above would still
+    pass — the first would fail, but a mock that publishes nothing would make the
+    denials pass for the wrong reason. This is what distinguishes "denied because
+    the policy works" from "denied because there was no namespace".
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+
+    async with connect(observe_params(impl, opcua_server)) as session:
+        result = await session.call_tool("get_server_status", {})
+
+    namespaces = result.structured_content["result"]["namespaces"]
+    at_two = next((n for n in namespaces if n["index"] == 2), None)
+    assert at_two is not None, f"{impl}: no namespace at index 2: {namespaces}"
+    assert at_two["uri"] == MOCK_NAMESPACE_URI, f"{impl}: {namespaces}"

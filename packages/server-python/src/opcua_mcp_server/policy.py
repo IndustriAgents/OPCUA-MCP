@@ -11,7 +11,6 @@ import os
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -630,8 +629,17 @@ class ToolPolicy:
             )
 
 
-@lru_cache(maxsize=1)
 def tool_policy() -> ToolPolicy:
+    """A policy read from the environment.
+
+    A *factory*, not a singleton. This was an ``lru_cache(maxsize=1)``, which made
+    two unrelated callers share a policy by accident rather than by wiring — and
+    since the connection re-binds that policy's namespace mapping while
+    ``call_tool`` authorizes against it, "the same object" is a correctness
+    requirement and not a convenience. ``ServerState`` now owns one and passes it
+    to both; ``policy.ts``'s ``toolPolicy()`` is the other half and is likewise
+    uncached (#116).
+    """
     return ToolPolicy(parse_policy_config(os.environ))
 
 

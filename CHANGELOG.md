@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message-less failure can never again be reported as nothing at all. The Node
   runtime is unaffected.
 
+### Changed
+- **Both runtimes keep their state on an instance, not in the module** (#116). The
+  contract pins the tool surface and the tests pin the semantics; nothing pinned
+  the *structure*, and that is where the two halves had drifted. Node built its
+  connection, tools and policy in `index.ts` and passed them down, while Python
+  kept the same state in module globals — so the Python server could not be
+  instantiated twice in one process and the Node one nearly could. Python's state
+  now lives on a `ServerState` owned by the server, and tool registration moved
+  into `create_server()`, because a module-level `@mcp.tool` decorator binds a
+  tool to whichever instance existed at import: with two instances the second
+  would have had no tools. Node's two memoised singletons became plain factories,
+  with one policy constructed and passed to both halves.
+
+  No behaviour change — but one hazard worth naming, because the refactor could
+  have introduced it: the connection re-binds the policy's namespace mapping on
+  every reconnect and authorization reads it, so the two must be the *same*
+  object, or an `nsu=<uri>;i=…` write allowlist entry is bound on one policy and
+  resolved against another that has never seen a NamespaceArray. That held before
+  only because both callers received one memoised instance. The `nsu=` form now
+  has end-to-end coverage on both runtimes — it had none, because the bundled mock
+  created its nodes at a bare namespace index without publishing a URI for it, so
+  there was no URI such an entry could name. The mock registers one now, which
+  also makes its NamespaceArray honest about the namespace its own node ids use.
+
 ### Added
 - **`read_event_history`: look backwards at an alarm burst** (#117).
   `subscribe_events` only sees what arrives after it subscribes, which is the

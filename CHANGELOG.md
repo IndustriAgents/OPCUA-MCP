@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-09-22
+
+0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for
+the same underlying reason: the repository moved to the IndustriAgents
+organisation on 2026-09-20, and while #125 updated the links in the prose, it
+touched no package manifest and no publishing account. 0.4.1 had shipped two days
+before the move, so 0.5.0 was the first release that could discover this.
+
+This release is 0.5.0 plus the fix, so **0.5.1 is the first published release of
+the 0.5 line** and the 0.5.0 notes below describe what is in it. Tags in this
+repository are immutable by ruleset, which is why this is a new version rather
+than a re-tag.
+
+### Fixed
+- **npm refused the upload because the package disagreed with its own
+  provenance.** `npm publish --provenance` has GitHub attest which repository
+  built the tarball, and npm checks that against the `repository.url` the package
+  declares:
+
+      422 Unprocessable Entity — Error verifying sigstore provenance bundle:
+      package.json: "repository.url" is
+      "git+https://github.com/midhunxavier/OPCUA-MCP.git", expected to match
+      "https://github.com/IndustriAgents/OPCUA-MCP" from provenance
+
+  The stale URL had been harmless for as long as it was only a link — GitHub
+  redirects a transferred repository, so nothing else noticed. Signing turned it
+  into a claim that had to be true. `repository.url`, `homepage` and `bugs` now
+  name the new org, as do the `homepage`, `documentation`, `support` and
+  `repository` fields of `mcpb/manifest.json`, which are the links Claude Desktop
+  shows for an installed bundle.
+
+  Unchanged, deliberately: the author URL, which is a personal profile rather
+  than the repository, and `mcpName` / `server.json`'s
+  `io.github.midhunxavier/opcua`. That pair is the MCP Registry namespace, which
+  proves ownership by matching the published package's `mcpName` — an identity,
+  not a link, and renaming it is a re-registration rather than a fix.
+
+- **PyPI rejected the token because the trusted publisher named the old owner.**
+  Trusted publishing matches the workflow's OIDC claims against a publisher
+  registered on the project, and those claims carry the new owner literally, with
+  no redirect:
+
+      invalid-publisher: valid token, but no corresponding publisher
+        repository: IndustriAgents/OPCUA-MCP
+        repository_owner: IndustriAgents
+        environment: pypi
+
+  Fixed by re-registering the trusted publisher on PyPI against
+  `IndustriAgents/OPCUA-MCP`. Account configuration, with nothing to change in
+  the repository — recorded here because it is invisible from the source tree and
+  is exactly the kind of thing the next org move will break again.
+
+No change to either server. Both runtimes are byte-for-byte the 0.5.0 code.
+
 ## [0.5.0] — 2026-09-21
 
 Seventeen issues from two architecture reviews, closed across four PRs. The
@@ -1260,7 +1314,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.3.0...v0.4.0

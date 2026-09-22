@@ -9,14 +9,14 @@
     "name": "Midhun Xavier",
     "url": "https://github.com/midhunxavier"
   },
-  "homepage": "https://github.com/midhunxavier/OPCUA-MCP#readme",
-  "documentation": "https://github.com/midhunxavier/OPCUA-MCP/blob/main/docs/examples.md",
-  "support": "https://github.com/midhunxavier/OPCUA-MCP/issues",
+  "homepage": "https://github.com/IndustriAgents/OPCUA-MCP#readme",
+  "documentation": "https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md",
+  "support": "https://github.com/IndustriAgents/OPCUA-MCP/issues",
   "license": "MIT",
   "keywords": ["opcua", "opc-ua", "industrial", "automation", "scada", "plc", "manufacturing"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/midhunxavier/OPCUA-MCP"
+    "url": "https://github.com/IndustriAgents/OPCUA-MCP"
   },
   "server": {
     "type": "node",

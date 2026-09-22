@@ -37,12 +37,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/midhunxavier/OPCUA-MCP.git",
+    "url": "git+https://github.com/IndustriAgents/OPCUA-MCP.git",
     "directory": "packages/server-node"
   },
-  "homepage": "https://github.com/midhunxavier/OPCUA-MCP#readme",
+  "homepage": "https://github.com/IndustriAgents/OPCUA-MCP#readme",
   "bugs": {
-    "url": "https://github.com/midhunxavier/OPCUA-MCP/issues"
+    "url": "https://github.com/IndustriAgents/OPCUA-MCP/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

@@ -164,6 +164,30 @@ with `--endpoint`); the aggregate mock defaults to `:4841` (`npm start` in
 alarms mock defaults to `:4842` (`npm start` in `packages/mock-server-alarms`,
 overridable with `ALARM_MOCK_PORT`).
 
+### Required mode
+
+A skipped fixture is convenient locally and dangerous in a gate: `publish.yml`
+once installed only one of the two Node-based mocks, so every Alarms &
+Conditions test skipped on every release while the job stayed green (#142).
+
+```bash
+OPCUA_TESTS_REQUIRED=1 uv run --no-sync pytest -v e2e/ unit/
+```
+
+With it set, [`required_suite.py`](required_suite.py):
+
+- reports **any skip as a failure**, unless its reason is listed in
+  `ALLOWED_SKIPS` with a justification (the list is empty today);
+- fails the run if a **test group executed no passing tests** — unit, core,
+  each runtime, security, history, aggregates, events, alarms, resilience,
+  differential parity, and each executable. A group is enforced only when its
+  part of the suite (`unit/`, `e2e/`, `smoke/test_binaries.py`) was selected,
+  so running only the smoke tier does not demand the alarms mock.
+
+Every run, required or not, ends with a per-group summary of what executed.
+CI's E2E and smoke jobs, `publish.yml` and `release.yml` all set it; the E2E
+steps they share live in [`.github/actions/conformance`](../.github/actions/conformance/action.yml).
+
 Select a single implementation:
 
 ```bash

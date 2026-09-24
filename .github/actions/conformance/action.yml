@@ -1,0 +1,66 @@
+name: Conformance suite
+description: >
+  Installs every server and mock the suite needs, then runs unit + e2e with
+  OPCUA_TESTS_REQUIRED=1, so a missing dependency fails the run instead of
+  skipping a subsystem. The one definition CI, publish and release all use (#142).
+
+# A composite action rather than a reusable workflow on purpose: calling a
+# reusable workflow prefixes the job's check name ("E2E — … / <inner job>"), and
+# the E2E check names are required status checks in the `main-protection`
+# ruleset, matched by exact string. A composite action changes the steps and
+# leaves the job — and its name — where it is. The caller checks out first.
+
+inputs:
+  python-version:
+    description: Python version for uv to run the suite under
+    default: "3.13"
+  node-version:
+    description: Node.js version for both servers and the Node-based mocks
+    default: "22"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: packages/server-node/package-lock.json
+
+    - name: Build Node server
+      shell: bash
+      working-directory: packages/server-node
+      run: |
+        npm ci
+        npm run build
+
+    # Both Node-based mocks, always. publish.yml once installed only the first,
+    # and every Alarms & Conditions test skipped on every release while the job
+    # stayed green. Required mode below now fails that loudly; installing them
+    # here is what keeps it from failing at all.
+    - name: Install aggregate mock OPC UA server
+      shell: bash
+      working-directory: packages/mock-server-aggregate
+      run: npm ci
+
+    - name: Install alarms mock OPC UA server
+      shell: bash
+      working-directory: packages/mock-server-alarms
+      run: npm ci
+
+    - name: Sync workspace (all packages)
+      shell: bash
+      run: uv sync --all-packages --python ${{ inputs.python-version }}
+
+    - name: Run unit and end-to-end tests (required mode)
+      shell: bash
+      working-directory: tests
+      env:
+        OPCUA_TESTS_REQUIRED: "1"
+      run: uv run --no-sync pytest -v e2e/ unit/

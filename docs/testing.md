@@ -54,6 +54,12 @@ skip cleanly until they are:
 (cd packages/mock-server-alarms && npm install)
 ```
 
+Skipping is for a laptop. CI and the release workflows run the suite with
+`OPCUA_TESTS_REQUIRED=1`, which reports any skip as a failure and fails the run
+if a test group — alarms, aggregates, security, either runtime, and so on —
+executed nothing. Set it locally to check a run is complete; see
+[../tests/README.md](../tests/README.md#required-mode).
+
 ---
 
 ## 2. MCP Inspector

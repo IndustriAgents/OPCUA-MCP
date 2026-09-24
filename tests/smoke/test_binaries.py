@@ -176,3 +176,106 @@ async def test_binary_lists_tools(binary, opcua_server, tmp_path):
         cwd=str(tmp_path),
     )
     assert await _list_tools(params) >= CORE_TOOLS
+
+
+def _exchange(binary, env: dict, cwd, messages: list[dict]) -> tuple[dict[int, dict], int]:
+    """Speak raw MCP to ``binary`` over stdio, then close stdin and wait for it.
+
+    Raw JSON-RPC rather than the SDK client so the test owns the process: the
+    SDK's stdio client terminates the server on exit, which would hide the one
+    thing checked here that nothing else is — that the executable shuts itself
+    down cleanly when its client goes away.
+    """
+    proc = subprocess.Popen(
+        [str(binary)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=str(cwd),
+        text=True,
+        encoding="utf-8",
+    )
+    responses: dict[int, dict] = {}
+    try:
+        for message in messages:
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+            if "id" not in message:
+                continue
+            while True:
+                line = proc.stdout.readline()
+                assert line, f"server exited before answering {message['method']}"
+                reply = json.loads(line)
+                if reply.get("id") == message["id"]:
+                    responses[message["id"]] = reply
+                    break
+        proc.stdin.close()
+        returncode = proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return responses, returncode
+
+
+async def test_binary_reads_refuses_control_and_exits_cleanly(binary, opcua_server, tmp_path):
+    """A release candidate must do real work, keep its safety default, and stop.
+
+    `--version` and a tool list prove the executable starts; they do not prove
+    it can reach a plant, that freezing kept the read-only default that hides
+    control tools, or that it exits when the client does rather than lingering
+    as an orphan holding an OPC UA session open.
+    """
+    env = {**os.environ, "OPCUA_SERVER_URL": opcua_server}
+    for name in ("OPCUA_PROFILE", "OPCUA_ALLOW_INSECURE_CONTROL"):
+        env.pop(name, None)
+
+    responses, returncode = _exchange(
+        binary,
+        env,
+        tmp_path,
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "binary-smoke", "version": "0"},
+                },
+            },
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "read_opcua_nodes", "arguments": {"node_ids": ["ns=2;i=3"]}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "write_opcua_nodes",
+                    "arguments": {"nodes": [{"node_id": "ns=2;i=13", "value": 80}]},
+                },
+            },
+        ],
+    )
+
+    tools = {t["name"] for t in responses[2]["result"]["tools"]}
+    assert "read_opcua_nodes" in tools
+    assert "write_opcua_nodes" not in tools, "the default profile must not expose control"
+
+    read = responses[3]["result"]
+    assert not read.get("isError"), read
+    assert "ns=2;i=3" in json.dumps(read)
+
+    # Refused either as a protocol error or as a tool error; never performed.
+    write = responses[4]
+    assert "error" in write or write["result"].get("isError"), write
+
+    assert returncode == 0, f"{binary.name} exited {returncode} after its client closed stdin"

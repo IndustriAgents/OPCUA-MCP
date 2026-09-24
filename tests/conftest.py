@@ -43,6 +43,7 @@ import time
 from pathlib import Path
 
 import pytest
+import required_suite
 from fixtures.pki import CLIENT_URI, SERVER_URI, write_self_signed
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +103,14 @@ SECURE_SERVER_URI = SERVER_URI
 SECURE_CLIENT_URI = CLIENT_URI
 SECURE_USERNAME = "operator"
 SECURE_PASSWORD = "hunter2"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Release gates set OPCUA_TESTS_REQUIRED=1 so a missing mock fails the run
+    # instead of skipping a subsystem (#142); see tests/required_suite.py.
+    config.pluginmanager.register(
+        required_suite.RequiredSuite(required_suite.enabled()), "required-suite"
+    )
 
 
 def _node_major() -> int:

@@ -39,11 +39,11 @@ REQUIRED_OBSERVE_TOOLS = {
     "list_active_alarms",
 }
 
-#: Present only when the connected server advertises the capability behind them,
-#: which is why they are optional rather than required. Both are reads, and
-#: reading what already happened is the most observe-only thing there is — an
-#: observe deployment is exactly where "what fired overnight" gets asked.
-OPTIONAL_OBSERVE_TOOLS = {"read_opcua_history", "read_event_history"}
+#: Both reads, and reading what already happened is the most observe-only thing
+#: there is — an observe deployment is exactly where "what fired overnight" gets
+#: asked. Listed whatever the connected server supports (#140); a server without
+#: the archive refuses the call, not the catalogue.
+HISTORY_OBSERVE_TOOLS = {"read_opcua_history", "read_event_history"}
 
 
 def observe_params(impl: str, url: str) -> StdioServerParameters:
@@ -116,8 +116,7 @@ async def test_default_profile_advertises_only_observe_tools(observe_server):
         response = await session.list_tools()
 
     tools = {tool.name: tool for tool in response.tools}
-    assert set(tools) >= REQUIRED_OBSERVE_TOOLS, impl
-    assert set(tools) <= REQUIRED_OBSERVE_TOOLS | OPTIONAL_OBSERVE_TOOLS, impl
+    assert set(tools) == REQUIRED_OBSERVE_TOOLS | HISTORY_OBSERVE_TOOLS, impl
     assert tools["read_opcua_nodes"].annotations.read_only_hint is True
     assert tools["subscribe_opcua_nodes"].annotations.read_only_hint is False
     assert all(tool.annotations.destructive_hint is False for tool in tools.values())

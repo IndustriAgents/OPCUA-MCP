@@ -48,8 +48,9 @@ Every test runs against **both** server implementations.
 |------|------------------|
 | `test_lists_core_tools` | All 12 always-on tools are advertised |
 | `test_history_tool_exposed_when_supported` | History tool appears because the mock enables history |
-| `test_aggregate_tool_hidden_when_unsupported` | Aggregate tool is **hidden** (mock advertises no aggregate functions) — capability gating |
-| `test_aggregate_tool_exposed_when_supported` | Aggregate tool **appears** against the aggregate-capable mock |
+| `test_the_aggregate_argument_is_offered_even_where_unsupported` | `aggregate_function` is listed against a mock with no aggregates — the catalogue does not depend on the server (#140) |
+| `test_an_aggregate_call_against_a_server_without_them_errors_cleanly` | …and calling it is refused with `capability_not_supported` and a remediation |
+| `test_aggregate_tool_exposed_when_supported` | Against the aggregate-capable mock, `get_server_status` reports the functions it offers |
 | `test_aggregate_average_values_are_correct` | `Average` over a known ramp advances by exactly one interval per bucket |
 | `test_aggregate_default_end_time_is_utc` | Omitting `end_time` does not overshoot the window on a non-UTC host (#24) |
 | `test_aggregate_rejects_unknown_function` | An unsupported aggregate name is rejected, listing what the server offers |

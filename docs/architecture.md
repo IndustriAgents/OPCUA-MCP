@@ -310,58 +310,117 @@ a 500-node read unusable. The cache is dropped when the session is replaced, for
 the same reason the capability probes are: a restarted server may not be the same
 server.
 
-Capability is re-checked at invocation time as well, for the same reason policy
-is: a client may hold a `tools/list` from when the server still reported
-HistoricalAccess.
+Capability is checked on every call, and only on the call. The catalogue does
+not depend on it (#140).
 
-Tool visibility is the intersection of policy and server capability:
+### A stable catalogue: capabilities gate calls, not `tools/list`
 
-Some tools only make sense against servers that support them. Rather than
-advertising a tool that always fails, each runtime probes the connected OPC UA
-server at `tools/list` time and filters:
+Some tools only work against servers that support them:
 
-| Capability | Probe | Gates |
+| Capability | Probe | Needed by |
 |---|---|---|
 | `history` | Read `AccessHistoryDataCapability` (`ns=0;i=11193`) is true | `read_opcua_history` |
+| `historyEvents` | Read `AccessHistoryEventsCapability` (`ns=0;i=11194`) is true | `read_event_history` |
 | `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_opcua_history`, and its `aggregate_function` argument |
 
-A tool declares `capabilities` as a *list*, and is offered when the server
-reports any member. `read_opcua_history` names both, because a server with
-aggregates and no raw history can still answer an aggregate read — gating it on
-`history` alone would hide the one thing such a server is good at. The
-`aggregate_function` argument is then gated on its own, appearing only where
-aggregates exist and carrying that server's own function list in its
-description. Capability gating applies to an argument, not only to a tool.
+Until #140 each runtime filtered `tools/list` by these: a tool the server could
+not serve was left out, and `aggregate_function` was withheld from a server
+without aggregates and carried that server's own function list otherwise. It
+read well, and it made plant availability part of the MCP interface. A process
+that started while the plant was down advertised neither history tool; one that
+started while it was up but before the warm-up finished did the same (hence the
+3s wait `tools/list` used to do, #136); and when the plant came back nothing
+portable told a client to list again — see the next section for why neither
+runtime sends `notifications/tools/list_changed`. Clients and models commonly
+cache tool definitions for the life of a session, so whatever the first list
+said is what they kept. Where a capability changed an *argument* rather than a
+tool, the cached schema was not merely incomplete but wrong.
 
-The probes are **best-effort by design**: any failure yields "not supported"
-rather than an error. Python reads these through the lifecycle's active session;
+So the catalogue is the contract, for the lifetime of the process:
+
+- **`tools/list` advertises every tool `contract/tools.json` defines**, with the
+  contract's own input schema, and performs no OPC UA operation and no wait of
+  any kind. The one filter is the deployment policy (profile, `allowed_tools`,
+  the control gate), which is configuration fixed at start-up rather than plant
+  state, so it does not make the list move either. Offline, online, against a
+  server with history or without, the list is byte-for-byte the same, and the
+  same on both runtimes (`test_contract_parity.py`).
+- **A call is checked against the live server** before anything is sent. A tool
+  names the capabilities it needs in `capabilities` (any one will do), and an
+  argument that needs more names them in the tool's `argumentCapabilities`:
+  `read_opcua_history` needs `history` or `aggregate`, and with
+  `aggregate_function` it needs `aggregate` as well. The decision table is
+  `tests/fixtures/capability-gate.json`, driven by both runtimes.
+- **A refusal is typed** — the message begins with a code — and says what to do:
+  `capability_not_supported` (the server answered, and does not offer it),
+  `capability_unknown` (the question could not be completed; the next call asks
+  again) and `endpoint_offline` (the server could not be reached, so nothing was
+  checked). The first two name the capability node, the session generation and
+  the time the answer was determined, and quote the contract's `remediation` for
+  that capability.
+- **`get_server_status` → `capabilities`** reports the cached answers, the
+  session generation they were read on, when, and the server's aggregate
+  function names — the list that used to live in a schema description.
+
+**Answers are cached per session generation.** Each runtime counts the sessions
+it establishes (`sessionGeneration` / `session_generation`), reads the three
+capabilities off every new session — through `onSessionReplaced` / `_bind`, with
+the session in hand, never through `ensureConnection` — and stamps the answers
+with the generation they were read on. A new session may be a restarted server
+with different features: a stale "yes" would send a request the server cannot
+serve, and a stale "no" would refuse one it can. The two are not symmetric,
+though. A cached "yes" is trusted for the generation it was read on — if it has
+gone stale the request goes out and the server's own refusal says so. A "no" is
+never taken from the cache at all: it refuses without touching the network, so a
+session that had quietly died behind it (python-opcua cannot tell until it uses
+the socket) would never be noticed, and a server that came back *with* the
+feature would go on being refused. So an answer from an older generation, an
+`unknown`, or a "no" is asked again on the live session before a call is decided
+— and a probe that finds the session dead gets the same rebuild a tool call
+would, then asks again on the new one. A `resend` retry after a dead session
+re-checks for the same reason it re-authorizes.
+
+node-opcua makes one extra case of this. It repairs a dropped channel itself and
+keeps the same `ClientSession` object; when the server no longer knows the
+session — which is what a server restart looks like — it *re-creates* it on that
+same object. `connection.ts` watches for `session_restored` and compares the
+server's session id and its `ServerStatus.StartTime` with those recorded when
+the session was created: re-activated is the same session and nothing changes;
+re-created — a new id, or a server that has restarted since — is a new
+generation, and `onSessionRestored` re-reads the capabilities and drops the
+per-session node metadata. The id alone is not enough: a server that numbers its
+sessions from a counter, as python-opcua does, gives the first session after a
+restart the id the first one before it had. Python has no such repair
+and always builds a new client, so it reaches the same generations by the
+direct route.
+
+**A probe has three answers, not two.** A value, or a Bad status for the node
+(it does not exist, it may not be read), is the server answering: anything but
+`true`, or an empty aggregate folder, is `not_supported`. A request that could
+not be completed — a dead session, a timeout, a socket error — is `unknown`,
+with the reason, and is asked again by the next call that needs it. Until #140
+every failure read as "not supported", which refused a call the next attempt
+could have served. Python reads these through the lifecycle's active session;
 it does no network I/O at import time and creates no throwaway probe sessions.
 
-They also run where the answer can *change* — on every (re)connect — and not on
-every `tools/list`. That was the other way round, and it was expensive in the one
-situation that matters: `list_tools` opened a connection before answering, and
-`OpcuaConnection.connect` holds its lock across the whole backoff loop, so
-against an unreachable plant every catalogue request paid the full reconnect
-budget (7s by default, 32s with `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised
-every concurrent tool call behind it. Clients list at session start, which is
-exactly when a plant that is down is most likely to be down.
+The event tools other than `read_event_history` are deliberately **not** gated.
+Every OPC UA server has a Server object with an EventNotifier, and a server that
+raises nothing simply buffers nothing; there is no capability to probe that
+would make refusing them more honest than serving them. A server without Alarms
+& Conditions is told apart at call time instead: `list_active_alarms` reports
+that its ConditionRefresh call failed and that the server may not implement A&C,
+rather than returning an empty list a model would read as "no alarms".
 
-Both runtimes warm up once at start-up — Python from its lifespan, Node from
-`run()`, in the background since #136, with `tools/list` waiting up to 3s for it
-— and re-probe from the session-replaced callback. `tools/list` answers from
-that, with no network I/O of its own. Node's probes take the
-session as an argument for this reason and not as an optimisation: the callback
-runs *inside* `reconnect()`, so a probe that called `ensureConnection()` from
-there would re-enter the connect path it is standing in.
+A tool that is genuinely build- or runtime-specific rather than
+endpoint-specific would be a declared runtime difference
+(`contract/runtime-differences.json`), not a capability. There are none today:
+both runtimes advertise every tool.
 
-Convergence does not depend on a notification. A client that listed while the
-plant was down sees the core tools; any tool call brings the connection up and
-re-probes; the next `tools/list` carries the whole surface.
-
-### Why the tool list is polled too
+### Why the tool list is not announced
 
 `notifications/tools/list_changed` is not sent, on either runtime, for the same
-reason `notifications/resources/updated` is not — and it is the same SDK split.
+reason `notifications/resources/updated` is not — and it is the same SDK split,
+recorded in #84.
 `@modelcontextprotocol/sdk` 1.x can deliver it over stdio; the Python `mcp` 2.x
 SDK derives `tools.listChanged` from whether `subscriptions/listen` is served
 (`mcp/server/lowlevel/server.py`), that method exists only for streamable HTTP,
@@ -370,24 +429,23 @@ dropped with a debug log. Announcing the catalogue on Node only would mean a
 client written against one runtime behaving differently against the other, which
 is the thing this repo is organised to prevent.
 
-The catalogue is re-listable at any time, and unlike a resource update there is
-no information a client can only learn from the notification — which is why
-polling is an honest answer here and was not for issue #3.
+#84 settled this by making the list *re-listable*: a client that listed while the
+plant was down would see the whole surface if it asked again. That was correct
+when asked and wrong for the client that never asks again, which is most of them.
+Since #140 there is nothing to announce: the list does not change during the
+life of a process. Were a future transport able to carry the notification on
+both runtimes, it would be an optimisation for some other kind of change, never
+something correctness depends on.
 
 > There are three mocks, on purpose. The main one (`packages/mock-server/`,
 > :4840) enables history and advertises **no** aggregate functions, so the suite
-> can assert the aggregate tool stays hidden when unsupported. The second
+> can assert that an aggregate call is refused as unsupported while the argument
+> stays listed; started with `--no-history` it keeps no history at all, which is
+> how a restart that changes the server's features is tested. The second
 > (`packages/mock-server-aggregate/`, :4841) advertises aggregates, so the read
 > path itself is covered on both runtimes. The third
-> (`packages/mock-server-alarms/`, :4842) has a real alarm condition — see below.
-
-The event tools are deliberately **not** gated. Every OPC UA server has a Server
-object with an EventNotifier, and a server that raises nothing simply buffers
-nothing; there is no capability to probe that would make hiding them more honest
-than offering them. A server without Alarms & Conditions is told apart at call
-time instead: `list_active_alarms` reports that its ConditionRefresh call failed
-and that the server may not implement A&C, rather than returning an empty list a
-model would read as "no alarms".
+> (`packages/mock-server-alarms/`, :4842) has a real alarm condition and no event
+> archive — see below.
 
 ### The operator workflow, not just the first step of it
 
@@ -484,10 +542,12 @@ for settings such as `1000..1000`.
 **The warm-up runs beside the requests, not in front of them (#136).** Both
 runtimes open the MCP transport first and start the warm-up without waiting for
 it — Python from its lifespan, which the SDK must leave before it answers
-`initialize`, Node from `run()`. It had been put in front for a reason that still
-holds: requests served *during* it saw no session and answered as though the
-server supported nothing. So `tools/list` and `get_server_status` wait for it,
-for at most `WARM_UP_WAIT_MS` (3s, the same on both) from its start. Every
+`initialize`, Node from `run()`. It had been put in front for a reason that
+partly still holds: requests served *during* it saw no session, so a status read
+said "not connected" against a plant that was up. So `get_server_status` waits
+for it, for at most `WARM_UP_WAIT_MS` (3s, the same on both) from its start.
+`tools/list` waited too, until #140 made the catalogue independent of the
+connection; it now answers at once. Every
 other tool call waits for the warm-up — and for any connection round in flight —
 to end *before* it is authorized and audited, unbounded but for the round
 itself: the policy resolves `nsu=` entries through the namespace mapping bound
@@ -582,12 +642,12 @@ resolves against. The second attempt gets its own `allowed` audit line, and ever
 line carries an `attempt` number, because one call reaching the plant twice is
 two facts and not one.
 
-The capability gate runs *after* the connection, not before it. The capability
-answers are filled in by the reconnect callback, so a process that started while
-the plant was unreachable still holds its startup defaults, and checking them
-first refused `read_opcua_history` as "the server advertises none of: history"
-without ever asking the server. Unknown is not absent. `tools/list` is unchanged
-and still does no network I/O — that distinction is the whole of #83.
+The capability gate runs *after* the connection, not before it. A process that
+started while the plant was unreachable has asked no session anything, and
+checking first refused `read_opcua_history` as unsupported without ever asking
+the server. Unknown is not absent (#108) — and an unreachable server is
+`endpoint_offline`, not a capability answer (#140). `tools/list` does no network
+I/O at all — that distinction is the whole of #83.
 
 **One rebuild per outage, and the backoff outside the lock.** An outage does not
 arrive as one failure; it arrives as every in-flight call failing at once, each

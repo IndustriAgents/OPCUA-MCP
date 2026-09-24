@@ -283,10 +283,16 @@ class RestartableServer:
         self._cwd = cwd
         self._proc: subprocess.Popen | None = None
 
-    def start(self) -> None:
+    def start(self, *extra: str) -> None:
+        """Start it, with `extra` arguments for this run only.
+
+        The endpoint stays the same whatever they are, which is what lets a test
+        change what the server *supports* — `--no-history` on the bundled mock —
+        under an MCP server that is already running against it (#140).
+        """
         assert self._proc is None, "server is already running"
         self._proc = subprocess.Popen(
-            self._argv,
+            [*self._argv, *extra],
             cwd=self._cwd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -304,9 +310,9 @@ class RestartableServer:
         while time.time() < deadline and _port_open(HOST, self._port):
             time.sleep(0.2)
 
-    def restart(self) -> None:
+    def restart(self, *extra: str) -> None:
         self.stop()
-        self.start()
+        self.start(*extra)
 
 
 @pytest.fixture

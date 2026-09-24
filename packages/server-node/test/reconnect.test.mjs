@@ -149,7 +149,9 @@ describe("dead-session detection", () => {
   it("words the not-connected error the way both runtimes word it", () => {
     assert.equal(
       notConnectedMessage("opc.tcp://plc:4840", "ECONNREFUSED"),
-      "Not connected to the OPC UA server at opc.tcp://plc:4840: ECONNREFUSED. " +
+      // The code first, so a client can tell an outage from a capability the
+      // server lacks without parsing the prose (#140).
+      "endpoint_offline: Not connected to the OPC UA server at opc.tcp://plc:4840: ECONNREFUSED. " +
         "Call get_server_status for details."
     );
   });
@@ -263,19 +265,20 @@ describe("requests served while the warm-up is still running", () => {
     return { tools, conn, release };
   }
 
-  it("answers tools/list once the window has passed", { timeout: 10000 }, async () => {
-    const { tools, release } = stalled(200);
+  it("answers tools/list at once, whole, without waiting for it", { timeout: 10000 }, async () => {
+    // #140: the catalogue does not depend on the connection, so there is nothing
+    // to wait for — not even the bounded warm-up window tools/list used to sit
+    // through.
+    const { tools, release } = stalled(5000);
     tools.startWarmUp();
 
     const began = Date.now();
     const listed = await tools.listTools();
-    assert.ok(Date.now() - began < 2000, `tools/list took ${Date.now() - began}ms`);
-    assert.ok(listed.some((tool) => tool.name === "get_server_status"));
-
-    // Measured from the warm-up's start, not per request.
-    const again = Date.now();
-    await tools.listTools();
-    assert.ok(Date.now() - again < 100, "the second tools/list waited all over again");
+    assert.ok(Date.now() - began < 100, `tools/list took ${Date.now() - began}ms`);
+    assert.deepEqual(
+      listed.map((tool) => tool.name),
+      tools.policy.visibleTools(CONTRACT.tools).map((tool) => tool.name)
+    );
     release();
   });
 
@@ -320,18 +323,25 @@ describe("requests served while the warm-up is still running", () => {
     }
   );
 
-  it("waits for a warm-up that finishes inside the window", { timeout: 10000 }, async () => {
-    // Against a plant that is up the first catalogue must be the whole one,
-    // which is why the warm-up used to run before any request was served.
-    const { tools, release } = stalled(5000);
-    let finished = false;
-    tools.warmUp = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      finished = true;
-    };
-    tools.startWarmUp();
-    await tools.listTools();
-    assert.equal(finished, true);
-    release();
-  });
+  it(
+    "has get_server_status wait for a warm-up that finishes inside the window",
+    { timeout: 10000 },
+    async () => {
+      // Against a plant that is up the first status must be a connected one,
+      // which is why the warm-up used to run before any request was served.
+      const { tools, conn, release } = stalled(5000);
+      let finished = false;
+      tools.warmUp = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        finished = true;
+      };
+      conn.withRetry = async () => {
+        throw new Error("offline, as far as this test is concerned");
+      };
+      tools.startWarmUp();
+      await tools.callTool({ params: { name: "get_server_status", arguments: {} } });
+      assert.equal(finished, true);
+      release();
+    }
+  );
 });

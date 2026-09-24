@@ -23,42 +23,34 @@ from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, 
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 
-# The bundled mock server enables value history and, since #117, event history,
-# but advertises no aggregate functions — so a tool is applicable here if it
-# needs nothing or accepts one of those two. Keeping this in step with the mock
-# is the point: a capability the mock gained and this set did not would show up
-# as a tool "extra" to the contract, which is how the gate gets noticed.
-_MOCK_CAPS = {"history", "historyEvents"}
-EXPECTED = {
-    t["name"]: t
-    for t in CONTRACT["tools"]
-    if not t["capabilities"] or set(t["capabilities"]) & _MOCK_CAPS
-}
-
-#: Arguments both servers withhold when the connected server cannot honour them.
-#:
-#: Capability gating moved down a level when the history and aggregate tools
-#: merged: `read_opcua_history` is offered whenever the server reports
-#: HistoricalAccess, and `aggregate_function` appears on it only if the server
-#: *also* advertises aggregates. Against this mock it does not, so both runtimes
-#: must withhold these two — which is the property tool-level gating used to
-#: have, applied to an argument. `test_aggregate_e2e.py` drives the other side
-#: against the aggregate mock, where they must be present.
-AGGREGATE_ONLY_PARAMS = {"aggregate_function", "processing_interval"}
+# Every tool the contract defines, whatever the connected server supports. This
+# used to be the contract *gated to this mock's capabilities* — no aggregates
+# here, so `aggregate_function` was withheld — which made the catalogue a client
+# cached depend on the server it listed against (#140). The mock is still the
+# one without aggregates; what that changes now is what a call is told, not what
+# is listed.
+EXPECTED = {t["name"]: t for t in CONTRACT["tools"]}
 
 
 def _expected_schema(spec: dict) -> dict:
-    """The contract's input schema for `spec`, minus what this mock cannot support.
+    """The contract's input schema for `spec`, exactly as the contract has it."""
+    return copy.deepcopy(spec["inputSchema"])
 
-    A deep copy, because the aggregate-only arguments are removed from it: this
-    mock advertises no aggregate functions, so neither runtime may offer them.
+
+def normalized_catalogue(listed) -> str:
+    """A `tools/list` answer as one canonical string, for byte-for-byte comparison.
+
+    Every field the SDK parsed off the wire, `null` ones dropped — a field one
+    SDK sends as null and the other omits is the same definition — keys sorted,
+    tools in the order they were listed. Anything else that differs is a real
+    difference in what a client is told.
     """
-    schema = copy.deepcopy(spec["inputSchema"])
-    for argument in AGGREGATE_ONLY_PARAMS:
-        schema.get("properties", {}).pop(argument, None)
-        if argument in schema.get("required", []):
-            schema["required"].remove(argument)
-    return schema
+    return json.dumps(
+        [tool.model_dump(by_alias=True, exclude_none=True, mode="json") for tool in listed.tools],
+        sort_keys=True,
+        ensure_ascii=False,
+        indent=1,
+    )
 
 
 # Resources are not capability-gated: both servers advertise all of them always.
@@ -158,11 +150,12 @@ async def test_servers_match_contract(impl_params):
         listed = await session.list_tools()
     advertised = {t.name: t for t in listed.tools}
 
-    # 1) Exact tool-name parity with the contract (gated to the mock's caps).
+    # 1) Exact tool-name parity with the contract, in the contract's order.
     assert set(advertised) == set(EXPECTED), (
         f"{impl}: advertised tools diverge from contract; "
         f"missing={set(EXPECTED) - set(advertised)} extra={set(advertised) - set(EXPECTED)}"
     )
+    assert [t.name for t in listed.tools] == list(EXPECTED), f"{impl}: listed out of order"
 
     # 2) Description + schema parity per tool, compared *whole*.
     #
@@ -201,6 +194,29 @@ async def test_servers_match_contract(impl_params):
             assert tool.output_schema == expected, (
                 f"{impl}/{name}: outputSchema differs from the shared result shape"
             )
+
+
+@pytest.mark.parametrize("where", ["online", "offline"])
+async def test_both_runtimes_advertise_byte_identical_definitions(where, opcua_server):
+    """ADR 0001's Model A, for the catalogue: one definition, whichever runtime.
+
+    Compared whole and normalised rather than field by field, because the
+    field-by-field version is how the Python server once advertised a
+    signature-derived schema for a release: every field this file checked
+    matched. And compared offline as well as online, because the catalogue must
+    not depend on the plant (#140) — so the two runtimes must agree even when
+    neither can reach it.
+    """
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    url = opcua_server if where == "online" else "opc.tcp://127.0.0.1:1/unreachable"
+    catalogues = {}
+    for impl in ("python", "node"):
+        async with connect(_server_params(impl, url)) as session:
+            catalogues[impl] = normalized_catalogue(await session.list_tools())
+    assert catalogues["python"] == catalogues["node"], (
+        "the two runtimes advertise different tool definitions"
+    )
 
 
 #: Tools this mock cannot exercise, with the reason. Named rather than omitted,

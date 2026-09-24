@@ -162,6 +162,10 @@ async def test_both_servers_report_the_same_thing(opcua_server):
             reports[impl] = status_of(await session.call_tool("get_server_status", {}))
 
     moving = {"current_time", "start_time", "build_info"}
+    # When the capabilities were read is the moment each server asked; what it
+    # found, and on which session, must match.
+    for report in reports.values():
+        assert report["capabilities"].pop("checked_at").endswith("Z"), report
     assert {k: v for k, v in reports["python"].items() if k not in moving} == {
         k: v for k, v in reports["node"].items() if k not in moving
     }

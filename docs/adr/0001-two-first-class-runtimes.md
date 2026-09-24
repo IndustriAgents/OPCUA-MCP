@@ -133,7 +133,7 @@ behaves the same on either package, except where
 | Area | Guarantee | Enforced by |
 |---|---|---|
 | **Names** | Same tools, same resource, same capability gating, same `serverInfo.name` | `test_contract_parity.py`, `test_version_parity.py` |
-| **Schemas** | Byte-identical input schemas and one result shape per tool, both from `contract/tools.json` | `test_contract_parity.py`, `argument-validation.json` in both unit suites |
+| **Schemas** | Byte-identical normalised tool definitions — input schemas, output shapes, annotations — both from `contract/tools.json`, online and offline alike (the catalogue does not depend on the plant, #140) | `test_contract_parity.py`, `argument-validation.json` in both unit suites |
 | **Behaviour** | Same validation, limits, capability checks, retry policy, uncertain-outcome handling, value encoding, node-id canonicalisation, policy decisions and value bounds | End-to-end suite parametrised over both runtimes; the eight shared fixture tables; `test_runtime_differential.py` |
 | **Errors** | The same full error text, substituted from `contract/tools.json` → `errors`. The one part that is not the project's to word is a `{reason}` passed through from the OPC UA client library — a declared difference, which covers the library's words and nothing this project adds around them | `test_runtime_differential.py` |
 | **Configuration** | Same variables, defaults and startup refusals, same `--install` / `--dry-run` / `--version` behaviour | `test_security_config.py`, `test_reconnect.py`, `test_security_startup.py`, `test_install_parity.py` |
@@ -191,9 +191,10 @@ The rules:
    The precedent is `notifications/resources/updated` and
    `notifications/tools/list_changed` — see
    [architecture.md](../architecture.md#why-the-subscriptions-resource-is-polled-not-pushed).
-   If the surface ever has to vary, it varies through a declared capability in
-   `contract/tools.json`, the way history tools are gated today, never through
-   a code path only one runtime has.
+   The catalogue does not vary with the plant either (#140): a capability in
+   `contract/tools.json` gates the *call* — refused with a typed error, the same
+   on both — never what `tools/list` advertises, and never through a code path
+   only one runtime has.
 3. **Refuse, never downgrade.** A runtime asked for something only the other
    supports refuses at startup and names the other runtime, as the Python server
    does for the AES policies.

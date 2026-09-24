@@ -427,6 +427,49 @@
         "error": {
           "type": ["string", "null"],
           "description": "Why this server is not connected, or could not read the status, in the words of the underlying client library. Null when everything was read."
+        },
+        "capabilities": {
+          "type": "object",
+          "description": "What the OPC UA server was last found to support, for the tools and arguments that need an optional feature (contract `capabilities`), and which session that answer is from. Every tool is listed whatever this says; this is what a call that needs one of these will find. Read on each new OPC UA session and never reused across one, because a restarted server may not be the same server. Reported without asking the server again, so reading it costs nothing and is safe while the connection is down.",
+          "properties": {
+            "session_generation": {
+              "type": ["integer", "null"],
+              "description": "Which of this process's OPC UA sessions (1, 2, ...) the answers below were read on. A new session, after a server restart or a dropped connection, is a new generation and invalidates them. null when no session has been asked yet."
+            },
+            "checked_at": {
+              "type": ["string", "null"],
+              "description": "When the answers below were read, ISO-8601 UTC with a trailing 'Z'. null when no session has been asked yet."
+            },
+            "support": {
+              "type": "object",
+              "description": "One answer per capability: 'supported', 'not_supported' (the server said no, or has no such node), or 'unknown' (not asked yet, or the question could not be completed — the next call that needs it asks again).",
+              "properties": {
+                "history": {
+                  "type": "string",
+                  "enum": ["supported", "not_supported", "unknown"],
+                  "description": "AccessHistoryDataCapability (ns=0;i=11193): read_opcua_history's raw readings."
+                },
+                "historyEvents": {
+                  "type": "string",
+                  "enum": ["supported", "not_supported", "unknown"],
+                  "description": "AccessHistoryEventsCapability (ns=0;i=11194): read_event_history."
+                },
+                "aggregate": {
+                  "type": "string",
+                  "enum": ["supported", "not_supported", "unknown"],
+                  "description": "AggregateFunctions (ns=0;i=2997) is non-empty: read_opcua_history with aggregate_function."
+                }
+              },
+              "required": ["history", "historyEvents", "aggregate"],
+              "additionalProperties": false
+            },
+            "aggregate_functions": {
+              "type": "array",
+              "description": "The aggregate functions the server offers, by OPC UA name ('Average', 'Minimum', 'Maximum', ...): the values read_opcua_history accepts for aggregate_function. Empty when it offers none, or has not been asked."
+            }
+          },
+          "required": ["session_generation", "checked_at", "support", "aggregate_functions"],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -440,7 +483,8 @@
         "build_info",
         "diagnostics",
         "namespaces",
-        "error"
+        "error",
+        "capabilities"
       ],
       "additionalProperties": false
     },
@@ -800,25 +844,32 @@
     "maxPropertiesPerRequest": 300
   },
   "capabilities": {
+    "$comment": "Optional OPC UA server features some tools, or some arguments, need. They gate *calls*, never the catalogue (issue #140): every tool is advertised with the same input schema whatever the endpoint is doing, because clients and models cache tool definitions for the life of a session and no portable notification tells them to list again. A tool names the capabilities it needs in its own `capabilities` (any one of them will do) and an argument that needs more names them in the tool's `argumentCapabilities`. On a call each runtime checks what the *current* OPC UA session was found to support and refuses with errors.capabilityNotSupported or errors.capabilityUnknown, worded from `label`, `browseName`, `nodeId` and `remediation` here. The answers are read on every new session and invalidated when the session generation changes, because a restarted server may not be the same server; get_server_status reports them under `capabilities`. A probe that the server answered (false, an empty folder, or a Bad status such as BadNodeIdUnknown) is 'not_supported'; one that could not be completed (a timeout, a dropped channel) is 'unknown', and is asked again on the next call that needs it.",
     "history": {
+      "label": "historical data access",
+      "remediation": "This server keeps no value history that can be read back. Read the current value with read_opcua_nodes, or watch it from now on with subscribe_opcua_nodes; to keep history, enable historizing for the node on the OPC UA server.",
       "nodeId": "ns=0;i=11193",
       "browseName": "AccessHistoryDataCapability",
       "check": "readBooleanTrue"
     },
     "historyEvents": {
       "$comment": "Part 11 \u00a75.4's HistoryServerCapabilities. A separate node from AccessHistoryDataCapability and a separate answer: storing values and storing events are different features, and a server commonly does one and not the other. Note that this node is genuinely absent from some servers' namespace 0 rather than present-and-false \u2014 python-opcua is one \u2014 which reads the same way here and should: a server that cannot say it keeps event history is one whose event history nobody should go looking for.",
+      "label": "event history",
+      "remediation": "This server keeps no event archive, so past events cannot be read back. Capture events from now on with subscribe_events and read_events, or list the alarms that are active now with list_active_alarms; to keep events, enable event historizing on the OPC UA server.",
       "nodeId": "ns=0;i=11194",
       "browseName": "AccessHistoryEventsCapability",
       "check": "readBooleanTrue"
     },
     "aggregate": {
+      "label": "aggregate functions",
+      "remediation": "Call read_opcua_history without aggregate_function for the raw readings and summarise them yourself, over a range short enough to stay under the per-call maximum.",
       "nodeId": "ns=0;i=2997",
       "browseName": "AggregateFunctions",
       "check": "browseNonEmpty"
     }
   },
   "errors": {
-    "$comment": "Every message a tool call can fail with, in one place, because the two runtimes must word a failure identically and nothing else made them. They were hand-mirrored literals in tools.ts and server.py, and the framing had already diverged unnoticed: the Node server prefixed every failure with 'Error: ' and the Python server did not, so one failure read two ways and no test compared them. A tool failure is returned with isError set, which already says it is an error, so neither runtime prefixes it now. Placeholders are {name}, substituted by errors.ts / errors.py; tests/e2e/test_runtime_differential.py drives a table of failing calls through both servers and asserts the text is byte-identical.",
+    "$comment": "Every message a tool call can fail with, in one place, because the two runtimes must word a failure identically and nothing else made them. They were hand-mirrored literals in tools.ts and server.py, and the framing had already diverged unnoticed: the Node server prefixed every failure with 'Error: ' and the Python server did not, so one failure read two ways and no test compared them. A tool failure is returned with isError set, which already says it is an error, so neither runtime prefixes it now. Placeholders are {name}, substituted by errors.ts / errors.py; tests/e2e/test_runtime_differential.py drives a table of failing calls through both servers and asserts the text is byte-identical. Three messages begin with a stable code and a colon, because a client has to act on them differently and should not have to parse prose to know which it got: 'endpoint_offline' (notConnected: the OPC UA server could not be reached, so nothing could be checked or sent), 'capability_not_supported' (the server answered, and does not offer what the call needs) and 'capability_unknown' (the server could not be asked; calling again re-checks). The two capability refusals are issued before anything reaches the plant, and name the session generation and the time the answer was determined, the same values get_server_status reports under capabilities (issue #140).",
     "emptyArray": "{tool} requires a non-empty {argument} array",
     "missingArgument": "{tool} requires {argument}",
     "wrongType": "{tool} argument {argument} must be {expected}",
@@ -829,7 +880,8 @@
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
     "controlNeedsSecureChannel": "Tool \"{tool}\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",
     "controlNeedsVerifiedServer": "Tool \"{tool}\" is disabled because the OPC UA server's identity is not verified: the channel is secured, but to whichever server answered. Set OPCUA_SERVER_CERT to the server's certificate to pin it, or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true on a lab network only.",
-    "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
+    "capabilityNotSupported": "capability_not_supported: {tool} needs {requirement}, and the OPC UA server at {url} does not offer it (determined on session generation {generation} at {checked_at}). Nothing was sent. {remediation}",
+    "capabilityUnknown": "capability_unknown: {tool} needs {requirement}, and whether the OPC UA server at {url} offers it could not be determined on session generation {generation} ({reason}). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities.",
     "tooManyItems": "{tool} accepts at most {limit} entries in {argument}, got {count}. Nothing was sent to the OPC UA server; split the request.",
     "requestTooLarge": "{tool} arguments are {size} bytes of JSON, over the {limit}-byte limit on one request (limits.maxRequestBytes). Nothing was sent to the OPC UA server.",
     "stringTooLong": "{tool} argument {argument} is a string of {size} bytes, over the {limit}-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server.",
@@ -847,7 +899,7 @@
     "currentValueUnreadable": "Node {node_id} has a max_change bound, which can only be checked against its current value — and reading it failed ({reason}). Nothing was written.",
     "methodNotAllowed": "Method {object_node_id}|{method_node_id} is not allowed by the operator policy",
     "guardMissing": "Tool \"{tool}\" declares no policy guard, so it cannot be authorized",
-    "notConnected": "Not connected to the OPC UA server at {url}: {reason}. Call get_server_status for details.",
+    "notConnected": "endpoint_offline: Not connected to the OPC UA server at {url}: {reason}. Call get_server_status for details.",
     "stillConnecting": "Still connecting to the OPC UA server at {url}; a connection attempt is in progress (last failure: {reason})",
     "readFailed": "Failed to read nodes: {reason}",
     "writeFailed": "Failed to write nodes: {reason}",
@@ -983,9 +1035,10 @@
       "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "retryPolicy": "resend",
       "capabilities": ["history", "aggregate"],
+      "argumentCapabilities": { "aggregate_function": ["aggregate"] },
       "resultShape": "historyRecords",
       "reportsCompleteness": true,
-      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. The `aggregate_function` argument is only advertised when the connected server reports aggregate support, and its description then lists the functions that server actually offers. This tool is advertised when the server supports historical access *or* aggregates — either capability makes some form of it usable, and a raw read against an aggregate-only server is refused by that server rather than hidden here. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
+      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1008,7 +1061,7 @@
           },
           "aggregate_function": {
             "type": "string",
-            "description": "Summarise each interval with this OPC UA aggregate instead of returning raw readings"
+            "description": "Summarise each interval with this OPC UA aggregate instead of returning raw readings, by its OPC UA name: 'Average', 'Minimum', 'Maximum', 'Count', 'Total', 'Interpolative', ... Which ones the connected server offers is its own choice, listed by get_server_status under capabilities.aggregate_functions; a name it does not offer is refused with the list it does."
           },
           "processing_interval": {
             "type": "number",
@@ -1034,7 +1087,7 @@
       ],
       "resultShape": "eventRecords",
       "reportsCompleteness": true,
-      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Offered only when the server advertises AccessHistoryEventsCapability; storing values and storing events are separate features and many servers do one without the other. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers. The structured result's `completeness` says whether the range held more events than came back.",
+      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Needs a server that reports AccessHistoryEventsCapability — storing values and storing events are separate features and many servers do one without the other — and against one that does not, a call is refused with capability_not_supported and what to use instead. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers. The structured result's `completeness` says whether the range held more events than came back.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1072,7 +1125,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "serverStatus",
-      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server. 'diagnostics' is the server's own ServerDiagnosticsSummary when it publishes one — session and subscription counts, and how many sessions and requests it has rejected — which is what separates 'the server is slow' from 'the server is refusing us'. OPC UA leaves diagnostics optional, so null there means this server does not say, not zero.",
+      "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server. 'diagnostics' is the server's own ServerDiagnosticsSummary when it publishes one — session and subscription counts, and how many sessions and requests it has rejected — which is what separates 'the server is slow' from 'the server is refusing us'. OPC UA leaves diagnostics optional, so null there means this server does not say, not zero. 'capabilities' says which optional features — value history, event history, aggregates and their names — the server was found to offer, on which session and when: the answer to why read_opcua_history or read_event_history was refused.",
       "inputSchema": {
         "type": "object",
         "properties": {},

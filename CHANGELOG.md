@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — the tool catalogue no longer moves with the plant (#140)
+- **`tools/list` advertises every tool the contract defines, with the same
+  schema, whatever the OPC UA endpoint is doing.** It used to be filtered by
+  what the connected server supported: `read_opcua_history` and
+  `read_event_history` were missing while the plant was down (or before the
+  first connection finished), and `aggregate_function` was withheld from a
+  server without aggregates. MCP clients commonly list once per session and no
+  portable notification tells them to list again, so a client that started
+  while the plant was down never learned the history tools existed. The list is
+  now filtered by the deployment policy only — configuration, not plant state —
+  and does no OPC UA I/O and no waiting: the 3s warm-up wait `tools/list` did
+  since #136 is gone (`get_server_status` keeps it). Offline, online, with or
+  without history, the list is byte-for-byte the same, and the same on both
+  runtimes.
+- **A call the server cannot serve is refused before anything is sent, with a
+  typed error.** Three failures now begin with a stable code:
+  `capability_not_supported: …` (the server answered, and does not offer the
+  history, event history or aggregates the call needs), `capability_unknown: …`
+  (the question could not be completed; calling again re-checks) and
+  `endpoint_offline: …` (the existing "Not connected to the OPC UA server at …",
+  for every tool). The capability refusals name the capability node, the session
+  generation and time the answer was read, and what to use instead. They replace
+  "OPC UA server advertises none of: …" and, for `aggregate_function` against a
+  server without aggregates, "Server does not advertise any aggregate functions".
+  **Upgrading:** anything matching the start of those messages must allow for
+  the code in front.
+- **`get_server_status` reports `capabilities`**: `support` per capability
+  (`supported` / `not_supported` / `unknown`), the `session_generation` and
+  `checked_at` it was read on, and the server's `aggregate_functions` — the list
+  that used to be appended to the `aggregate_function` description.
+- **Capability answers belong to one OPC UA session.** They are read on every
+  new session and never reused across a session generation; a "no" is always
+  confirmed with the live server before a call is refused, and a probe that
+  finds the session dead rebuilds it first. The Node runtime now also notices
+  when node-opcua silently re-creates the session after a server restart (a new
+  session id, or a moved `ServerStatus.StartTime`), re-reading the capabilities
+  and dropping the per-session engineering-unit cache, as the Python runtime
+  always did. A probe that timed out is `unknown` rather than "not supported".
+- The bundled mock takes `--no-history`, so the suite can restart it with
+  different features under a running MCP server.
+
 ### Changed — **breaking** for `operator` / `full` without `OPCUA_SERVER_CERT`
 - **Control now needs an authenticated OPC UA server, not only an encrypted
   channel** (#134). The control gate checked `OPCUA_SECURITY_POLICY != None`,
@@ -157,10 +198,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all of it: 15s with the default delays and `-1`.
 
   Both runtimes now open the MCP transport first and run the warm-up in the
-  background. `tools/list` and `get_server_status` wait for it for at most 3s
-  from its start — so against a reachable plant the first catalogue is still
-  the whole one, which is why the warm-up had been moved in front of the
-  transport. A tool call that arrives during the warm-up (or any other
+  background. `get_server_status` waits for it for at most 3s from its start —
+  so against a reachable plant the first status is still a connected one, which
+  is why the warm-up had been moved in front of the transport. (`tools/list`
+  waited too, until #140 above made the catalogue independent of the
+  connection.) A tool call that arrives during the warm-up (or any other
   connection attempt) waits for it to end *before* it is authorized and audited,
   not merely before its request goes out: the policy resolves `nsu=` allowlist
   entries through the namespace mapping bound on connect, and the audit record

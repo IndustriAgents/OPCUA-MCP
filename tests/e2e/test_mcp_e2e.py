@@ -245,32 +245,28 @@ async def test_history_tool_exposed_when_supported(server):
     assert HISTORY_TOOL[impl] in names
 
 
-async def test_the_aggregate_argument_is_withheld_when_unsupported(server):
-    """The mock advertises no aggregate functions, so neither server may offer
-    `aggregate_function` on `read_opcua_history` (capability gating).
+async def test_the_aggregate_argument_is_offered_even_where_unsupported(server):
+    """The mock advertises no aggregate functions, and the argument is listed anyway.
 
-    Gating moved from the tool to the argument when the two history tools merged:
-    the tool is offered because this server *does* support HistoricalAccess, and
-    the one thing it cannot do is simply not on the menu. The positive cases live
-    in ``e2e/test_aggregate_e2e.py``, against the aggregate-capable mock.
+    It used to be withheld here, and offered against a server with aggregates —
+    so the schema a client cached depended on which server, and which moment, it
+    had listed against (#140). The schema is now the contract's whatever the
+    server supports, and the next test is what a call that needs aggregates gets
+    instead.
     """
     _impl, params = server
     async with connect(params) as session:
         listed = await session.list_tools()
     history = next(tool for tool in listed.tools if tool.name == "read_opcua_history")
     offered = set((history.input_schema or {}).get("properties", {}))
-    assert "aggregate_function" not in offered, sorted(offered)
-    assert "processing_interval" not in offered, sorted(offered)
-    assert "num_values" in offered, "a raw history read must still be offered"
+    assert {"aggregate_function", "processing_interval", "num_values"} <= offered, sorted(offered)
 
 
 async def test_an_aggregate_call_against_a_server_without_them_errors_cleanly(server):
-    """Asking for an aggregate anyway must say so, not crash or mislead.
+    """Asking for an aggregate the server cannot compute says so, before anything is sent.
 
-    A client may hold a cached catalogue from a moment when the server did
-    advertise aggregates, so the argument being withheld from tools/list is not
-    the same as it being unreachable. Both runtimes recompute support on demand
-    rather than trusting a cache that can go stale.
+    Structured, not merely an error: the code a client can act on, which
+    capability, and what to do instead — here, read the raw values (#140).
     """
     impl, params = server
     async with connect(params) as session:
@@ -284,7 +280,12 @@ async def test_an_aggregate_call_against_a_server_without_them_errors_cleanly(se
             },
         )
     assert result.is_error is True, impl
-    assert "aggregate" in text_of(result).lower(), f"{impl}: {text_of(result)!r}"
+    text = text_of(result)
+    assert text.startswith("capability_not_supported: read_opcua_history needs aggregate"), (
+        f"{impl}: {text!r}"
+    )
+    assert "AggregateFunctions, ns=0;i=2997" in text, f"{impl}: {text!r}"
+    assert "without aggregate_function" in text, f"{impl}: no remediation in {text!r}"
 
 
 async def test_read_single_node(server):

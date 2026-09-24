@@ -363,8 +363,10 @@ def test_both_runtimes_resolve_the_same_status_codes():
 
 def test_the_not_connected_message_is_shared_wording():
     message = not_connected_message("opc.tcp://plc:4840", "ECONNREFUSED")
+    # The code first, so a client can tell an outage from a capability the
+    # server lacks without parsing the prose (#140).
     assert message == (
-        "Not connected to the OPC UA server at opc.tcp://plc:4840: ECONNREFUSED. "
+        "endpoint_offline: Not connected to the OPC UA server at opc.tcp://plc:4840: ECONNREFUSED. "
         "Call get_server_status for details."
     )
     assert message == _node_eval(

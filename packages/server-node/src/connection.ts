@@ -16,9 +16,10 @@
 //      so `onSessionReplaced` lets the subscription manager re-establish what it
 //      was monitoring.
 //
-// Capability probes are best-effort by design: an optional capability must
-// never break tools/list, so a transient outage still leaves the core tools
-// advertised.
+// Capability probes never throw. They report what the server answered, or
+// `unknown` with the reason when it could not be asked, and the caller decides
+// what that means for a call (see capabilities.ts). They are never on the
+// tools/list path: the catalogue does not depend on them (#140).
 // `node-opcua-client`, not the umbrella `node-opcua`: this is an OPC UA *client*,
 // and the umbrella package's entry point drags in the server implementation
 // alongside it. That half is not merely dead weight in the downloadable bundles
@@ -38,6 +39,7 @@ import {
   reconnectBudgetMs,
   reconnectConfig,
 } from "./config.js";
+import { type Probe } from "./capabilities.js";
 import { CONTRACT } from "./contract.js";
 import { ToolPolicy, toolPolicy } from "./policy.js";
 import {
@@ -207,6 +209,11 @@ export class OpcuaConnection {
   private session_: string | null = null;
   /** How many sessions this process has established; see `sessionGeneration`. */
   private generation_ = 0;
+  /** The OPC UA server's own id for the session held, and the server's
+   *  ServerStatus.StartTime when it was created: together they tell a session
+   *  node-opcua re-activated from one it had to re-create; see `restored`. */
+  private serverSessionId: string | null = null;
+  private serverStartTime: number | null = null;
   session: ClientSession | null = null;
 
   /** Called with a *new* session after a dead one was replaced.
@@ -215,6 +222,15 @@ export class OpcuaConnection {
    * object, so anything holding one stays valid and this is not called.
    */
   onSessionReplaced: ((session: ClientSession) => Promise<void>) | null = null;
+
+  /** Called when node-opcua's own repair had to re-create the session.
+   *
+   * The same `ClientSession` object, so nothing that holds it needs replacing —
+   * node-opcua has already moved the subscriptions across — but a *new* session
+   * on the server, which after a restart may not be the same server. Anything
+   * learned about the old one has to be learned again (#140).
+   */
+  onSessionRestored: ((session: ClientSession) => Promise<void>) | null = null;
 
   /** True while this server holds a session it believes is live. */
   get connected(): boolean {
@@ -269,7 +285,9 @@ export class OpcuaConnection {
    *
    * The random `sessionId` says two records rode *different* sessions; this says
    * in which order, and how many were lost in between, without anyone having to
-   * reassemble the connect log (#146).
+   * reassemble the connect log (#146). It is also what the capability answers
+   * are keyed on: an answer read on generation 2 says nothing about generation
+   * 3, which may be a restarted server with different features (#140).
    */
   get sessionGeneration(): number | null {
     return this.session_ === null ? null : this.generation_;
@@ -339,6 +357,8 @@ export class OpcuaConnection {
       this.session = session;
       this.session_ = randomBytes(8).toString("hex");
       this.generation_ += 1;
+      this.serverSessionId = session.sessionId.toString();
+      session.on("session_restored", () => void this.restored(session));
       this.state = "connected";
       this.lastError = null;
       console.error("OPC UA session created");
@@ -352,6 +372,7 @@ export class OpcuaConnection {
       // exists. One read of one mandatory node; failing it is not fatal, but it
       // does leave URI-pinned entries unresolved, and the policy denies those.
       await this.bindPolicyNamespaces(session);
+      this.serverStartTime = await this.startTimeOf(session);
     } catch (error) {
       if (client) {
         try {
@@ -368,6 +389,43 @@ export class OpcuaConnection {
       throw error;
     } finally {
       this.opening = null;
+    }
+  }
+
+  /** node-opcua has repaired `session`: re-activated it, or re-created it.
+   *
+   * Re-activated is the same session on a new channel, and nothing changes. A
+   * re-created one — what the repair does when the server no longer knows the
+   * session, which is what a server restart looks like — is a new session in
+   * every sense that matters here, although it arrives on the same object: so it
+   * is a new generation, with a new id, and `onSessionRestored` is told. Without
+   * this, a server restarted with different features was, on this runtime and
+   * not the Python one, still believed to have the old ones.
+   *
+   * The server's session id alone does not tell them apart: a server that
+   * numbers its sessions from a counter hands the first session after a restart
+   * the id the first one before it had — python-opcua does exactly that. So a
+   * moved ServerStatus.StartTime counts too, which is the definition of a
+   * restart and is mandatory on every server.
+   */
+  private async restored(session: ClientSession): Promise<void> {
+    if (session !== this.session) return;
+    const serverSessionId = session.sessionId.toString();
+    const startTime = await this.startTimeOf(session);
+    if (session !== this.session) return;
+    const restarted =
+      startTime !== null && this.serverStartTime !== null && startTime !== this.serverStartTime;
+    if (serverSessionId === this.serverSessionId && !restarted) return;
+    this.serverSessionId = serverSessionId;
+    if (startTime !== null) this.serverStartTime = startTime;
+    this.session_ = randomBytes(8).toString("hex");
+    this.generation_ += 1;
+    console.error("OPC UA session re-created after the server lost it");
+    if (!this.onSessionRestored) return;
+    try {
+      await this.onSessionRestored(session);
+    } catch (error) {
+      console.error("Error refreshing what is known about the re-created OPC UA session:", error);
     }
   }
 
@@ -451,6 +509,8 @@ export class OpcuaConnection {
     const client = this.opcuaClient;
     this.session = null;
     this.session_ = null;
+    this.serverSessionId = null;
+    this.serverStartTime = null;
     this.opcuaClient = null;
     this.state = "disconnected";
 
@@ -606,7 +666,7 @@ export class OpcuaConnection {
    * connect path it is standing in. The Python half takes its client the same
    * way and for the same reason.
    */
-  async accessHistoryDataCapability(on?: ClientSession): Promise<boolean> {
+  async accessHistoryDataCapability(on?: ClientSession): Promise<Probe> {
     return await this.booleanCapability("history", on);
   }
 
@@ -619,46 +679,50 @@ export class OpcuaConnection {
    * should: a server that cannot say it keeps event history is one whose event
    * history nobody should go looking for.
    */
-  async accessHistoryEventsCapability(on?: ClientSession): Promise<boolean> {
+  async accessHistoryEventsCapability(on?: ClientSession): Promise<Probe> {
     return await this.booleanCapability("historyEvents", on);
   }
 
-  /** One `readBooleanTrue` capability node, by its name in the contract. */
+  /** One `readBooleanTrue` capability node, by its name in the contract.
+   *
+   * Three answers, not two. A value, or a Bad status for the node — it does not
+   * exist, it may not be read — is the server answering, and anything but `true`
+   * is `not_supported`. A read that could not be completed at all is `unknown`:
+   * a timeout is not the server saying no, and reporting it as one refused a
+   * call the next attempt could have served.
+   */
   private async booleanCapability(
     name: "history" | "historyEvents",
     on?: ClientSession
-  ): Promise<boolean> {
-    // Best-effort: never let an optional capability probe break tools/list. A
-    // transient OPC UA outage should still leave the core tools advertised.
+  ): Promise<Probe> {
     try {
-      let session = on;
-      if (!session) {
-        await this.ensureConnection();
-        session = this.session!;
-      }
+      const session = on ?? (await this.liveSession());
       const dataValue = await session.readVariableValue(CONTRACT.capabilities[name].nodeId);
-      return isGood(dataValue.statusCode) && dataValue.value?.value === true;
+      const supported = isGood(dataValue.statusCode) && dataValue.value?.value === true;
+      return { support: supported ? "supported" : "not_supported", reason: null };
     } catch (error) {
       console.error(`${CONTRACT.capabilities[name].browseName} probe failed:`, error);
-      return false;
+      return {
+        support: "unknown",
+        reason: describeProbeError(error, CONTRACT.capabilities[name].browseName),
+        connectionLost: isConnectionError(error),
+      };
     }
   }
 
-  /** The aggregate functions the server advertises, or none.
+  /** The aggregate functions the server advertises, and whether it does at all.
    *
    * `on` is the session to ask; see `accessHistoryDataCapability` for why that
-   * matters rather than merely saving a call.
+   * matters rather than merely saving a call. Answered the same three ways as
+   * `booleanCapability`: a browse the server refused is its answer, a browse
+   * that never completed is not.
    */
-  async serverCapabilitiesAggregateFunctions(on?: ClientSession): Promise<string[]> {
-    // Best-effort: any failure (incl. a connection error) yields no aggregate
-    // functions rather than breaking tools/list.
-    let aggregateFunctions: string[] = [];
+  async serverCapabilitiesAggregateFunctions(
+    on?: ClientSession
+  ): Promise<Probe & { functions: string[] }> {
+    const functions: string[] = [];
     try {
-      let session = on;
-      if (!session) {
-        await this.ensureConnection();
-        session = this.session!;
-      }
+      const session = on ?? (await this.liveSession());
       const browseResult = await session.browse({
         nodeId: CONTRACT.capabilities.aggregate.nodeId,
         browseDirection: 0, // Forward
@@ -670,14 +734,50 @@ export class OpcuaConnection {
           if (reference.browseName.name) {
             const name = reference.browseName.name.toString();
             if (name in AggregateFunction) {
-              aggregateFunctions.push(name);
+              functions.push(name);
             }
           }
         }
       }
     } catch (error) {
       console.error("Error during serverCapabilitiesAggregateFunctions:", error);
+      return {
+        support: "unknown",
+        reason: describeProbeError(error, CONTRACT.capabilities.aggregate.browseName),
+        connectionLost: isConnectionError(error),
+        functions: [],
+      };
     }
-    return aggregateFunctions;
+    return {
+      support: functions.length > 0 ? "supported" : "not_supported",
+      reason: null,
+      functions,
+    };
   }
+
+  /** When the server behind `session` last started, as epoch ms, or null if unreadable. */
+  private async startTimeOf(session: ClientSession): Promise<number | null> {
+    try {
+      const dataValue = await session.readVariableValue(CONTRACT.diagnostics.serverStatusNodeId);
+      const startTime: unknown = dataValue?.value?.value?.startTime;
+      return startTime instanceof Date && !Number.isNaN(startTime.getTime())
+        ? startTime.getTime()
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The session to probe on when the caller holds none: connect if need be. */
+  private async liveSession(): Promise<ClientSession> {
+    await this.ensureConnection();
+    if (!this.session) throw new Error("No OPC UA session available");
+    return this.session;
+  }
+}
+
+/** A probe failure, as a reason a refusal can quote. Python's `_describe`. */
+function describeProbeError(error: unknown, browseName: string): string {
+  const text = error instanceof Error ? error.message || error.name : String(error);
+  return `reading ${browseName} failed: ${text}`;
 }

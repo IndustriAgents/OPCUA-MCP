@@ -1,0 +1,14 @@
+{
+  "$comment": "Upstream deprecation warnings the suite tolerates, and nothing else. Every other DeprecationWarning or PendingDeprecationWarning fails the run: in-process through tests/conftest.py (pytest's filterwarnings), and in either MCP server's stderr through tests/e2e/test_deprecations_e2e.py. Only a warning raised inside a dependency belongs here; one attributed to this project's code is ours to fix. Each entry is a debt with an issue, an owner and a condition for paying it off, which tests/unit/test_deprecation_allowlist.py requires. `module` (python only) is a regex for the module the warning is attributed to, exactly as pytest's filterwarnings takes it — anchor it, because `opcua` alone also matches `opcua_mcp_server` and would allowlist our own code. `message` is a regex matched against the start of the warning text. Node entries match on `message` alone, against the server's stderr. The policy this implements is docs/dependency-policy.md#deprecations.",
+  "entries": [
+    {
+      "runtime": "python",
+      "package": "opcua (python-opcua / FreeOpcUa)",
+      "module": "opcua(\\.|$)",
+      "message": "datetime\\.datetime\\.utc(now|fromtimestamp)\\(\\) is deprecated",
+      "issue": "#144",
+      "owner": "@midhunxavier",
+      "remove_when": "The Python runtime no longer depends on python-opcua (#144 moves it to a maintained async stack). python-opcua is unmaintained, so no upstream release will fix this; the warnings appear on Python 3.12 and later."
+    }
+  ]
+}

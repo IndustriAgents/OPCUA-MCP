@@ -5,7 +5,7 @@ description = "Mock industrial OPC UA server (simulated PLC/sensors) for local d
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "opcua>=0.98.13",
+    "opcua>=0.98.13,<0.99",
 ]
 
 [project.scripts]

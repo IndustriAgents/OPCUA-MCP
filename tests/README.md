@@ -92,6 +92,7 @@ Every test runs against **both** server implementations.
 | `test_status_reports_the_reconnection` | The server's *start time* has moved afterwards — proof of a new session, not a believed-in old one |
 | `test_subscriptions_are_re_established_after_a_restart` | A subscription ID survives the outage and delivers again; its buffered changes survive with it |
 | `test_a_bad_retry_setting_is_rejected_at_startup` | An unparseable `OPCUA_RECONNECT_*` value stops both runtimes rather than silently defaulting |
+| `test_an_unsecured_session_reports_no_unexpected_deprecation` / `test_an_x509_user_session_reports_no_unexpected_deprecation` | Neither server prints a deprecation that is not on `fixtures/deprecation-allowlist.json` while connecting, reading, browsing, writing, or authenticating with an X.509 user certificate (#150) |
 
 Both servers expose the history tool under the same name, `read_history_opcua_node`,
 and only when the server advertises `AccessHistoryDataCapability`.
@@ -218,6 +219,11 @@ secret, and that the committed matrix is exactly what the committed results say.
 
 ## Notes
 
+- Deprecation warnings are errors. In this process, `deprecations.py` (loaded
+  from `conftest.py`) turns every `DeprecationWarning` into a failure except the
+  upstream ones listed in `fixtures/deprecation-allowlist.json`; each entry there
+  names an issue, an owner and when it can go. See
+  [docs/dependency-policy.md](../docs/dependency-policy.md#deprecations).
 - The mock server's method callbacks update internal state; OPC UA node values
   are propagated by its 1 Hz simulation loop, so tests poll (see
   `wait_for_node_value`) rather than reading immediately after a method call.

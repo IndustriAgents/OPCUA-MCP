@@ -293,7 +293,10 @@ at a simulator or an isolated lab, never at a running process.
 
 - **Python 3.10+**, **Node 22.13+** — the floors the manifests declare.
 - CI runs Python 3.10 with Node 22, Python 3.13 with Node 22, and Python 3.13
-  with Node 24.
+  with Node 24. A weekly job also runs the suite on Python 3.10 and Node 22.13.0
+  with every direct dependency at its declared floor, and another on Python 3.13
+  and Node 24 with the newest versions the ranges allow — see
+  [dependency-policy.md](dependency-policy.md).
 - **Transport: stdio only.** The client must be able to launch a local stdio MCP
   server, or install the Claude Desktop `.mcpb` bundle. There is no HTTP
   transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)).

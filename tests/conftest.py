@@ -394,3 +394,9 @@ def secure_opcua_server(secure_pki) -> str:
         yield url
     finally:
         _terminate(proc)
+
+
+# Every deprecation warning is an error unless its upstream source is on the
+# allowlist in fixtures/deprecation-allowlist.json (#150). A plugin rather than a
+# hook here, so it adds no second `pytest_configure` to this module.
+pytest_plugins = ("deprecations",)

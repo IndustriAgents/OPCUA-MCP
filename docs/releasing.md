@@ -75,6 +75,13 @@ until the same suite has passed on the tag. Both run it in required mode
 instead of quietly skipping a subsystem — see
 [../tests/README.md](../tests/README.md#required-mode).
 
+Before tagging, check that the latest
+[Dependency matrix](https://github.com/IndustriAgents/OPCUA-MCP/actions/workflows/dependency-matrix.yml)
+run on `main` is green, or dispatch one. It is the only run that installs the
+declared floors and the newest versions the ranges allow, which are what users
+of the release will actually resolve — see
+[dependency-policy.md](dependency-policy.md).
+
 ## The conformance matrix in the release notes
 
 Every release's notes link the real-server conformance matrix **as of its tag**,

@@ -187,6 +187,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "MCP server for OPC UA. With no arguments it runs the server on stdio, "
             "which is how MCP clients invoke it."
         ),
+        epilog=(
+            "opcua-mcp-server --verify-audit FILE [FILE ...] [--key-file KEY] checks the "
+            "hash chain of an OPCUA_AUDIT_FILE (rotated files oldest first)."
+        ),
     )
     parser.add_argument(
         "-v",
@@ -261,6 +265,12 @@ def dispatch(argv: list[str] | None = None) -> int | None:
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         return None
+    if argv[0] == "--verify-audit":
+        # Its own grammar (files, then an optional key), so it is routed before
+        # argparse rather than taught to it. Needs no OPC UA server.
+        from .audit import run_verify
+
+        return run_verify(argv[1:])
 
     args = _build_parser().parse_args(argv)
     if args.install is None:

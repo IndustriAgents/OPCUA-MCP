@@ -83,6 +83,7 @@ the ADR and expected to stay until a library change retires it (usually
 | `user-key-handling` | The X.509 user key signs through a key provider on Node and is loaded into memory on Python | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `library-reason-text` | The `{reason}` inside an error, and `get_server_status`'s `error`, are in each client library's own words; the rest of every message is identical | — |
 | `concurrency-model` | Latency, throughput and memory differ and are not promised to match; the bounds and waits are | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| `audit-file-rename-on-windows` | On Windows the Python server holds `OPCUA_AUDIT_FILE` so it cannot be renamed or deleted while running; use copy-and-truncate rotation there. Node allows rename rotation everywhere | — |
 
 ### Known divergences being fixed
 

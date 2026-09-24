@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import os
 import secrets
 import sys
 from collections import deque
@@ -22,7 +21,14 @@ from opcua import Node, ua
 
 from . import events
 from .aggregates import validate_aggregate_function
-from .audit import AUDIT_FILE_ENV, AuditSink, describe_audit, operator_id
+from .audit import (
+    AuditSink,
+    AuditWriteError,
+    build_record,
+    describe_audit,
+    operator_id,
+    parse_audit_config,
+)
 from .capabilities import (
     client_aggregate_functions,
     client_supports_history,
@@ -214,39 +220,70 @@ def _audit_decision(
     spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
     if spec is None or spec["accessClass"] not in {"control", "alarm-action"}:
         return
-    record = {
-        "event": "opcua_mcp_policy",
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        # Second, so it is next to the timestamp in the line an operator reads and
-        # can be grepped for to pull one call's whole story out of a shipped log.
-        "call_id": call_id,
-        # Which physical attempt this line is about. One call can reach the plant
-        # twice — the session dies, the connection is rebuilt, the request is
-        # re-sent — and a trail whose purpose is "what reached the plant" has to
-        # count those separately rather than fold them into one line.
-        "attempt": attempt,
-        # Which plant, and which of this process's sessions. A node id is not
-        # stable across a server restart — that is the whole reason the `nsu=`
-        # allowlist form exists — so "a write to ns=2;i=5 was allowed" is only
-        # interpretable later alongside where it went and over which session.
-        "endpoint": state.url,
-        "session": state.session_id,
-        # On whose behalf, as the deployment chose to record it. null when
-        # OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion
-        # of who is calling, and a name nothing verified would be worse than none.
-        "operator": operator_id(),
-        "profile": state.policy.config.profile,
+    connection = state.connection
+    record = build_record(
+        # Milliseconds, as `Date.toISOString` writes them, so the two runtimes'
+        # timestamps are the same shape and not merely the same instant.
+        timestamp=datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z"),
+        call_id=call_id,
+        attempt=attempt,
+        endpoint=state.url,
+        session=state.session_id,
+        session_generation=connection.session_generation if connection is not None else None,
+        # null when OPCUA_OPERATOR_ID is unset, which is honest: this server has
+        # no notion of who is calling, and a name nothing verified would be worse
+        # than none.
+        operator_label=operator_id(),
+        **state.audit.identity(),
+        profile=state.policy.config.profile,
         # What let control through, or kept it out: `secured` for a verified
-        # server, or which lab override was in force. An override that shows up
-        # only in a startup line nobody kept is an override nobody can audit.
-        "control": control_gate(state.policy.config),
-        "tool": name,
-        "decision": decision,
-        **_audit_targets(spec, arguments),
-    }
-    if reason:
-        record["reason"] = reason
+        # server, or which lab override was in force. An override that shows
+        # up only in a startup line nobody kept is an override nobody can audit.
+        control=control_gate(state.policy.config),
+        tool=name,
+        decision=decision,
+        targets=_audit_targets(spec, arguments),
+        reason=reason or None,
+    )
     state.audit.write(record)
+
+
+def _audit_after(state: ServerState, name: str, arguments: dict[str, Any], *args, **kwargs):
+    """Record a denial or an outcome, reporting rather than raising if it is lost.
+
+    Fail-closed is decided at :func:`_audit_permission`, before dispatch. A
+    denial is refused whether or not its record lands. An outcome is recorded
+    after the call reached the plant, and turning a write that happened into a
+    reported failure would invite the model to send it again — so a sink that
+    refuses it is reported on stderr, and the next control call's ``allowed``
+    record is what refuses the next call.
+    """
+    try:
+        _audit_decision(state, name, arguments, *args, **kwargs)
+    except AuditWriteError as error:
+        print(
+            f"AUDIT FAILURE: the {args[0]} record for {name} (call {kwargs.get('call_id')}) "
+            f"was not written: {error}",
+            file=sys.stderr,
+        )
+
+
+def _audit_permission(
+    state: ServerState, name: str, arguments: dict[str, Any], *, call_id: str, attempt: int
+) -> None:
+    """Record ``allowed`` before anything is sent — or refuse the call.
+
+    The fail-closed half (#146): a control call whose permission could not be
+    made durable never reaches the plant. Reads never get here, because they are
+    not audited, so an audit outage does not take monitoring down with it.
+    """
+    try:
+        _audit_decision(state, name, arguments, "allowed", call_id=call_id, attempt=attempt)
+    except AuditWriteError as error:
+        print(f"AUDIT FAILURE: refusing {name} (call {call_id}): {error}", file=sys.stderr)
+        raise ToolError(error_message("auditUnavailable", tool=name, reason=str(error))) from error
 
 
 #: What ``Tool.run`` puts in front of a ToolError raised inside a tool body.
@@ -568,12 +605,12 @@ class PolicyMCPServer(MCPServer):
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             self.state.policy.authorize(name, arguments)
-            _audit_decision(self.state, name, arguments, "allowed", call_id=call_id, attempt=1)
         except (PermissionError, ValueError) as exc:
-            _audit_decision(
+            _audit_after(
                 self.state, name, arguments, "denied", str(exc), call_id=call_id, attempt=1
             )
             raise ToolError(str(exc)) from exc
+        _audit_permission(self.state, name, arguments, call_id=call_id, attempt=1)
 
         # The outcome, not only the decision. "Permitted" and "happened" are
         # different facts, and the gap between them is where a control call that
@@ -585,7 +622,7 @@ class PolicyMCPServer(MCPServer):
         except Exception as error:
             reported = _without_sdk_prefix(name, error)
             if not call.denied:
-                _audit_decision(
+                _audit_after(
                     self.state,
                     name,
                     arguments,
@@ -595,7 +632,7 @@ class PolicyMCPServer(MCPServer):
                     attempt=call.attempt,
                 )
             raise reported from error.__cause__
-        _audit_decision(
+        _audit_after(
             self.state, name, arguments, "completed", call_id=call_id, attempt=call.attempt
         )
         return result
@@ -700,11 +737,17 @@ class PolicyMCPServer(MCPServer):
             self.state.policy.authorize(name, arguments)
         except (PermissionError, ValueError) as exc:
             call.denied = True
-            _audit_decision(
+            _audit_after(
                 self.state, name, arguments, "denied", str(exc), call_id=call.call_id, attempt=2
             )
             raise ToolError(str(exc)) from exc
-        _audit_decision(self.state, name, arguments, "allowed", call_id=call.call_id, attempt=2)
+        try:
+            _audit_permission(self.state, name, arguments, call_id=call.call_id, attempt=2)
+        except ToolError:
+            # Refused before the second attempt went out, and recorded as nothing
+            # more: a `failed` line would read as though the plant had answered.
+            call.denied = True
+            raise
 
         return await super().call_tool(name, arguments, context)
 
@@ -2283,8 +2326,10 @@ def main() -> None:
         reconnect = reconnect_config()
         # Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
         # cannot be given one has to be told now, not at the first control call
-        # they were relying on it to record.
-        audit = AuditSink(os.environ.get(AUDIT_FILE_ENV, "").strip() or None)
+        # they were relying on it to record. So does one whose target is unsafe
+        # to write (a symlink, another account's file) or whose chain key cannot
+        # be read.
+        audit = AuditSink.from_config(parse_audit_config())
     except ValueError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None

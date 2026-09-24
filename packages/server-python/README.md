@@ -184,8 +184,11 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools over a channel with **no** security (`SecurityPolicy=None`). Does not cover an unverified server on a secured one |
 | `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Lab-only override permitting control tools over a secured channel whose server certificate is **not pinned** — encrypted, but to whoever answered |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node |
-| `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. A file that cannot be opened stops the server rather than falling back |
-| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
+| `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. Created `0600`; a symlink, non-regular file, another account's file or a group/world-writable one stops the server, as does a file that cannot be opened. Reopened safely when rotated away. See [What is audited](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/SECURITY.md#what-is-audited) |
+| `OPCUA_AUDIT_FSYNC` | `always` | `always` fsyncs each audit record before the control call proceeds (survives power loss); `none` stops at the OS (survives a process crash only) |
+| `OPCUA_AUDIT_CHAIN` | `none` | `sha256` or `hmac-sha256` adds `seq`/`prev_hash`/`hash` to every record so edits, deletions and reordering are detectable with `--verify-audit`. Requires `OPCUA_AUDIT_FILE` |
+| `OPCUA_AUDIT_CHAIN_KEY_FILE` | — | HMAC key (≥ 32 bytes, e.g. `openssl rand -hex 32`, mode `0600`) for `OPCUA_AUDIT_CHAIN=hmac-sha256`; refused with any other chain |
+| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record as `operator_label`, so a shipped log says which deployment a control call came from. Configured, never verified — it is not an identity |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
 | `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt, per connection round: a whole number from `-1` to `1000`. `0` disables retrying; `-1` never stops trying, but still in bounded rounds of four retries |
@@ -250,7 +253,12 @@ which is the only value bound that exists with no policy file at all. See
 
 Every control call is recorded — its targets, its outcome, the endpoint it went
 to, the session it rode on and the attempt number — to stderr and, with
-`OPCUA_AUDIT_FILE` set, to an append-only JSON-lines file beside it.
+`OPCUA_AUDIT_FILE` set, to an owner-only, append-only JSON-lines file beside it,
+fsync'd per record. A control call whose record cannot be written is refused
+rather than sent; reads carry on. `OPCUA_AUDIT_CHAIN` adds an optional hash
+chain, checked with `opcua-mcp-server --verify-audit FILE… [--key-file KEY]`.
+What the file can and cannot prove is in
+[SECURITY.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/SECURITY.md#what-the-local-audit-file-can-and-cannot-prove).
 
 ### Staying connected
 

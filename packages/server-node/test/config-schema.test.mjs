@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { describe, it } from "node:test";
 
+import { parseAuditConfig } from "../build/audit.js";
 import { parseReconnectConfig } from "../build/config.js";
 import { configSchema } from "../build/contract.js";
 import { parsePolicyConfig } from "../build/policy.js";
@@ -109,6 +110,16 @@ const PROBES = {
   OPCUA_RECONNECT_MAX_RETRY: (v) => parseReconnectConfig({ OPCUA_RECONNECT_MAX_RETRY: v }).maxRetry,
   OPCUA_SESSION_TIMEOUT_MS: (v) =>
     parseReconnectConfig({ OPCUA_SESSION_TIMEOUT_MS: v }).sessionTimeout,
+  OPCUA_AUDIT_FSYNC: (v) => parseAuditConfig({ OPCUA_AUDIT_FSYNC: v }).fsync,
+  OPCUA_AUDIT_CHAIN: (v) =>
+    // A chain needs a file to live in, and an HMAC one a key to sign with.
+    parseAuditConfig({
+      OPCUA_AUDIT_FILE: "audit.jsonl",
+      OPCUA_AUDIT_CHAIN: v,
+      ...(v.trim().toLowerCase() === "hmac-sha256"
+        ? { OPCUA_AUDIT_CHAIN_KEY_FILE: "audit.key" }
+        : {}),
+    }).chain,
 };
 
 const TYPED = SCHEMA.settings.filter(

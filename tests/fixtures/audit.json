@@ -1,0 +1,717 @@
+{
+  "$comment": "The control audit record and its file, as a table BOTH runtimes are driven from (#146): tests/unit/test_audit.py and packages/server-node/test/audit.test.mjs read this file. `records` pins the canonical field order and the exact bytes each runtime serializes a record to — ASCII-only, so a non-ASCII reason is escaped identically. `chain` is the same four records hash-chained both ways, byte for byte; the key is a test value and nothing else. `verify` applies each case's `edits` to that chain (0-based line indexes; `crlf` joins the lines with CRLF; `split` makes files `a` and `b`) and states where the verifier must report a problem or a notice — the file:line a message starts with, or the whole message when it names no line — including the LIMIT cases it is documented not to catch. `config` is the OPCUA_AUDIT_* parsing, `unsafe_targets` the rules an existing audit file must pass (mode in octal, {path} is /srv/audit.jsonl), and `user_identity` what opcua_user_identity says for each OPC UA identity token.",
+  "schema_version": 2,
+  "field_order": [
+    "event",
+    "schema_version",
+    "timestamp",
+    "call_id",
+    "attempt",
+    "endpoint",
+    "session",
+    "session_generation",
+    "operator_label",
+    "operator",
+    "mcp_principal",
+    "process_identity",
+    "opcua_user_identity",
+    "profile",
+    "control",
+    "tool",
+    "decision"
+  ],
+  "records": [
+    {
+      "name": "an allowed write, with every actor field populated",
+      "fields": {
+        "timestamp": "2026-09-24T09:12:44.001Z",
+        "call_id": "9f2c1ab4de77f031",
+        "attempt": 1,
+        "endpoint": "opc.tcp://plc:4840",
+        "session": "3b91e0c4a77d2f10",
+        "session_generation": 1,
+        "operator_label": "line-a-hmi",
+        "process_identity": {
+          "uid": 501,
+          "user": "opcua",
+          "pid": 4242
+        },
+        "opcua_user_identity": {
+          "type": "username",
+          "username": "line-a-operator",
+          "certificate_sha256": null
+        },
+        "profile": "operator",
+        "control": "secured",
+        "tool": "write_opcua_nodes",
+        "decision": "allowed",
+        "targets": {
+          "node_ids": [
+            "ns=2;i=13"
+          ]
+        },
+        "reason": null
+      },
+      "line": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:44.001Z\",\"call_id\":\"9f2c1ab4de77f031\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":\"line-a-hmi\",\"operator\":\"line-a-hmi\",\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"username\",\"username\":\"line-a-operator\",\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"secured\",\"tool\":\"write_opcua_nodes\",\"decision\":\"allowed\",\"node_ids\":[\"ns=2;i=13\"]}"
+    },
+    {
+      "name": "a denial before any session exists carries nulls, not invented values",
+      "fields": {
+        "timestamp": "2026-09-24T09:12:45.000Z",
+        "call_id": "0000000000000001",
+        "attempt": 1,
+        "endpoint": "opc.tcp://plc:4840",
+        "session": null,
+        "session_generation": null,
+        "operator_label": null,
+        "process_identity": {
+          "uid": 501,
+          "user": "opcua",
+          "pid": 4242
+        },
+        "opcua_user_identity": {
+          "type": "anonymous",
+          "username": null,
+          "certificate_sha256": null
+        },
+        "profile": "operator",
+        "control": "blocked",
+        "tool": "write_opcua_nodes",
+        "decision": "denied",
+        "targets": {
+          "node_ids": [
+            "ns=2;i=12"
+          ]
+        },
+        "reason": "Node ns=2;i=12 is not writable under the operator policy"
+      },
+      "line": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:45.000Z\",\"call_id\":\"0000000000000001\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":null,\"session_generation\":null,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"blocked\",\"tool\":\"write_opcua_nodes\",\"decision\":\"denied\",\"node_ids\":[\"ns=2;i=12\"],\"reason\":\"Node ns=2;i=12 is not writable under the operator policy\"}"
+    },
+    {
+      "name": "a method call names object and method, and a non-ASCII reason is escaped identically",
+      "fields": {
+        "timestamp": "2026-09-24T09:12:46.500Z",
+        "call_id": "abcdefabcdefabcd",
+        "attempt": 2,
+        "endpoint": "opc.tcp://plc:4840",
+        "session": "ffffffffffffffff",
+        "session_generation": 3,
+        "operator_label": "café — line 🏭",
+        "process_identity": {
+          "uid": null,
+          "user": "SVC-OPCUA",
+          "pid": 7
+        },
+        "opcua_user_identity": {
+          "type": "certificate",
+          "username": null,
+          "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "profile": "full",
+        "control": "UNVERIFIED-OVERRIDE",
+        "tool": "call_opcua_method",
+        "decision": "failed",
+        "targets": {
+          "object_node_id": "ns=2;i=30",
+          "method_node_id": "ns=2;i=31"
+        },
+        "reason": "BadUserAccessDenied — «»\ttab"
+      },
+      "line": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:46.500Z\",\"call_id\":\"abcdefabcdefabcd\",\"attempt\":2,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"ffffffffffffffff\",\"session_generation\":3,\"operator_label\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"operator\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"mcp_principal\":null,\"process_identity\":{\"uid\":null,\"user\":\"SVC-OPCUA\",\"pid\":7},\"opcua_user_identity\":{\"type\":\"certificate\",\"username\":null,\"certificate_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"profile\":\"full\",\"control\":\"UNVERIFIED-OVERRIDE\",\"tool\":\"call_opcua_method\",\"decision\":\"failed\",\"object_node_id\":\"ns=2;i=30\",\"method_node_id\":\"ns=2;i=31\",\"reason\":\"BadUserAccessDenied \\u2014 \\u00ab\\u00bb\\u007f\\ttab\"}"
+    },
+    {
+      "name": "an alarm action names what it acted on, and an empty reason is left out",
+      "fields": {
+        "timestamp": "2026-09-24T09:12:47.000Z",
+        "call_id": "1234123412341234",
+        "attempt": 1,
+        "endpoint": "opc.tcp://plc:4840",
+        "session": "3b91e0c4a77d2f10",
+        "session_generation": 1,
+        "operator_label": null,
+        "process_identity": {
+          "uid": 501,
+          "user": "opcua",
+          "pid": 4242
+        },
+        "opcua_user_identity": {
+          "type": "anonymous",
+          "username": null,
+          "certificate_sha256": null
+        },
+        "profile": "operator",
+        "control": "INSECURE-OVERRIDE",
+        "tool": "act_on_alarm",
+        "decision": "completed",
+        "targets": {
+          "condition_id": "ns=2;s=HighTemp",
+          "action": "shelve"
+        },
+        "reason": ""
+      },
+      "line": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:47.000Z\",\"call_id\":\"1234123412341234\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"INSECURE-OVERRIDE\",\"tool\":\"act_on_alarm\",\"decision\":\"completed\",\"condition_id\":\"ns=2;s=HighTemp\",\"action\":\"shelve\"}"
+    }
+  ],
+  "chain": {
+    "key": "3f9c2e7a1b8d4f6e0a5c9b2d7e1f4a8c6b3d9e2f7a1c5b8d4e0f6a9c2b7d3e1f",
+    "sha256": [
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:44.001Z\",\"call_id\":\"9f2c1ab4de77f031\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":\"line-a-hmi\",\"operator\":\"line-a-hmi\",\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"username\",\"username\":\"line-a-operator\",\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"secured\",\"tool\":\"write_opcua_nodes\",\"decision\":\"allowed\",\"node_ids\":[\"ns=2;i=13\"],\"seq\":1,\"prev_hash\":null,\"hash\":\"07b5a4870c2e660b829ae5cfb5dbab2ce1e589590bfeb03874c9bfd655b57cfa\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:45.000Z\",\"call_id\":\"0000000000000001\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":null,\"session_generation\":null,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"blocked\",\"tool\":\"write_opcua_nodes\",\"decision\":\"denied\",\"node_ids\":[\"ns=2;i=12\"],\"reason\":\"Node ns=2;i=12 is not writable under the operator policy\",\"seq\":2,\"prev_hash\":\"07b5a4870c2e660b829ae5cfb5dbab2ce1e589590bfeb03874c9bfd655b57cfa\",\"hash\":\"fb48a57dbeec672188879325605efb4aa704584a5e96c56fdaaefeb4769ebf78\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:46.500Z\",\"call_id\":\"abcdefabcdefabcd\",\"attempt\":2,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"ffffffffffffffff\",\"session_generation\":3,\"operator_label\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"operator\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"mcp_principal\":null,\"process_identity\":{\"uid\":null,\"user\":\"SVC-OPCUA\",\"pid\":7},\"opcua_user_identity\":{\"type\":\"certificate\",\"username\":null,\"certificate_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"profile\":\"full\",\"control\":\"UNVERIFIED-OVERRIDE\",\"tool\":\"call_opcua_method\",\"decision\":\"failed\",\"object_node_id\":\"ns=2;i=30\",\"method_node_id\":\"ns=2;i=31\",\"reason\":\"BadUserAccessDenied \\u2014 \\u00ab\\u00bb\\u007f\\ttab\",\"seq\":3,\"prev_hash\":\"fb48a57dbeec672188879325605efb4aa704584a5e96c56fdaaefeb4769ebf78\",\"hash\":\"f7f633af076179a7385a5a04fdaf22dcb6b3ca17537dd1ea7cce14d2194e4e52\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:47.000Z\",\"call_id\":\"1234123412341234\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"INSECURE-OVERRIDE\",\"tool\":\"act_on_alarm\",\"decision\":\"completed\",\"condition_id\":\"ns=2;s=HighTemp\",\"action\":\"shelve\",\"seq\":4,\"prev_hash\":\"f7f633af076179a7385a5a04fdaf22dcb6b3ca17537dd1ea7cce14d2194e4e52\",\"hash\":\"59f79da6c72f705877fdcb69d9e3b0822c0058ea3575367c3666ab591a5e7dcb\"}"
+    ],
+    "hmac-sha256": [
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:44.001Z\",\"call_id\":\"9f2c1ab4de77f031\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":\"line-a-hmi\",\"operator\":\"line-a-hmi\",\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"username\",\"username\":\"line-a-operator\",\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"secured\",\"tool\":\"write_opcua_nodes\",\"decision\":\"allowed\",\"node_ids\":[\"ns=2;i=13\"],\"seq\":1,\"prev_hash\":null,\"hash\":\"46b0fecf3e9f325f5f1f5199fa207221d51f352f610d39b8763d124611f2bd9a\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:45.000Z\",\"call_id\":\"0000000000000001\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":null,\"session_generation\":null,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"blocked\",\"tool\":\"write_opcua_nodes\",\"decision\":\"denied\",\"node_ids\":[\"ns=2;i=12\"],\"reason\":\"Node ns=2;i=12 is not writable under the operator policy\",\"seq\":2,\"prev_hash\":\"46b0fecf3e9f325f5f1f5199fa207221d51f352f610d39b8763d124611f2bd9a\",\"hash\":\"db5637631041711ce519e18fb78e9ea63a118d242cd131c252931b315443bc9b\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:46.500Z\",\"call_id\":\"abcdefabcdefabcd\",\"attempt\":2,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"ffffffffffffffff\",\"session_generation\":3,\"operator_label\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"operator\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"mcp_principal\":null,\"process_identity\":{\"uid\":null,\"user\":\"SVC-OPCUA\",\"pid\":7},\"opcua_user_identity\":{\"type\":\"certificate\",\"username\":null,\"certificate_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"profile\":\"full\",\"control\":\"UNVERIFIED-OVERRIDE\",\"tool\":\"call_opcua_method\",\"decision\":\"failed\",\"object_node_id\":\"ns=2;i=30\",\"method_node_id\":\"ns=2;i=31\",\"reason\":\"BadUserAccessDenied \\u2014 \\u00ab\\u00bb\\u007f\\ttab\",\"seq\":3,\"prev_hash\":\"db5637631041711ce519e18fb78e9ea63a118d242cd131c252931b315443bc9b\",\"hash\":\"907238ade1c7288016051b57d517a527f8d4545c920931a222ffc146d501cd34\"}",
+      "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:47.000Z\",\"call_id\":\"1234123412341234\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"INSECURE-OVERRIDE\",\"tool\":\"act_on_alarm\",\"decision\":\"completed\",\"condition_id\":\"ns=2;s=HighTemp\",\"action\":\"shelve\",\"seq\":4,\"prev_hash\":\"907238ade1c7288016051b57d517a527f8d4545c920931a222ffc146d501cd34\",\"hash\":\"d63ed5ea5e1060d90ebf390fa1cabb40a60cc16aa457c85239fd7c8afa4f5f11\"}"
+    ]
+  },
+  "verify": [
+    {
+      "name": "an untouched sha256 chain verifies",
+      "mode": "sha256",
+      "key": false,
+      "edits": [],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "an untouched hmac chain verifies with its key",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "an hmac chain does not verify without its key",
+      "mode": "hmac-sha256",
+      "key": false,
+      "edits": [],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:1",
+        "audit.jsonl:2",
+        "audit.jsonl:3",
+        "audit.jsonl:4"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a modified field is caught at that record and nowhere else",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "replace",
+          "line": 1,
+          "from": "\"denied\"",
+          "to": "\"allowed\""
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:2"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a record reformatted without changing its meaning is still a modification",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "replace",
+          "line": 0,
+          "from": "\"attempt\":1",
+          "to": "\"attempt\": 1"
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:1"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a deleted record breaks the link of the one after it",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "delete",
+          "line": 1
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:2"
+      ],
+      "notices": []
+    },
+    {
+      "name": "two swapped records are caught",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "swap",
+          "lines": [
+            1,
+            2
+          ]
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:2",
+        "audit.jsonl:3",
+        "audit.jsonl:4"
+      ],
+      "notices": []
+    },
+    {
+      "name": "an unchained line inserted mid-chain is caught",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "insert",
+          "line": 2,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:44.001Z\",\"call_id\":\"9f2c1ab4de77f031\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":\"line-a-hmi\",\"operator\":\"line-a-hmi\",\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"username\",\"username\":\"line-a-operator\",\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"secured\",\"tool\":\"write_opcua_nodes\",\"decision\":\"allowed\",\"node_ids\":[\"ns=2;i=13\"]}"
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:3"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a torn line is reported, and the chain carries on across it",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "insert",
+          "line": 2,
+          "text": "{\"event\":\"opcua_mcp_po"
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:3"
+      ],
+      "notices": []
+    },
+    {
+      "name": "LIMIT: a truncated tail is not detectable by the chain alone",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "truncate",
+          "keep": 2
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "a missing head is a notice, not a pass the reader could mistake for complete",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "drop_head",
+          "count": 2
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": [
+        "audit.jsonl:1"
+      ]
+    },
+    {
+      "name": "unchained records before the chain begins are counted, not failed",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "insert",
+          "line": 0,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:45.000Z\",\"call_id\":\"0000000000000001\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":null,\"session_generation\":null,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"blocked\",\"tool\":\"write_opcua_nodes\",\"decision\":\"denied\",\"node_ids\":[\"ns=2;i=12\"],\"reason\":\"Node ns=2;i=12 is not writable under the operator policy\"}"
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": [
+        "1 unchained record(s) before the chain begins"
+      ]
+    },
+    {
+      "name": "a rotated pair verifies as one stream, oldest first",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "split",
+          "at": 2
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "LIMIT: rotated files given newest first read as a restart, reported but not failed",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "split",
+          "at": 2
+        },
+        {
+          "op": "reverse_files"
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": [
+        "b:1",
+        "a:1"
+      ]
+    },
+    {
+      "name": "a chain restarted mid-file is caught",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "replace_line",
+          "line": 2,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:46.500Z\",\"call_id\":\"abcdefabcdefabcd\",\"attempt\":2,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"ffffffffffffffff\",\"session_generation\":3,\"operator_label\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"operator\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"mcp_principal\":null,\"process_identity\":{\"uid\":null,\"user\":\"SVC-OPCUA\",\"pid\":7},\"opcua_user_identity\":{\"type\":\"certificate\",\"username\":null,\"certificate_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"profile\":\"full\",\"control\":\"UNVERIFIED-OVERRIDE\",\"tool\":\"call_opcua_method\",\"decision\":\"failed\",\"object_node_id\":\"ns=2;i=30\",\"method_node_id\":\"ns=2;i=31\",\"reason\":\"BadUserAccessDenied \\u2014 \\u00ab\\u00bb\\u007f\\ttab\",\"seq\":1,\"prev_hash\":null,\"hash\":\"2a905a4a468efca83248fd6af522d9595dba50d9da5e1a4af126f761d354ce6c\"}"
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:3",
+        "audit.jsonl:4"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a file converted to CRLF line endings still verifies: the terminator is not hashed",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "crlf"
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "and a record edited in a CRLF file is still caught",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "crlf"
+        },
+        {
+          "op": "replace",
+          "line": 1,
+          "from": "\"denied\"",
+          "to": "\"allowed\""
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:2"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a file with no chain at all does not pass",
+      "mode": "sha256",
+      "key": false,
+      "edits": [
+        {
+          "op": "replace_line",
+          "line": 0,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:44.001Z\",\"call_id\":\"9f2c1ab4de77f031\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":\"line-a-hmi\",\"operator\":\"line-a-hmi\",\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"username\",\"username\":\"line-a-operator\",\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"secured\",\"tool\":\"write_opcua_nodes\",\"decision\":\"allowed\",\"node_ids\":[\"ns=2;i=13\"]}"
+        },
+        {
+          "op": "replace_line",
+          "line": 1,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:45.000Z\",\"call_id\":\"0000000000000001\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":null,\"session_generation\":null,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"blocked\",\"tool\":\"write_opcua_nodes\",\"decision\":\"denied\",\"node_ids\":[\"ns=2;i=12\"],\"reason\":\"Node ns=2;i=12 is not writable under the operator policy\"}"
+        },
+        {
+          "op": "replace_line",
+          "line": 2,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:46.500Z\",\"call_id\":\"abcdefabcdefabcd\",\"attempt\":2,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"ffffffffffffffff\",\"session_generation\":3,\"operator_label\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"operator\":\"caf\\u00e9 \\u2014 line \\ud83c\\udfed\",\"mcp_principal\":null,\"process_identity\":{\"uid\":null,\"user\":\"SVC-OPCUA\",\"pid\":7},\"opcua_user_identity\":{\"type\":\"certificate\",\"username\":null,\"certificate_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"profile\":\"full\",\"control\":\"UNVERIFIED-OVERRIDE\",\"tool\":\"call_opcua_method\",\"decision\":\"failed\",\"object_node_id\":\"ns=2;i=30\",\"method_node_id\":\"ns=2;i=31\",\"reason\":\"BadUserAccessDenied \\u2014 \\u00ab\\u00bb\\u007f\\ttab\"}"
+        },
+        {
+          "op": "replace_line",
+          "line": 3,
+          "text": "{\"event\":\"opcua_mcp_policy\",\"schema_version\":2,\"timestamp\":\"2026-09-24T09:12:47.000Z\",\"call_id\":\"1234123412341234\",\"attempt\":1,\"endpoint\":\"opc.tcp://plc:4840\",\"session\":\"3b91e0c4a77d2f10\",\"session_generation\":1,\"operator_label\":null,\"operator\":null,\"mcp_principal\":null,\"process_identity\":{\"uid\":501,\"user\":\"opcua\",\"pid\":4242},\"opcua_user_identity\":{\"type\":\"anonymous\",\"username\":null,\"certificate_sha256\":null},\"profile\":\"operator\",\"control\":\"INSECURE-OVERRIDE\",\"tool\":\"act_on_alarm\",\"decision\":\"completed\",\"condition_id\":\"ns=2;s=HighTemp\",\"action\":\"shelve\"}"
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "no chained records found"
+      ],
+      "notices": [
+        "4 unchained record(s) before the chain begins"
+      ]
+    }
+  ],
+  "config": [
+    {
+      "name": "nothing set is stderr only, fsync always, no chain",
+      "env": {},
+      "expect": {
+        "file": null,
+        "fsync": "always",
+        "chain": "none",
+        "key_file": null
+      }
+    },
+    {
+      "name": "a file with the defaults",
+      "env": {
+        "OPCUA_AUDIT_FILE": " /var/log/opcua/audit.jsonl "
+      },
+      "expect": {
+        "file": "/var/log/opcua/audit.jsonl",
+        "fsync": "always",
+        "chain": "none",
+        "key_file": null
+      }
+    },
+    {
+      "name": "fsync can be turned off, case-insensitively",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_FSYNC": "NONE"
+      },
+      "expect": {
+        "file": "/a",
+        "fsync": "none",
+        "chain": "none",
+        "key_file": null
+      }
+    },
+    {
+      "name": "a sha256 chain",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_CHAIN": "sha256"
+      },
+      "expect": {
+        "file": "/a",
+        "fsync": "always",
+        "chain": "sha256",
+        "key_file": null
+      }
+    },
+    {
+      "name": "an hmac chain with its key",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_CHAIN": "hmac-sha256",
+        "OPCUA_AUDIT_CHAIN_KEY_FILE": "/k"
+      },
+      "expect": {
+        "file": "/a",
+        "fsync": "always",
+        "chain": "hmac-sha256",
+        "key_file": "/k"
+      }
+    },
+    {
+      "name": "an empty value is unset, as MCP bundles substitute it",
+      "env": {
+        "OPCUA_AUDIT_FILE": "",
+        "OPCUA_AUDIT_FSYNC": "",
+        "OPCUA_AUDIT_CHAIN": " "
+      },
+      "expect": {
+        "file": null,
+        "fsync": "always",
+        "chain": "none",
+        "key_file": null
+      }
+    },
+    {
+      "name": "an unknown fsync mode is refused",
+      "env": {
+        "OPCUA_AUDIT_FSYNC": "sometimes"
+      },
+      "error": "OPCUA_AUDIT_FSYNC must be one of always, none; got sometimes"
+    },
+    {
+      "name": "an unknown chain is refused",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_CHAIN": "md5"
+      },
+      "error": "OPCUA_AUDIT_CHAIN must be one of none, sha256, hmac-sha256; got md5"
+    },
+    {
+      "name": "a chain with no file to keep it in is refused",
+      "env": {
+        "OPCUA_AUDIT_CHAIN": "sha256"
+      },
+      "error": "OPCUA_AUDIT_CHAIN=sha256 requires OPCUA_AUDIT_FILE: the chain is kept in the file it protects"
+    },
+    {
+      "name": "hmac with no key is refused",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_CHAIN": "hmac-sha256"
+      },
+      "error": "OPCUA_AUDIT_CHAIN=hmac-sha256 requires OPCUA_AUDIT_CHAIN_KEY_FILE"
+    },
+    {
+      "name": "a key with no hmac chain to use it is refused, not ignored",
+      "env": {
+        "OPCUA_AUDIT_FILE": "/a",
+        "OPCUA_AUDIT_CHAIN": "sha256",
+        "OPCUA_AUDIT_CHAIN_KEY_FILE": "/k"
+      },
+      "error": "OPCUA_AUDIT_CHAIN_KEY_FILE is only used with OPCUA_AUDIT_CHAIN=hmac-sha256; got OPCUA_AUDIT_CHAIN=sha256"
+    }
+  ],
+  "unsafe_targets": [
+    {
+      "name": "our own 0600 file",
+      "kind": "file",
+      "uid": 501,
+      "mode": "0600",
+      "euid": 501,
+      "reason": null
+    },
+    {
+      "name": "group-readable for a collector is allowed",
+      "kind": "file",
+      "uid": 501,
+      "mode": "0640",
+      "euid": 501,
+      "reason": null
+    },
+    {
+      "name": "world-readable is allowed; nothing in a record is secret",
+      "kind": "file",
+      "uid": 501,
+      "mode": "0644",
+      "euid": 501,
+      "reason": null
+    },
+    {
+      "name": "group-writable is refused",
+      "kind": "file",
+      "uid": 501,
+      "mode": "0660",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is writable by group or others (mode 0660); chmod 600 it"
+    },
+    {
+      "name": "world-writable is refused",
+      "kind": "file",
+      "uid": 501,
+      "mode": "0602",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is writable by group or others (mode 0602); chmod 600 it"
+    },
+    {
+      "name": "another account's file is refused",
+      "kind": "file",
+      "uid": 0,
+      "mode": "0600",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is owned by uid 0, not by this process (uid 501)"
+    },
+    {
+      "name": "a symlink is refused",
+      "kind": "symlink",
+      "uid": 501,
+      "mode": "0777",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is a symbolic link; point it at the real file"
+    },
+    {
+      "name": "a directory is refused",
+      "kind": "directory",
+      "uid": 501,
+      "mode": "0700",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is not a regular file"
+    },
+    {
+      "name": "a FIFO or device is refused",
+      "kind": "other",
+      "uid": 501,
+      "mode": "0600",
+      "euid": 501,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is not a regular file"
+    },
+    {
+      "name": "without uids (Windows) owner and mode are not checked",
+      "kind": "file",
+      "uid": 0,
+      "mode": "0666",
+      "euid": null,
+      "reason": null
+    },
+    {
+      "name": "without uids a symlink is still refused",
+      "kind": "symlink",
+      "uid": 0,
+      "mode": "0666",
+      "euid": null,
+      "reason": "OPCUA_AUDIT_FILE /srv/audit.jsonl is a symbolic link; point it at the real file"
+    }
+  ],
+  "user_identity": [
+    {
+      "name": "anonymous",
+      "username": null,
+      "certificate": null,
+      "expect": {
+        "type": "anonymous",
+        "username": null,
+        "certificate_sha256": null
+      }
+    },
+    {
+      "name": "a username is named, the password never is",
+      "username": "line-a-operator",
+      "certificate": null,
+      "expect": {
+        "type": "username",
+        "username": "line-a-operator",
+        "certificate_sha256": null
+      }
+    },
+    {
+      "name": "a PEM user certificate is identified by the SHA-256 of its DER bytes",
+      "username": null,
+      "certificate": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ2F0YWxvZ3Vl\nIGZpeHR1cmUgb25seQ==\n-----END CERTIFICATE-----\n",
+      "expect": {
+        "type": "certificate",
+        "username": null,
+        "certificate_sha256": "ad5f502fffd697ff15ce4d9d235fd9a50f8bb18c501c3ea42c5ee871c9e80b16"
+      }
+    }
+  ]
+}

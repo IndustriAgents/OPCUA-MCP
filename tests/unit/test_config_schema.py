@@ -29,6 +29,7 @@ import sys
 
 import pytest
 from conftest import ROOT
+from opcua_mcp_server.audit import parse_audit_config
 from opcua_mcp_server.config import parse_reconnect_config
 from opcua_mcp_server.contract import load_config_schema
 from opcua_mcp_server.policy import parse_policy_config
@@ -118,7 +119,13 @@ def test_every_setting_is_well_formed(setting):
             )
     elif kind == "path":
         assert isinstance(setting["mustExist"], bool)
-        assert setting["contents"] in {"certificate", "private-key", "policy-json", "audit-log"}
+        assert setting["contents"] in {
+            "certificate",
+            "private-key",
+            "policy-json",
+            "audit-log",
+            "key",
+        }
     elif kind == "list":
         assert setting["itemFormat"] in {"tool-name", "node-id", "object-method-pair"}
     if default is None:
@@ -140,8 +147,12 @@ def test_credentials_are_handled_as_credentials(setting):
         assert setting["default"] is None
         assert "example" not in setting
         assert "installer" not in setting["surfaces"]
-    if setting.get("contents") == "private-key":
+    if setting.get("contents") in {"private-key", "key"}:
         assert setting["sensitive"], f"{setting['env']} points at a private key"
+    if setting.get("contents") == "key":
+        # A symmetric key file is kept out of --install flags, as a secret is:
+        # the installer is the one surface that would put it on a command line.
+        assert "installer" not in setting["surfaces"], setting["env"]
 
 
 def test_every_override_fails_closed_by_default():
@@ -268,6 +279,14 @@ def _probe_mode(value: str):
     return _security(_secured(OPCUA_SECURITY_POLICY=policy, OPCUA_SECURITY_MODE=value)).mode
 
 
+def _probe_chain(value: str):
+    # A chain needs a file to live in, and an HMAC one a key to sign with.
+    env = {"OPCUA_AUDIT_FILE": "audit.jsonl", "OPCUA_AUDIT_CHAIN": value}
+    if value.strip().lower() == "hmac-sha256":
+        env["OPCUA_AUDIT_CHAIN_KEY_FILE"] = "audit.key"
+    return parse_audit_config(env).chain
+
+
 #: How to observe each typed setting through its parser. Not a list of settings —
 #: `test_every_typed_setting_has_a_probe` fails when the schema grows one this
 #: does not cover.
@@ -301,6 +320,8 @@ PROBES = {
     "OPCUA_SESSION_TIMEOUT_MS": lambda v: (
         parse_reconnect_config({"OPCUA_SESSION_TIMEOUT_MS": v}).session_timeout_ms
     ),
+    "OPCUA_AUDIT_FSYNC": lambda v: parse_audit_config({"OPCUA_AUDIT_FSYNC": v}).fsync,
+    "OPCUA_AUDIT_CHAIN": lambda v: _probe_chain(v),
 }
 
 TYPED = [s for s in SETTINGS if s["type"] in {"enum", "boolean", "number"}]

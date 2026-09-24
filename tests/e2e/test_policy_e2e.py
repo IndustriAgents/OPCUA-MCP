@@ -507,6 +507,175 @@ async def test_both_runtimes_write_the_same_record_shape(opcua_server):
     )
 
 
+# --- what the audit trail can be trusted for (#146) -----------------------------
+
+
+def verify_command(impl: str, *paths: str) -> list[str]:
+    """`--verify-audit` on one runtime's CLI. Needs no OPC UA server."""
+    if impl == "python":
+        return ["uv", "--directory", str(ROOT), "run", "--no-sync", "opcua-mcp-server",
+                "--verify-audit", *paths]  # fmt: skip
+    return ["node", str(NODE_BUILD), "--verify-audit", *paths]
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_the_record_separates_what_was_configured_from_what_was_verified(impl, opcua_server):
+    """`OPCUA_OPERATOR_ID` is a label, and the record must not dress it up.
+
+    The configured label, the OS account, the OPC UA identity token and a
+    verified remote principal are four different claims. Only the OPC UA one was
+    checked by anything but this process, and there is no remote principal on a
+    stdio transport at all — so that field is null whatever the label says.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    params = operator_params(impl, opcua_server)
+    params.env["OPCUA_OPERATOR_ID"] = "line-a-hmi"
+    async with connect_capturing_stderr(params) as (session, errlog):
+        result = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "27.5"}]}
+        )
+        assert not result.is_error, text_of(result)
+        records = audit_records(errlog)
+
+    assert records, f"{impl}: nothing was audited at all"
+    for record in records:
+        assert record["schema_version"] == 2, record
+        assert record["operator_label"] == "line-a-hmi", record
+        assert record["operator"] == "line-a-hmi", f"{impl}: schema-1 readers lost the label"
+        assert record["mcp_principal"] is None, record
+        assert record["opcua_user_identity"] == {
+            "type": "anonymous",
+            "username": None,
+            "certificate_sha256": None,
+        }, record
+        assert isinstance(record["process_identity"]["pid"], int), record
+        if hasattr(os, "geteuid"):
+            assert record["process_identity"]["uid"] == os.geteuid(), record
+        assert record["session_generation"] == 1, record
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_control_call_is_refused_when_its_record_cannot_be_written(impl, opcua_server):
+    """Fail closed for control, carry on for reads.
+
+    The audit file is taken away mid-session — rotated out and replaced by
+    something that is not a file. The next write must not reach the plant, and
+    must say why; a read must still work, because monitoring is not what an audit
+    outage should take down.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "audit.jsonl")
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_AUDIT_FILE"] = path
+        async with connect_capturing_stderr(params) as (session, _errlog):
+            first = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "27.5"}]}
+            )
+            assert not first.is_error, text_of(first)
+
+            os.replace(path, path + ".1")
+            os.mkdir(path)
+
+            refused = await session.call_tool(
+                "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": "12.345"}]}
+            )
+            read = await session.call_tool("read_opcua_nodes", {"node_ids": ["ns=2;i=13"]})
+
+        with open(path + ".1", encoding="utf-8") as handle:
+            recorded = [json.loads(line) for line in handle if line.strip()]
+
+    assert refused.is_error, f"{impl}: a control call went out with no record of it"
+    assert "its audit record could not be written" in text_of(refused), text_of(refused)
+    assert not read.is_error, f"{impl}: a read was refused: {text_of(read)}"
+    assert "12.345" not in text_of(read), f"{impl}: the refused write reached the plant"
+    assert [r["decision"] for r in recorded] == ["allowed", "completed"], recorded
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+async def test_a_rotated_chained_trail_verifies_on_either_runtime(impl, opcua_server):
+    """Rotation mid-session, a hash chain across it, and a verifier on each side.
+
+    Written by one runtime and checked by *both* CLIs: a chain only one of them
+    can verify is a format, not a contract.
+    """
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "audit.jsonl")
+        rotated = path + ".1"
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_AUDIT_FILE"] = path
+        params.env["OPCUA_AUDIT_CHAIN"] = "sha256"
+        async with connect_capturing_stderr(params) as (session, _errlog):
+            for index, value in enumerate(("26.5", "25.5")):
+                if index:
+                    os.replace(path, rotated)
+                result = await session.call_tool(
+                    "write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=13", "value": value}]}
+                )
+                assert not result.is_error, text_of(result)
+
+        if os.name == "posix":
+            assert os.stat(path).st_mode & 0o777 == 0o600, f"{impl}: the new file is not 0600"
+        with open(path, encoding="utf-8") as handle:
+            assert [json.loads(line)["seq"] for line in handle] == [3, 4]
+
+        for verifier in ("python", "node"):
+            checked = subprocess.run(
+                verify_command(verifier, rotated, path),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+            )
+            assert checked.returncode == 0, f"{impl} -> {verifier}:\n{checked.stdout}"
+            assert "OK: 4 chained record(s), seq 1..4" in checked.stdout, checked.stdout
+
+            # And the newest file alone is a chain that begins mid-way — said so,
+            # not failed and not passed off as the whole story.
+            alone = subprocess.run(
+                verify_command(verifier, path),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+            )
+            assert alone.returncode == 0, alone.stdout
+            assert "chain begins at seq 3" in alone.stdout, alone.stdout
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_an_unsafe_audit_target_stops_the_server(impl, opcua_server):
+    """A symlink is a way to redirect the trail; it is refused, not followed."""
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    if not hasattr(os, "symlink") or os.name != "posix":
+        pytest.skip("POSIX symlinks")
+    with tempfile.TemporaryDirectory() as directory:
+        real = os.path.join(directory, "elsewhere.jsonl")
+        open(real, "w", encoding="utf-8").close()
+        link = os.path.join(directory, "audit.jsonl")
+        os.symlink(real, link)
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_AUDIT_FILE"] = link
+
+        result = subprocess.run(
+            [params.command, *params.args],
+            env=params.env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            stdin=subprocess.DEVNULL,
+        )
+        assert os.path.getsize(real) == 0
+
+    assert result.returncode != 0, f"{impl}: started anyway:\n{result.stderr}"
+    assert "is a symbolic link" in result.stderr, f"{impl}: {result.stderr}"
+
+
 # --- the `nsu=` allowlist form, end to end --------------------------------------
 #
 # Untested end to end until #116, and the gap was structural rather than an

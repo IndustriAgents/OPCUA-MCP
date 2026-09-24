@@ -13,6 +13,7 @@ import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from
 import { homedir } from "os";
 import { dirname, join } from "path";
 
+import { runVerify } from "./audit.js";
 import { SERVER_URL } from "./config.js";
 import { VERSION } from "./contract.js";
 
@@ -168,6 +169,9 @@ Usage:
   opcua-mcp-server                      Run the MCP server on stdio (default)
   opcua-mcp-server --install <client>   Register this server with an MCP client
   opcua-mcp-server --version            Print the version
+  opcua-mcp-server --verify-audit <file>... [--key-file <key>]
+                                        Check an OPCUA_AUDIT_FILE hash chain
+                                        (rotated files oldest first)
   opcua-mcp-server --help               Show this help
 
 Install options:
@@ -184,6 +188,7 @@ export type Action =
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "install"; options: InstallOptions }
+  | { kind: "verify-audit"; argv: string[] }
   | { kind: "error"; message: string };
 
 /** Parse CLI arguments (everything after the script path).
@@ -193,6 +198,9 @@ export type Action =
  */
 export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Action {
   if (argv.length === 0) return { kind: "serve" };
+  // Its own grammar (files, then an optional key), so it is routed before the
+  // install flags rather than taught to them. Needs no OPC UA server.
+  if (argv[0] === "--verify-audit") return { kind: "verify-audit", argv: argv.slice(1) };
 
   let client: string | undefined;
   let url = defaultUrl;
@@ -396,5 +404,7 @@ export function runCli(
       return 2;
     case "install":
       return runInstall(action.options, io);
+    case "verify-audit":
+      return runVerify(action.argv, io);
   }
 }

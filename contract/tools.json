@@ -835,6 +835,7 @@
     "stillConnecting": "Still connecting to the OPC UA server at {url}; a connection attempt is in progress (last failure: {reason})",
     "readFailed": "Failed to read nodes: {reason}",
     "writeFailed": "Failed to write nodes: {reason}",
+    "auditUnavailable": "{tool} was not sent: its audit record could not be written ({reason}). Control calls are refused while the audit trail is unavailable; reads are unaffected.",
     "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. The connection has been rebuilt \u2014 read the targets back to see what happened before sending it again.",
     "browseFailed": "Failed to browse {node_id}: {reason}",
     "historyFailed": "Failed to read history of node {node_id}: {reason}",

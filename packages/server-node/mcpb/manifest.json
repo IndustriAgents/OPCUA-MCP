@@ -211,7 +211,7 @@
     "opcua_reconnect_max_retry": {
       "type": "string",
       "title": "Reconnection attempts",
-      "description": "Retries after the first attempt before a tool call gives up. 0 never retries; -1 retries forever. Leave blank for 3.",
+      "description": "Retries after the first attempt, per connection round, before a tool call gives up: a whole number from -1 to 1000. 0 never retries; -1 never stops trying, in bounded rounds of four retries so no single call waits forever. Leave blank for 3.",
       "required": false
     },
     "opcua_session_timeout_ms": {

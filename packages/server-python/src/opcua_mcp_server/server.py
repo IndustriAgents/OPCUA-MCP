@@ -34,6 +34,7 @@ from .connection import (
     describe_error,
     is_connection_error,
     not_connected_message,
+    still_connecting_message,
 )
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
@@ -321,10 +322,18 @@ def _connect_and_probe(state: ServerState, connection: OpcuaConnection) -> None:
     try:
         connection.ensure_connected()
     except Exception:
-        # `connect` has already said why on stderr. A server that is down simply
-        # advertises the core tools until it comes back, at which point
-        # `on_client_replaced` re-probes and the catalogue is announced again.
-        return
+        # Deliberately not fatal. An MCP client starts this server when *it*
+        # starts, which may be long before the plant network is reachable; dying
+        # here would mean a restart of the MCP client for every OPC UA outage. A
+        # server that is down simply advertises the core tools until it comes
+        # back, at which point `on_client_replaced` re-probes. Every tool call
+        # retries the connection, and `get_server_status` reports what is wrong
+        # in the meantime.
+        print(
+            f"Starting without an OPC UA connection: {connection.last_error}. "
+            f"Tools will retry on each call.",
+            file=sys.stderr,
+        )
 
 
 def _probe(read, client, fallback):
@@ -364,22 +373,26 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     # building the client fetches the server's certificate from its endpoint
     # list, so this blocks on the network too. Connecting and probing are one
     # call so a server that is down costs one round of backoff, not two.
-    await asyncio.to_thread(_connect_and_probe, state, connection)
-    if not connection.connected:
-        # Deliberately not fatal. An MCP client starts this server when *it*
-        # starts, which may be long before the plant network is reachable; dying
-        # here would mean a restart of the MCP client for every OPC UA outage.
-        # Every tool call retries the connection, and `get_server_status` reports
-        # what is wrong in the meantime.
-        print(
-            f"Starting without an OPC UA connection: {connection.last_error}. "
-            f"Tools will retry on each call.",
-            file=sys.stderr,
-        )
+    #
+    # Started, not awaited. The SDK answers nothing — not even `initialize` —
+    # until this lifespan has yielded, so awaiting it held the whole protocol back
+    # for a full connection round against a plant that was down (#136). Plant
+    # connectivity is runtime state, reported by `get_server_status`; it does not
+    # gate the protocol. What awaiting it bought is kept within a bound:
+    # `tools/list` and `get_server_status` wait for it (`ServerState.await_warm_up`),
+    # and a tool call that needs a session joins its round through
+    # `ensure_connected`. The Node runtime starts its warm-up the same way.
+    warm_up = state.start_warm_up(asyncio.to_thread(_connect_and_probe, state, connection))
 
     try:
         yield context
     finally:
+        # Stop the warm-up's backoff and wait out the attempt on the wire, before
+        # anything is disconnected: a round that completed after the disconnect
+        # would leave a session open behind a server that has stopped.
+        connection.close()
+        await asyncio.wait({warm_up})
+        state.warm_up = None
         # Drop the subscriptions before the session that carries them —
         # the event ones as much as the data-change ones. Disconnecting first
         # would leave the OPC UA server publishing to nobody until each
@@ -465,6 +478,9 @@ class PolicyMCPServer(MCPServer):
         docs/architecture.md. The catalogue is re-listable at any time and this
         is what both runtimes can honestly promise.
         """
+        # The one wait this does, and it is on the startup warm-up, bounded —
+        # never on a connection of its own.
+        await self.state.await_warm_up()
         policy = self.state.policy
         specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
         listed = await super().list_tools()
@@ -509,6 +525,12 @@ class PolicyMCPServer(MCPServer):
             # signature-derived schema, and word it differently from the Node
             # runtime; this is the contract's own schema on both.
             validate_arguments(name, spec["inputSchema"], arguments)
+            # Before the policy and the audit trail read the session, not merely
+            # before the request goes out. `get_server_status` is the exception:
+            # it reports on the connection, and waits for the warm-up only
+            # boundedly.
+            if name != "get_server_status":
+                await self.state.await_connection_in_flight()
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             self.state.policy.authorize(name, arguments)
@@ -550,6 +572,7 @@ class PolicyMCPServer(MCPServer):
         # to say so, and reaches for the connection itself.
         connection = self.state.connection
         if name == "get_server_status" or connection is None:
+            await self.state.await_warm_up()
             return await super().call_tool(name, arguments, context)
 
         # Connect *before* the capability gate, not after. The capability map is
@@ -928,6 +951,19 @@ def get_server_status(ctx: Context) -> CallToolResult:
     connection = ctx.request_context.lifespan_context["opcua_connection"]
     security = describe_security(security_config())
     identity = server_identity_record(_state(ctx).policy.config)
+    # A round someone else started is not joined. Against a plant that is down it
+    # runs the whole configured backoff, and this is the report of why nothing is
+    # connected — the one answer that must not wait for it (#136). The round
+    # carries on; asking again reports how it ended.
+    if connection.connecting:
+        return _object_result(
+            disconnected_status(
+                connection.url,
+                security,
+                identity,
+                still_connecting_message(connection.url, connection.last_error),
+            )
+        )
     try:
         # Through the same retry as every other read, so that asking for the
         # status also re-establishes a session that has silently died — which is

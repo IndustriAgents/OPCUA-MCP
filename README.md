@@ -266,7 +266,7 @@ and the unit suite fails if either runtime reads a variable it does not declare.
 | `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
-| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
+| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt, per connection round: a whole number from `-1` to `1000`. `0` disables retrying; `-1` never stops trying, but still in bounded rounds of four retries |
 | `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
 
 ### Staying connected
@@ -282,17 +282,28 @@ background and keeps the same session, while the Python runtime rebuilds a fresh
 session when the next call needs one. The settings mean the same on both; see
 [runtime differences](docs/compatibility.md#runtime-differences).
 
-Reconnection is driven by tool calls rather than by a timer: if the endpoint is
-unreachable when the MCP client starts, the server still starts, and the first
-call that needs a session connects. One known exception: the Node runtime with
-`OPCUA_RECONNECT_MAX_RETRY=-1` can keep retrying before it opens the MCP
-transport at all ([#136](https://github.com/IndustriAgents/OPCUA-MCP/issues/136)). `get_server_status` is the one tool that
-answers either way — it reports `connected: false` and the reason instead of
-failing, and every other tool's error points at it.
+Plant connectivity never gates the MCP protocol. Both servers answer
+`initialize` at once and make their first connection in the background; a
+`tools/list` or `get_server_status` that arrives while that first round is
+still running waits for it for at most 3 seconds, so against a reachable plant
+the first catalogue is already the whole one, and against an unreachable one
+the server is diagnosable straight away. After that, reconnection is driven by
+tool calls rather than by a timer: the next call that needs a session connects.
+`get_server_status` is the one tool that answers either way — it reports
+`connected: false` and the reason instead of failing (including "still
+connecting" while a round is running, which it reports rather than waits for),
+and every other tool's error points at it.
 
-The defaults (three retries, 1–8s apart) keep a single tool call from hanging for
-long. Raise `OPCUA_RECONNECT_MAX_RETRY` for a site where outages are measured in
-minutes; the last waiting a call will do is the sum of the delays.
+Retrying happens in *rounds*: one attempt plus `OPCUA_RECONNECT_MAX_RETRY`
+retries, the delays doubling from `OPCUA_RECONNECT_INITIAL_DELAY_MS` up to
+`OPCUA_RECONNECT_MAX_DELAY_MS`. A tool call that needs a session waits for at
+most one round and then fails with "Not connected to the OPC UA server at …".
+The defaults (three retries, 1–8s apart) keep that short. Raise
+`OPCUA_RECONNECT_MAX_RETRY` (up to 1000) for a site where outages are measured
+in minutes; the last waiting a call will do is the sum of the delays. `-1` means
+never give up — every later call starts another round — but each round is still
+four retries long, so no single request, and not the server's start-up, can wait
+forever.
 
 ### Deciding what the agent may do
 

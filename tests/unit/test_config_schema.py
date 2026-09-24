@@ -107,6 +107,15 @@ def test_every_setting_is_well_formed(setting):
     elif kind == "number":
         assert isinstance(setting["minimum"], (int, float))
         assert default is None or default >= setting["minimum"]
+        if "maximum" in setting:
+            assert setting["maximum"] > setting["minimum"]
+            assert default is None or default <= setting["maximum"]
+        if setting.get("integer"):
+            assert setting["integer"] is True
+            assert all(
+                isinstance(bound, int)
+                for bound in (setting["minimum"], setting.get("maximum", 0), default or 0)
+            )
     elif kind == "path":
         assert isinstance(setting["mustExist"], bool)
         assert setting["contents"] in {"certificate", "private-key", "policy-json", "audit-log"}
@@ -316,11 +325,16 @@ def _cases(setting: dict) -> tuple[list[tuple[str, object]], list[str]]:
         accept += [(v.upper(), True) for v in values["true"]]
         return accept, ["maybe", "2"]
     minimum = setting["minimum"]
-    return [(str(minimum), minimum), (str(minimum + 0.5), minimum + 0.5)], [
-        str(minimum - 1),
-        "abc",
-        "inf",
-    ]
+    refuse = [str(minimum - 1), "abc", "inf"]
+    if setting.get("integer"):
+        accept = [(str(minimum), minimum), (str(minimum + 1), minimum + 1)]
+        refuse += [str(minimum + 0.5), "1e2"]
+    else:
+        accept = [(str(minimum), minimum), (str(minimum + 0.5), minimum + 0.5)]
+    if "maximum" in setting:
+        accept.append((str(setting["maximum"]), setting["maximum"]))
+        refuse.append(str(setting["maximum"] + 1))
+    return accept, refuse
 
 
 @pytest.mark.parametrize("setting", TYPED, ids=lambda s: s["env"])

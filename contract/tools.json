@@ -752,6 +752,7 @@
     "methodNotAllowed": "Method {object_node_id}|{method_node_id} is not allowed by the operator policy",
     "guardMissing": "Tool \"{tool}\" declares no policy guard, so it cannot be authorized",
     "notConnected": "Not connected to the OPC UA server at {url}: {reason}. Call get_server_status for details.",
+    "stillConnecting": "Still connecting to the OPC UA server at {url}; a connection attempt is in progress (last failure: {reason})",
     "readFailed": "Failed to read nodes: {reason}",
     "writeFailed": "Failed to write nodes: {reason}",
     "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. The connection has been rebuilt \u2014 read the targets back to see what happened before sending it again.",

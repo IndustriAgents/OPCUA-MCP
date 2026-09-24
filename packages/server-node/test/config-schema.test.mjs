@@ -137,13 +137,22 @@ function cases(setting) {
     return [accept, ["maybe", "2"]];
   }
   const min = setting.minimum;
-  return [
-    [
-      [String(min), min],
-      [String(min + 0.5), min + 0.5],
-    ],
-    [String(min - 1), "abc", "inf"],
-  ];
+  const refuse = [String(min - 1), "abc", "inf"];
+  const accept = setting.integer
+    ? [
+        [String(min), min],
+        [String(min + 1), min + 1],
+      ]
+    : [
+        [String(min), min],
+        [String(min + 0.5), min + 0.5],
+      ];
+  if (setting.integer) refuse.push(String(min + 0.5), "1e2");
+  if (setting.maximum !== undefined) {
+    accept.push([String(setting.maximum), setting.maximum]);
+    refuse.push(String(setting.maximum + 1));
+  }
+  return [accept, refuse];
 }
 
 describe("the Node parsers agree with contract/config.json", () => {

@@ -15,8 +15,11 @@ but whose *tools* are still bound to whichever instance existed at import.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 
+import pytest
 from conftest import ROOT
 from opcua_mcp_server import server as server_module
 from opcua_mcp_server.server import TOOL_NAMES, create_server
@@ -155,3 +158,113 @@ def test_the_module_holds_no_mutable_state():
         "module-level mutable state in server.py — put it on ServerState instead: "
         f"{sorted(offenders)}"
     )
+
+
+# --- the warm-up runs beside the requests, not before them (#136) -----------------
+
+
+async def test_the_lifespan_does_not_wait_for_the_warm_up(monkeypatch):
+    """The MCP SDK answers nothing, not even `initialize`, until the lifespan yields.
+
+    So a lifespan that awaited the first connection round held the whole protocol
+    back for it — the whole configured backoff against a plant that was down.
+    The warm-up here never finishes on its own; the lifespan must yield anyway,
+    and a catalogue request must answer once the window has passed.
+    """
+    release = threading.Event()
+
+    def never_connects(state, connection):
+        release.wait(10)
+
+    monkeypatch.setattr(server_module, "_connect_and_probe", never_connects)
+    mcp = create_server(ServerState(url="opc.tcp://127.0.0.1:1/none"))
+    mcp.state.warm_up_wait_ms = 200
+    loop = asyncio.get_running_loop()
+
+    began = loop.time()
+    async with server_module.opcua_lifespan(mcp):
+        assert loop.time() - began < 1, "the lifespan waited for the warm-up"
+        assert not mcp.state.warm_up.done()
+
+        listed = await mcp.list_tools()
+        assert loop.time() - began < 2, "tools/list waited past the warm-up window"
+        assert "get_server_status" in {tool.name for tool in listed}
+        release.set()
+
+    assert mcp.state.warm_up is None
+
+
+async def test_a_request_waits_for_a_warm_up_that_finishes_in_time():
+    """Against a plant that is up, the first catalogue is the whole catalogue.
+
+    That was the reason the warm-up ran before any request was served; waiting
+    for it within the window keeps it.
+    """
+    state = ServerState(url="opc.tcp://127.0.0.1:1/none")
+    state.warm_up_wait_ms = 5000
+    finished = asyncio.Event()
+
+    async def quick():
+        await asyncio.sleep(0.05)
+        finished.set()
+
+    state.start_warm_up(quick())
+    await state.await_warm_up()
+    assert finished.is_set()
+
+
+async def test_the_wait_is_measured_from_the_start_of_the_warm_up():
+    """Not per request: a second catalogue request must not wait all over again."""
+    state = ServerState(url="opc.tcp://127.0.0.1:1/none")
+    state.warm_up_wait_ms = 200
+    state.start_warm_up(asyncio.sleep(30))
+    loop = asyncio.get_running_loop()
+
+    began = loop.time()
+    await state.await_warm_up()
+    first = loop.time() - began
+    await state.await_warm_up()
+    second = loop.time() - began - first
+
+    assert first < 1
+    assert second < 0.05, f"the second request waited {second:.2f}s again"
+    assert not state.warm_up.done(), "running out of patience must not cancel the warm-up"
+    state.warm_up.cancel()
+
+
+async def test_no_warm_up_means_no_wait():
+    """A state no lifespan has started — the unit tests' own — answers at once."""
+    await ServerState(url="opc.tcp://127.0.0.1:1/none").await_warm_up()
+
+
+async def test_a_tool_call_is_authorized_only_once_the_warm_up_has_connected(monkeypatch):
+    """The policy and the audit trail both read the session the call lands on.
+
+    `nsu=` allowlist entries resolve through the namespace mapping bound on
+    connect, and the audit record names the session. A call that arrives while
+    the warm-up is still connecting must wait for it before either reads them —
+    authorizing first refused a URI-pinned node and audited `session: None`.
+    """
+    release = threading.Event()
+
+    def slow_connect(state, connection):
+        release.wait(10)
+
+    monkeypatch.setattr(server_module, "_connect_and_probe", slow_connect)
+    mcp = create_server(ServerState(url="opc.tcp://127.0.0.1:1/none"))
+    seen = []
+
+    def authorize(name, arguments):
+        seen.append(mcp.state.warm_up.done())
+        raise PermissionError("denied by the test")
+
+    monkeypatch.setattr(mcp.state.policy, "authorize", authorize)
+
+    async with server_module.opcua_lifespan(mcp):
+        call = asyncio.ensure_future(mcp.call_tool("list_subscriptions", {}))
+        await asyncio.sleep(0.2)
+        assert seen == [], "the call was authorized while the warm-up was connecting"
+        release.set()
+        with pytest.raises(Exception, match="denied by the test"):
+            await call
+        assert seen == [True]

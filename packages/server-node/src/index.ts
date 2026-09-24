@@ -86,11 +86,16 @@ class OPCUAMCPServer {
     };
   }
 
-  /** Drop the OPC UA subscriptions, then the session. In that order. Once. */
+  /** Drop the OPC UA subscriptions, then the session. In that order. Once.
+   *
+   * `close`, not `disconnect`: a connection round still dialling a plant that is
+   * down is aborted rather than waited out, so shutting down takes as long as
+   * closing a session and not as long as the configured backoff (#136).
+   */
   private shutdown(): Promise<void> {
     this.closing ??= (async () => {
       await this.tools.shutdown();
-      await this.conn.disconnect();
+      await this.conn.close();
     })();
     return this.closing;
   }
@@ -125,17 +130,24 @@ class OPCUAMCPServer {
   }
 
   async run() {
-    // Before the transport, not after it. `tools/list` no longer opens the
-    // connection itself, so something has to — and connecting the transport
-    // first means requests are served *during* the warm-up: a tools/call landing
-    // then found no session yet, cached "this server supports nothing", and
-    // refused a history read against a server that advertises HistoricalAccess.
-    // The Python runtime has always done this in its lifespan, which runs before
-    // the first request for the same reason.
+    // Started, not awaited: the transport opens whatever the plant is doing.
+    // `tools/list` no longer opens the connection itself, so something has to —
+    // but awaiting it here held back `initialize` for the whole first connection
+    // round, and with OPCUA_RECONNECT_MAX_RETRY=-1 that round never ended, so the
+    // MCP client saw a server that never started (#136). Plant connectivity is
+    // runtime state, reported by `get_server_status`; it does not gate the
+    // protocol.
+    //
+    // It had been moved in front of the transport for a reason that still holds:
+    // requests served *during* the warm-up used to see no session and answer as
+    // though the server supported nothing. `tools/list` and `get_server_status`
+    // therefore wait for it — bounded, see `OpcuaTools.awaitWarmUp` — and a tool
+    // call that needs a session joins its connection round. The Python runtime
+    // starts its warm-up the same way, from its lifespan.
     //
     // Never fatal: a plant that is unreachable simply means the optional tools
     // appear once a tool call has brought the connection up.
-    await this.tools.warmUp();
+    void this.tools.startWarmUp();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     // The usual end of an MCP session is not a signal at all: the client closes

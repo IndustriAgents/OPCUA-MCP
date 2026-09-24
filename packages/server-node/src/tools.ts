@@ -20,7 +20,13 @@ import {
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { browseAllReferences, typeDefinitionOf } from "./browse.js";
-import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
+import { WARM_UP_WAIT_MS } from "./config.js";
+import {
+  OpcuaConnection,
+  isConnectionError,
+  notConnectedMessage,
+  stillConnectingMessage,
+} from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, operatorId } from "./audit.js";
@@ -495,6 +501,12 @@ export class OpcuaTools {
   private readonly events = new EventSubscriptions();
   /** What each node published about its own number, for the life of one session. */
   private readonly metadata = new NodeMetadata();
+  /** The startup warm-up, once started, and when requests stop waiting for it. */
+  private warmUpPromise: Promise<void> | null = null;
+  private warmUpDeadline = 0;
+  /** How long `awaitWarmUp` gives the warm-up, from its start. A field so the
+   *  unit tests can shorten it; the server always uses the constant. */
+  warmUpWaitMs = WARM_UP_WAIT_MS;
 
   constructor(
     private readonly conn: OpcuaConnection,
@@ -521,7 +533,7 @@ export class OpcuaTools {
     };
   }
 
-  /** Open the first connection and probe it, before any request is served.
+  /** Open the first connection and probe it. Started by `startWarmUp`.
    *
    * The Python runtime does this in its lifespan and this runtime did not — it
    * got its first connection from whichever `tools/list` happened to arrive
@@ -537,6 +549,68 @@ export class OpcuaTools {
   async warmUp(): Promise<void> {
     await this.conn.ensureConnection().catch(() => undefined);
     if (!this.capabilities) await this.probeCapabilities().catch(() => undefined);
+  }
+
+  /** Start the warm-up without waiting for it, once. Returns it, for tests.
+   *
+   * The server used to await `warmUp()` before opening the MCP transport, so
+   * nothing — not `initialize`, not `get_server_status` — was answered until the
+   * first connection round had run its course. Bounded, that is the whole
+   * configured backoff; with `OPCUA_RECONNECT_MAX_RETRY=-1` it was a server that
+   * never started (#136). The transport now opens at once and this runs beside
+   * it.
+   *
+   * What awaiting it bought is kept, within a bound. Requests served *during*
+   * the warm-up are why it had moved in front of the transport: a catalogue
+   * listed then was the core tools only, and a status read then said "not
+   * connected", against a plant that was up. So those two wait for it — see
+   * `awaitWarmUp` — and a tool call that needs a session joins its round through
+   * `ensureConnection`, as it always did.
+   */
+  startWarmUp(): Promise<void> {
+    if (!this.warmUpPromise) {
+      this.warmUpDeadline = Date.now() + this.warmUpWaitMs;
+      this.warmUpPromise = this.warmUp();
+    }
+    return this.warmUpPromise;
+  }
+
+  /** Wait for the warm-up, and any other connection round in flight, unbounded.
+   *
+   * For a tool call, before it is authorized and audited. Both read the
+   * session: the policy resolves `nsu=` allowlist entries through the namespace
+   * mapping bound on connect, and the audit record names the session the call
+   * rides on (#105, #107). When the warm-up ran before the transport opened,
+   * every call found it finished; a call that arrives during it now waits for
+   * it, where before it would have been refused a URI-pinned node and audited
+   * against no session at all. Bounded by the round itself, which always ends.
+   * Never starts a round: a call made while disconnected connects after it is
+   * authorized, as it always has.
+   */
+  private async awaitConnectionInFlight(): Promise<void> {
+    if (this.warmUpPromise) await this.warmUpPromise;
+    await this.conn.settled();
+  }
+
+  /** Wait for the startup warm-up, but never past `warmUpWaitMs` from its start.
+   *
+   * Against a plant that is up the warm-up finishes well inside the window, so
+   * the first `tools/list` carries the whole catalogue and the first status is a
+   * connected one. Against a plant that is down it can take the whole round, and
+   * a server that is to be diagnosable has to answer before then — from what it
+   * knows. The Python server's `ServerState.await_warm_up` is the same wait.
+   */
+  private async awaitWarmUp(): Promise<void> {
+    const remaining = this.warmUpDeadline - Date.now();
+    if (!this.warmUpPromise || remaining <= 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      this.warmUpPromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, remaining);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   /** Tear down every OPC UA subscription this server created.
@@ -638,6 +712,9 @@ export class OpcuaTools {
    * docs/architecture.md.
    */
   async listTools(): Promise<Tool[]> {
+    // The one wait this does, and it is on the startup warm-up, bounded — never
+    // on a connection of its own.
+    await this.awaitWarmUp();
     const available = this.capabilities ?? new Set<string>();
     const aggregateOk = available.has("aggregate");
 
@@ -750,6 +827,10 @@ export class OpcuaTools {
         throw new Error(message("unknownTool", { tool: name }));
       }
       validateArguments(name, spec.inputSchema, args);
+      // Before the policy and the audit trail read the session, not merely
+      // before the request goes out. `get_server_status` is the exception: it
+      // reports on the connection, and waits for the warm-up only boundedly.
+      if (name !== "get_server_status") await this.awaitConnectionInFlight();
 
       // This is the security boundary. Filtering tools/list improves the model's
       // choices, but clients cache catalogs and may call a previously visible
@@ -775,6 +856,7 @@ export class OpcuaTools {
       // The one tool that must answer while the connection is down: it exists to
       // say so. Everything below needs a session first.
       if (name === "get_server_status") {
+        await this.awaitWarmUp();
         return statusResult(await this.getServerStatus());
       }
 
@@ -1062,6 +1144,18 @@ export class OpcuaTools {
     const endpoint = this.conn.endpointUrl;
     const security = describeSecurity(securityConfig());
     const identity = serverIdentityRecord(this.policy.config);
+    // A round someone else started is not joined. Against a plant that is down
+    // it runs the whole configured backoff, and this is the report of why
+    // nothing is connected — the one answer that must not wait for it (#136).
+    // The round carries on; asking again reports how it ended.
+    if (this.conn.connecting) {
+      return disconnectedStatus(
+        endpoint,
+        security,
+        identity,
+        stillConnectingMessage(endpoint, this.conn.lastErrorMessage)
+      );
+    }
     try {
       // Through the same retry as every other read, so that asking for the
       // status also re-establishes a session that has silently died — which is

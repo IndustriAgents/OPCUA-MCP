@@ -47,7 +47,6 @@ from __future__ import annotations
 import secrets
 import sys
 import threading
-import time
 from collections.abc import Callable
 from concurrent import futures
 from typing import TypeVar
@@ -126,6 +125,11 @@ _DEAD_SESSION_TYPES = (
     OSError,
     EOFError,
 )
+
+
+#: Why a connection attempt made after :meth:`OpcuaConnection.close` fails.
+#: Shared with the Node server.
+CLOSED_MESSAGE = "the MCP server is shutting down"
 
 
 def is_connection_error(error: BaseException) -> bool:
@@ -209,6 +213,9 @@ class OpcuaConnection:
         #: The rebuild in flight, so concurrent callers join it rather than start
         #: a second. ``None`` when nothing is being rebuilt.
         self._rebuilding: _Rebuild | None = None
+        #: Set by :meth:`close`. The backoff waits on it rather than sleeping, so
+        #: a round still dialling a plant that is down stops when the server does.
+        self._closed = threading.Event()
         #: Called with a *new* client after a dead one was replaced, so that
         #: whatever was bound to the old session can be re-established.
         self.on_client_replaced: Callable[[Client], None] | None = None
@@ -227,6 +234,17 @@ class OpcuaConnection:
     def connected(self) -> bool:
         """True while this server holds a session it believes is live."""
         return self._client is not None
+
+    @property
+    def connecting(self) -> bool:
+        """True while a connection round — a first connect or a rebuild — is running.
+
+        ``get_server_status`` reads this so as not to join a round someone else
+        started: against a plant that is down a round lasts the whole configured
+        backoff, and the report of *why* nothing is connected is the one answer
+        that must not wait for it. The Node server's ``connecting`` is the same.
+        """
+        return self._rebuilding is not None
 
     @property
     def last_error(self) -> str | None:
@@ -266,6 +284,8 @@ class OpcuaConnection:
         delays = reconnect_delays(self._config)
         last: BaseException | None = None
         for attempt in range(len(delays) + 1):
+            if self._closed.is_set():
+                raise ConnectionAbortedError(CLOSED_MESSAGE)
             try:
                 client = self._open()
             except Exception as error:
@@ -278,7 +298,8 @@ class OpcuaConnection:
                         f"({error!s}), next try in {delay:g}ms",
                         file=sys.stderr,
                     )
-                    time.sleep(delay / 1000)
+                    # Not `time.sleep`: `close` has to be able to cut this short.
+                    self._closed.wait(delay / 1000)
                 continue
             print(f"Connected to OPC UA server ({describe_security(config)})", file=sys.stderr)
             return client
@@ -338,6 +359,33 @@ class OpcuaConnection:
                 print("Disconnected from OPC UA server", file=sys.stderr)
             except Exception as error:
                 print(f"Error disconnecting from OPC UA server: {error}", file=sys.stderr)
+
+    def settle(self) -> None:
+        """Wait for the connection round already running, whatever it finds.
+
+        Never starts one — see :meth:`ServerState.await_connection_in_flight`
+        for who needs this. The Node server's ``settled`` is the same wait.
+        """
+        while True:
+            with self._lock:
+                attempt = self._rebuilding
+            if attempt is None:
+                return
+            attempt.done.wait()
+
+    def close(self) -> None:
+        """Stop for good: end a round's backoff now, and refuse to start another.
+
+        Does not wait for the round, and does not disconnect — the lifespan waits
+        for the warm-up and then calls :meth:`disconnect`, in that order, so a
+        connection that completes in between is still the one dropped. Without
+        this a server asked to stop went on dialling a plant that is down for the
+        rest of the configured backoff, and the interpreter would not exit until
+        the thread doing it had finished. An attempt already on the wire is not
+        interrupted; python-opcua bounds that by its own socket timeout. The Node
+        server's ``close`` aborts its round the same way.
+        """
+        self._closed.set()
 
     def ensure_connected(self) -> Client:
         """A live client, connecting if there is not one yet.
@@ -477,6 +525,15 @@ def not_connected_message(url: str, reason: str) -> str:
     return message("notConnected", url=url, reason=reason)
 
 
+def still_connecting_message(url: str, reason: str | None) -> str:
+    """What `get_server_status` says while a connection round is still running.
+
+    ``reason`` is the last recorded failure, or "not yet known" before there is
+    one. The Node server's ``stillConnectingMessage`` words it the same.
+    """
+    return message("stillConnecting", url=url, reason=reason or "not yet known")
+
+
 def describe_error(error: BaseException) -> str:
     """The message to report for a failed connection, in the library's words."""
     text = str(error)
@@ -484,6 +541,7 @@ def describe_error(error: BaseException) -> str:
 
 
 __all__ = [
+    "CLOSED_MESSAGE",
     "DEAD_SESSION_MARKERS",
     "DEAD_SESSION_PHRASES",
     "DEAD_SESSION_STATUS_CODES",
@@ -492,4 +550,5 @@ __all__ = [
     "describe_error",
     "is_connection_error",
     "not_connected_message",
+    "still_connecting_message",
 ]

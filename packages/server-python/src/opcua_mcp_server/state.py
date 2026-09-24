@@ -29,10 +29,12 @@ Reached two ways, and they are the same object:
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable
 from typing import Any
 
 from .audit import AuditSink
-from .config import SERVER_URL
+from .config import SERVER_URL, WARM_UP_WAIT_MS
 from .connection import OpcuaConnection
 from .events import EventSubscriptions
 from .node_metadata import NodeMetadata
@@ -78,6 +80,66 @@ class ServerState:
         #: What each node published about its own number, for the life of one
         #: session. Dropped on rebind for the same reason the capabilities are.
         self.node_metadata = NodeMetadata()
+
+        #: The startup warm-up, set by the lifespan, and when requests stop
+        #: waiting for it (event-loop time). See :meth:`await_warm_up`.
+        self.warm_up: asyncio.Future | None = None
+        self._warm_up_deadline = 0.0
+        #: How long :meth:`await_warm_up` gives the warm-up, from its start. An
+        #: attribute so the unit tests can shorten it; the server uses the constant.
+        self.warm_up_wait_ms: float = WARM_UP_WAIT_MS
+
+    def start_warm_up(self, warm_up: Awaitable[None]) -> asyncio.Future:
+        """Run the warm-up beside the requests rather than before them.
+
+        The lifespan used to await it, and the MCP SDK answers nothing — not
+        ``initialize`` — until the lifespan has entered, so a plant that was down
+        held the whole protocol back for a full connection round (#136).
+        """
+        self.warm_up = asyncio.ensure_future(warm_up)
+        self._warm_up_deadline = asyncio.get_running_loop().time() + self.warm_up_wait_ms / 1000
+        return self.warm_up
+
+    async def await_connection_in_flight(self) -> None:
+        """Wait for the warm-up, and any other connection round in flight, unbounded.
+
+        For a tool call, before it is authorized and audited. Both read the
+        session: the policy resolves ``nsu=`` allowlist entries through the
+        namespace mapping bound on connect, and the audit record names the
+        session the call rides on (#105, #107). When the lifespan awaited the
+        warm-up, every call found it finished; a call that arrives during it now
+        waits for it, where before it would have been refused a URI-pinned node
+        and audited against no session at all. Bounded by the round itself,
+        which always ends. Never starts a round: a call made while disconnected
+        connects after it is authorized, as it always has. The Node server's
+        ``OpcuaTools.awaitConnectionInFlight`` is the same wait.
+        """
+        warm_up = self.warm_up
+        if warm_up is not None and not warm_up.done():
+            await asyncio.wait({warm_up})
+        connection = self.connection
+        if connection is not None and connection.connecting:
+            await asyncio.to_thread(connection.settle)
+
+    async def await_warm_up(self) -> None:
+        """Wait for the startup warm-up, but never past ``warm_up_wait_ms`` from its start.
+
+        For ``tools/list`` and ``get_server_status``, the two requests that report
+        what the server knows about the connection. Against a plant that is up
+        the warm-up finishes well inside the window, so the first catalogue
+        carries the whole surface and the first status is a connected one — the
+        reason the warm-up used to run before any request was served. Against a
+        plant that is down it can take the whole round, and a server that is to
+        be diagnosable has to answer before then, from what it knows. The Node
+        server's ``OpcuaTools.awaitWarmUp`` is the same wait.
+        """
+        warm_up = self.warm_up
+        if warm_up is None or warm_up.done():
+            return
+        remaining = self._warm_up_deadline - asyncio.get_running_loop().time()
+        if remaining > 0:
+            # `wait`, not `wait_for`: running out of patience must not cancel it.
+            await asyncio.wait({warm_up}, timeout=remaining)
 
     @property
     def policy(self) -> ToolPolicy:

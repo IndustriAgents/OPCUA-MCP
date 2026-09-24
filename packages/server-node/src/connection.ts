@@ -31,7 +31,13 @@ import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
 
-import { ReconnectConfig, SERVER_URL, reconnectBudgetMs, reconnectConfig } from "./config.js";
+import {
+  ReconnectConfig,
+  SERVER_URL,
+  connectionStrategy,
+  reconnectBudgetMs,
+  reconnectConfig,
+} from "./config.js";
 import { CONTRACT } from "./contract.js";
 import { ToolPolicy, toolPolicy } from "./policy.js";
 import {
@@ -151,6 +157,20 @@ export function notConnectedMessage(url: string, reason: string): string {
   return message("notConnected", { url, reason });
 }
 
+/** What `get_server_status` says while a connection round is still running.
+ *
+ * `reason` is the last recorded failure, or "not yet known" before there is one
+ * — node-opcua reports a failed round only when the whole round has failed, so
+ * during the first one there is nothing to quote. The Python server's
+ * `still_connecting_message` words it the same.
+ */
+export function stillConnectingMessage(url: string, reason: string | null): string {
+  return message("stillConnecting", { url, reason: reason ?? "not yet known" });
+}
+
+/** Why a connection attempt made after `close()` fails. Shared with Python. */
+export const CLOSED_MESSAGE = "the MCP server is shutting down";
+
 export class OpcuaConnection {
   /** Everything this connection used to read off a module-level singleton.
    *
@@ -177,6 +197,11 @@ export class OpcuaConnection {
   private reconnectPromise: Promise<void> | null = null;
   private state: ConnectionState = "disconnected";
   private lastError: string | null = null;
+  /** The client of the round in flight, until it connects or gives up — so that
+   *  `close()` can abort its backoff rather than wait it out. */
+  private opening: OPCUAClient | null = null;
+  /** Set by `close()`: no round may start after it. */
+  private closed = false;
   /** An id for the session currently held; see `sessionId`. */
   private session_: string | null = null;
   session: ClientSession | null = null;
@@ -191,6 +216,28 @@ export class OpcuaConnection {
   /** True while this server holds a session it believes is live. */
   get connected(): boolean {
     return this.state === "connected" && this.session !== null;
+  }
+
+  /** True while a connection round — a first connect or a rebuild — is running.
+   *
+   * `get_server_status` reads this so as not to join a round someone else
+   * started: against a plant that is down a round lasts the whole configured
+   * backoff, and the report of *why* nothing is connected is the one answer that
+   * must not wait for it. Not true during node-opcua's own channel repair, which
+   * `ensureConnection` already waits on for a bounded time.
+   */
+  get connecting(): boolean {
+    return this.connectPromise !== null || this.reconnectPromise !== null;
+  }
+
+  /** Wait for the connection round already running, whatever it finds. Never
+   *  starts one — see `OpcuaTools.awaitConnectionInFlight` for who needs this. */
+  async settled(): Promise<void> {
+    for (;;) {
+      const inFlight = this.reconnectPromise ?? this.connectPromise;
+      if (!inFlight) return;
+      await inFlight.catch(() => undefined);
+    }
   }
 
   /** Why the connection is not up, in the client library's words. */
@@ -232,6 +279,7 @@ export class OpcuaConnection {
 
   private async open(): Promise<void> {
     let client: OPCUAClient | null = null;
+    if (this.closed) throw new Error(CLOSED_MESSAGE);
     this.state = "connecting";
     try {
       const security = securityConfig();
@@ -242,11 +290,14 @@ export class OpcuaConnection {
       const reconnect = this.reconnectSettings;
       client = OPCUAClient.create({
         applicationName: "OPC UA MCP Client",
-        connectionStrategy: {
-          initialDelay: reconnect.initialDelay,
-          maxDelay: reconnect.maxDelay,
-          maxRetry: reconnect.maxRetry,
-        },
+        // The retries of *one round*, never -1. node-opcua reads `maxRetry` for
+        // the initial connect, and -1 there is a `connect()` that never settles
+        // while the endpoint is unreachable — which, awaited before the MCP
+        // transport was opened, was a server that never answered `initialize`
+        // (#136). Python counts a round the same way. What -1 was for is kept:
+        // any positive count still has node-opcua repair a dropped channel with
+        // no limit of its own, and 0 still switches that repair off.
+        connectionStrategy: connectionStrategy(reconnect),
         // Let node-opcua repair a broken channel and re-activate the session
         // rather than leaving a dropped connection for us to notice. Both are
         // its defaults; stating them keeps the behaviour this module's recovery
@@ -259,11 +310,15 @@ export class OpcuaConnection {
         // safe against the same thing. See transport-limits.ts.
         transportSettings: transportSettings(),
         ...clientSecurityOptions(security),
-        endpoint_must_exist: false,
+        // The spelling node-opcua reads now; `endpoint_must_exist` still worked
+        // but logged a deprecation warning on every connect.
+        endpointMustExist: false,
       });
       this.watch(client);
 
+      this.opening = client;
       await client.connect(this.endpoint);
+      if (this.closed) throw new Error(CLOSED_MESSAGE);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
       const session = await client.createSession(userIdentity(security));
@@ -297,6 +352,8 @@ export class OpcuaConnection {
       this.lastError = error instanceof Error ? error.message : String(error);
       console.error("Failed to connect to OPC UA server:", error);
       throw error;
+    } finally {
+      this.opening = null;
     }
   }
 
@@ -317,7 +374,9 @@ export class OpcuaConnection {
     });
 
     client.on("backoff", (retry: number, delay: number) => {
-      if (!isCurrent()) return;
+      // Also while it is still connecting, which is before it becomes current:
+      // a round against a plant that is down is otherwise silent until it ends.
+      if (!isCurrent() && this.opening !== client) return;
       console.error(`OPC UA reconnect: attempt ${retry + 1} failed, next try in ${delay}ms`);
     });
 
@@ -339,6 +398,28 @@ export class OpcuaConnection {
   }
 
   async disconnect(): Promise<void> {
+    await this.teardown();
+  }
+
+  /** Shut the connection down for good: abort a round in flight, then disconnect.
+   *
+   * `disconnect()` alone waits for a round in flight to finish before tearing
+   * down, which against a plant that is down is the whole configured backoff — a
+   * process asked to exit that goes on dialling the plant for another half
+   * minute. Disconnecting the client that is still connecting makes node-opcua
+   * abandon its backoff and reject the `connect()` at once. The Python server's
+   * `close` stops its backoff the same way.
+   */
+  async close(): Promise<void> {
+    this.closed = true;
+    const opening = this.opening;
+    if (opening) {
+      try {
+        await opening.disconnect();
+      } catch {
+        // Aborting is best-effort; the teardown below still runs.
+      }
+    }
     await this.teardown();
   }
 

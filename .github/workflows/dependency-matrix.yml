@@ -84,11 +84,16 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
-      # Fails if what is installed is not what was pinned, so the job cannot
-      # pass on a lockfile entry the install step failed to replace.
-      - name: Show the Node set under test
+      # `npm ls` fails if what is installed is not what was pinned, so the job
+      # cannot pass on a lockfile entry the install step failed to replace. Then
+      # the committed manifests go back: node_modules and build/ keep the floors,
+      # and the suite's own checks of package.json and the lockfile (ranges,
+      # versions) judge what is actually committed, not the pinned rewrite.
+      - name: Show the Node set under test, then restore the manifests
         working-directory: packages/server-node
-        run: npm ls --omit=dev --depth=0
+        run: |
+          npm ls --omit=dev --depth=0
+          git checkout -- package.json package-lock.json
 
       - name: Install aggregate mock OPC UA server
         working-directory: packages/mock-server-aggregate
@@ -100,10 +105,12 @@ jobs:
 
       # Direct dependencies of every workspace member at their floors, transitive
       # ones at the newest version those floors allow — which is what a user
-      # constrained to an old direct dependency would get. This rewrites uv.lock
-      # in the runner's checkout only.
+      # constrained to an old direct dependency would get. uv rewrites uv.lock
+      # to do it; the committed one is restored once the environment is built.
       - name: Resolve the Python set at its floors
-        run: uv sync --all-packages --resolution lowest-direct --python 3.10
+        run: |
+          uv sync --all-packages --resolution lowest-direct --python 3.10
+          git checkout -- uv.lock
 
       - name: Show the Python set under test
         run: uv pip list
@@ -146,9 +153,13 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
-      - name: Show the Node set under test
+      # The suite checks the committed lockfile's versions, so it goes back once
+      # node_modules has been resolved without it.
+      - name: Show the Node set under test, then restore the lockfile
         working-directory: packages/server-node
-        run: npm ls --omit=dev --depth=0
+        run: |
+          npm ls --omit=dev --depth=0
+          git checkout -- package-lock.json
 
       - name: Install aggregate mock OPC UA server
         working-directory: packages/mock-server-aggregate
@@ -159,9 +170,12 @@ jobs:
         run: npm ci
 
       # `--upgrade` re-resolves everything to the newest versions the declared
-      # ranges allow, ignoring what uv.lock pinned.
+      # ranges allow, ignoring what uv.lock pinned (and rewriting it, hence the
+      # restore).
       - name: Resolve the Python set at its newest
-        run: uv sync --all-packages --upgrade --python 3.13
+        run: |
+          uv sync --all-packages --upgrade --python 3.13
+          git checkout -- uv.lock
 
       - name: Show the Python set under test
         run: uv pip list

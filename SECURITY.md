@@ -345,7 +345,8 @@ deleted, the next record goes to a new file created at the path — and whatever
 at the path then is held to the same rules as at startup, so a rotation cannot
 swap in a symlink or someone else's file. No signal is needed. `copytruncate`
 also works: the file is opened in append mode, so writes land at the new end.
-Rotated files are never written again. One declared difference: **on Windows the
+Rotated files are never written again. One declared difference
+(`audit-file-rename-on-windows` in `contract/runtime-differences.json`): **on Windows the
 Python server** holds the file without delete sharing, so a rotator cannot rename
 or delete it while that server runs — use copy-and-truncate there, or rotate with
 the server stopped. The Node server allows the rename on every platform.
@@ -389,7 +390,9 @@ OK: 1289 chained record(s), seq 1..1289
 Oldest file first. Exit status 0 if the chain holds, 1 if it does not, 2 on
 misuse. The key file must be at least 32 bytes (`openssl rand -hex 32`), a
 regular file, and not readable or writable by group or others; surrounding
-whitespace is ignored.
+whitespace is ignored. A file whose line endings a Windows tool converted to CRLF
+still verifies — the terminator is not part of what is hashed — and every byte
+of every record is still checked.
 
 **What it detects**, within the files it is given: a record that was **modified**
 (its hash no longer matches — any byte, including reformatting), a record that

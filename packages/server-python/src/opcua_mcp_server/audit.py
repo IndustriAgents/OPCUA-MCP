@@ -761,7 +761,11 @@ def verify_chain(files: Sequence[tuple[str, bytes]], key: bytes | None) -> Verdi
     prev: tuple[int, str, str] | None = None  # (seq, hash, where)
     leading = 0
     for name, content in files:
-        lines = content.split(b"\n")
+        # Split on LF and drop a CR before it. The server writes LF only, but a
+        # file that passed through a Windows tool may come back CRLF, and the
+        # terminator was never part of what the hash covers — so a converted
+        # file still verifies, and every byte of every record is still checked.
+        lines = [line.removesuffix(b"\r") for line in content.split(b"\n")]
         if lines and lines[-1] == b"":
             lines.pop()
         # A server that starts on a new (or rotated-to) file begins a chain there,

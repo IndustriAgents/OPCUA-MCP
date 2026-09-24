@@ -352,6 +352,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     detects modified, deleted, inserted and reordered records. It cannot detect a
     truncated tail or an attacker holding the key; SECURITY.md says so.
   - SECURITY.md now states what the local audit file can and cannot prove.
+  - One declared runtime difference, `audit-file-rename-on-windows`: on Windows
+    the Python server's open audit file cannot be renamed away, so rotate it
+    with copy-and-truncate there (see docs/compatibility.md).
 
 ### Changed — the audit record is `schema_version` 2
 - **Audit records are `schema_version: 2`.** New fields: `schema_version`,

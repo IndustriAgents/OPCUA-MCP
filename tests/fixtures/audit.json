@@ -1,5 +1,5 @@
 {
-  "$comment": "The control audit record and its file, as a table BOTH runtimes are driven from (#146): tests/unit/test_audit.py and packages/server-node/test/audit.test.mjs read this file. `records` pins the canonical field order and the exact bytes each runtime serializes a record to — ASCII-only, so a non-ASCII reason is escaped identically. `chain` is the same four records hash-chained both ways, byte for byte; the key is a test value and nothing else. `verify` applies each case's `edits` to that chain (0-based line indexes; `split` makes files `a` and `b`) and states where the verifier must report a problem or a notice — the file:line a message starts with, or the whole message when it names no line — including the LIMIT cases it is documented not to catch. `config` is the OPCUA_AUDIT_* parsing, `unsafe_targets` the rules an existing audit file must pass (mode in octal, {path} is /srv/audit.jsonl), and `user_identity` what opcua_user_identity says for each OPC UA identity token.",
+  "$comment": "The control audit record and its file, as a table BOTH runtimes are driven from (#146): tests/unit/test_audit.py and packages/server-node/test/audit.test.mjs read this file. `records` pins the canonical field order and the exact bytes each runtime serializes a record to — ASCII-only, so a non-ASCII reason is escaped identically. `chain` is the same four records hash-chained both ways, byte for byte; the key is a test value and nothing else. `verify` applies each case's `edits` to that chain (0-based line indexes; `crlf` joins the lines with CRLF; `split` makes files `a` and `b`) and states where the verifier must report a problem or a notice — the file:line a message starts with, or the whole message when it names no line — including the LIMIT cases it is documented not to catch. `config` is the OPCUA_AUDIT_* parsing, `unsafe_targets` the rules an existing audit file must pass (mode in octal, {path} is /srv/audit.jsonl), and `user_identity` what opcua_user_identity says for each OPC UA identity token.",
   "schema_version": 2,
   "field_order": [
     "event",
@@ -398,6 +398,40 @@
       "problems": [
         "audit.jsonl:3",
         "audit.jsonl:4"
+      ],
+      "notices": []
+    },
+    {
+      "name": "a file converted to CRLF line endings still verifies: the terminator is not hashed",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "crlf"
+        }
+      ],
+      "ok": true,
+      "problems": [],
+      "notices": []
+    },
+    {
+      "name": "and a record edited in a CRLF file is still caught",
+      "mode": "hmac-sha256",
+      "key": true,
+      "edits": [
+        {
+          "op": "crlf"
+        },
+        {
+          "op": "replace",
+          "line": 1,
+          "from": "\"denied\"",
+          "to": "\"allowed\""
+        }
+      ],
+      "ok": false,
+      "problems": [
+        "audit.jsonl:2"
       ],
       "notices": []
     },

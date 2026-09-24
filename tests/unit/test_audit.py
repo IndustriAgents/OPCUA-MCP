@@ -189,7 +189,7 @@ def test_the_opcua_user_identity_carries_no_secret(case, tmp_path):
     cert = None
     if case["certificate"] is not None:
         cert = tmp_path / "user.pem"
-        cert.write_text(case["certificate"], encoding="ascii")
+        cert.write_bytes(case["certificate"].encode("ascii"))
     assert opcua_user_identity(case["username"], str(cert) if cert else None) == case["expect"]
 
 
@@ -452,7 +452,8 @@ def test_the_chain_is_the_same_bytes_on_both_runtimes(tmp_path, mode):
             sink.write(record)
     finally:
         sink.close()
-    assert path.read_text(encoding="ascii").splitlines() == FIXTURE["chain"][mode]
+    # Bytes, not text: universal-newline reading would hide a CRLF written on Windows.
+    assert path.read_bytes() == ("\n".join(FIXTURE["chain"][mode]) + "\n").encode("ascii")
 
 
 def test_a_restarted_server_continues_the_chain(tmp_path):
@@ -464,7 +465,7 @@ def test_a_restarted_server_continues_the_chain(tmp_path):
                 sink.write(item)
         finally:
             sink.close()
-    assert path.read_text(encoding="ascii").splitlines() == FIXTURE["chain"]["hmac-sha256"]
+    assert path.read_bytes() == ("\n".join(FIXTURE["chain"]["hmac-sha256"]) + "\n").encode("ascii")
 
 
 def test_a_torn_last_line_is_left_for_the_verifier_and_not_glued_to(tmp_path):
@@ -472,7 +473,7 @@ def test_a_torn_last_line_is_left_for_the_verifier_and_not_glued_to(tmp_path):
     line, links to the last whole record, and only the torn one is reported."""
     path = tmp_path / "audit.jsonl"
     lines = FIXTURE["chain"]["sha256"]
-    path.write_text("\n".join(lines[:2]) + "\n" + '{"event":"opcua_mcp_po')
+    path.write_bytes(("\n".join(lines[:2]) + "\n" + '{"event":"opcua_mcp_po').encode("ascii"))
     if os.name == "posix":
         path.chmod(0o600)
     sink = AuditSink(str(path), chain="sha256")
@@ -480,7 +481,7 @@ def test_a_torn_last_line_is_left_for_the_verifier_and_not_glued_to(tmp_path):
         sink.write(CHAIN_RECORDS[2])
     finally:
         sink.close()
-    written = path.read_text(encoding="ascii").splitlines()
+    written = path.read_bytes().decode("ascii").split("\n")
     assert written[3] == lines[2]
     verdict = verify_chain([("audit.jsonl", path.read_bytes())], key=None)
     assert [p.split(": ")[0] for p in verdict.problems] == ["audit.jsonl:3"]
@@ -515,6 +516,8 @@ def _apply(lines: list[str], edits: list[dict]) -> list[tuple[str, list[str]]]:
             files = [("a", body[: edit["at"]]), ("b", body[edit["at"] :])]
         elif op == "reverse_files":
             files.reverse()
+        elif op == "crlf":
+            pass  # applied when the files are joined
         else:
             raise AssertionError(f"unknown edit {op}")
     return files
@@ -523,7 +526,8 @@ def _apply(lines: list[str], edits: list[dict]) -> list[tuple[str, list[str]]]:
 @pytest.mark.parametrize("case", FIXTURE["verify"], ids=ids(FIXTURE["verify"]))
 def test_the_verifier(case):
     files = _apply(FIXTURE["chain"][case["mode"]], case["edits"])
-    contents = [(name, ("\n".join(body) + "\n").encode("utf-8")) for name, body in files]
+    eol = "\r\n" if any(edit["op"] == "crlf" for edit in case["edits"]) else "\n"
+    contents = [(name, (eol.join(body) + eol).encode("utf-8")) for name, body in files]
     verdict = verify_chain(contents, KEY if case["key"] else None)
     assert [_where(p) for p in verdict.problems] == case["problems"]
     assert [_where(n) for n in verdict.notices] == case["notices"]
@@ -538,7 +542,7 @@ def test_chain_line_puts_the_hash_last_and_covers_everything_before_it():
 
 def test_the_verify_command(tmp_path, capsys):
     good = tmp_path / "audit.jsonl"
-    good.write_text("\n".join(FIXTURE["chain"]["hmac-sha256"]) + "\n")
+    good.write_bytes(("\n".join(FIXTURE["chain"]["hmac-sha256"]) + "\n").encode("ascii"))
     key = tmp_path / "key"
     key.write_bytes(KEY)
     key.chmod(0o600)

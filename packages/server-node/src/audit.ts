@@ -792,16 +792,25 @@ export interface Verdict {
   ok: boolean;
 }
 
+/** Split on LF and drop a CR before it.
+ *
+ * The server writes LF only, but a file that passed through a Windows tool may
+ * come back CRLF, and the terminator was never part of what the hash covers — so
+ * a converted file still verifies, and every byte of every record is still
+ * checked. `audit.py` splits the same way.
+ */
 function splitLines(content: Buffer): Buffer[] {
   const lines: Buffer[] = [];
+  const push = (end: number, start: number) =>
+    lines.push(content.subarray(start, end > start && content[end - 1] === 0x0d ? end - 1 : end));
   let start = 0;
   for (let index = 0; index < content.length; index += 1) {
     if (content[index] === 0x0a) {
-      lines.push(content.subarray(start, index));
+      push(index, start);
       start = index + 1;
     }
   }
-  if (start < content.length) lines.push(content.subarray(start));
+  if (start < content.length) push(content.length, start);
   return lines;
 }
 

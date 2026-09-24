@@ -533,6 +533,8 @@ function applyEdits(lines, edits) {
       case "reverse_files":
         files.reverse();
         break;
+      case "crlf":
+        break; // applied when the files are joined
       default:
         throw new Error(`unknown edit ${edit.op}`);
     }
@@ -543,9 +545,10 @@ function applyEdits(lines, edits) {
 describe("the verifier", () => {
   for (const testCase of FIXTURE.verify) {
     it(testCase.name, () => {
+      const eol = testCase.edits.some((edit) => edit.op === "crlf") ? "\r\n" : "\n";
       const files = applyEdits(FIXTURE.chain[testCase.mode], testCase.edits).map(([name, body]) => [
         name,
-        Buffer.from(body.join("\n") + "\n", "utf8"),
+        Buffer.from(body.join(eol) + eol, "utf8"),
       ]);
       const verdict = verifyChain(files, testCase.key ? KEY : null);
       assert.deepEqual(verdict.problems.map(where), testCase.problems);

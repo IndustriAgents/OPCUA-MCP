@@ -207,6 +207,20 @@
         "packages/server-python/src/opcua_mcp_server/connection.py",
         "packages/server-node/src/connection.ts"
       ]
+    },
+    {
+      "id": "audit-file-rename-on-windows",
+      "area": "filesystem",
+      "summary": "On Windows only, the open OPCUA_AUDIT_FILE can be renamed or deleted under the Node server but not under the Python server.",
+      "python": "On Windows the audit file is held without delete sharing, so a rotator cannot rename or delete it while the server runs; rotate with copy-and-truncate, or with the server stopped. POSIX systems are unaffected.",
+      "node": "libuv opens every file with delete sharing, so rename-and-create rotation works while the server runs, on every platform.",
+      "observable": true,
+      "rationale": "Python's os.open cannot ask Windows for FILE_SHARE_DELETE; only a ctypes CreateFileW path could, and that would be untestable platform code in the audit path. The record format, permissions checks, rotation detection, fail-closed policy and hash chain are identical; copy-and-truncate rotation works on both runtimes on every platform. Documented in SECURITY.md.",
+      "evidence": [
+        "packages/server-python/src/opcua_mcp_server/audit.py",
+        "packages/server-node/src/audit.ts",
+        "SECURITY.md"
+      ]
     }
   ]
 }

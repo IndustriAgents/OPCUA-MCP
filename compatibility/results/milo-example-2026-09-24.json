@@ -1,0 +1,774 @@
+{
+  "schemaVersion": 1,
+  "server": {
+    "id": "milo-example",
+    "name": "Eclipse Milo example server",
+    "implementation": "Eclipse Milo (Java)",
+    "language": "Java",
+    "independent": true,
+    "source": "https://github.com/eclipse-milo/milo/tree/v1.1.7/milo-examples/server-examples",
+    "build_info": {
+      "product_name": "eclipse milo example server",
+      "product_uri": "urn:eclipse:milo:example-server",
+      "manufacturer_name": "eclipse",
+      "software_version": "1.1.7",
+      "build_number": "",
+      "build_date": "2026-09-24T18:27:01.453437Z"
+    }
+  },
+  "endpoint_features": {
+    "endpoints": [
+      {
+        "policy": "Basic256Sha256",
+        "mode": "SignAndEncrypt",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "None",
+        "mode": "None",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      }
+    ],
+    "discovery_error": null
+  },
+  "configuration": {
+    "security_modes": [
+      "None",
+      "Sign",
+      "SignAndEncrypt"
+    ],
+    "security_policy": "Basic256Sha256",
+    "default_channel": "None/None",
+    "client_trust": "enforced",
+    "identities": [
+      "anonymous",
+      "user",
+      "x509"
+    ],
+    "lab_server_controlled": true,
+    "node_map": [
+      "arrays",
+      "browseRoot",
+      "changing",
+      "deniedRead",
+      "deniedWrite",
+      "events",
+      "historized",
+      "method",
+      "scalars",
+      "structures",
+      "unknown",
+      "writable"
+    ]
+  },
+  "harness": {
+    "git_commit": "929edec",
+    "config": "compatibility/labs/milo.json"
+  },
+  "started": "2026-09-24T18:27:06Z",
+  "finished": "2026-09-24T18:28:53Z",
+  "runs": [
+    {
+      "runtime": "python",
+      "runtime_version": "3.13.3",
+      "package_version": "0.5.1",
+      "opcua_library": "opcua 0.98.13",
+      "mcp_sdk": "mcp 2.2.0",
+      "started": "2026-09-24T18:27:07Z",
+      "scenarios": [
+        {
+          "id": "connect.status",
+          "detail": "connected; ServerStatus and BuildInfo read",
+          "evidence": {
+            "server_state": "Running",
+            "diagnostics_published": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "connect.namespaces",
+          "detail": "all 1 configured namespace URIs resolved",
+          "evidence": {
+            "namespace_count": 3
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "connect.endpoint-discovery",
+          "detail": "Basic256Sha256/SignAndEncrypt with the certificate from GetEndpoints",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.none",
+          "detail": "None/None: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.sign",
+          "detail": "server offers no Basic256Sha256/Sign endpoint",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.0
+        },
+        {
+          "id": "security.sign-and-encrypt",
+          "detail": "Basic256Sha256/SignAndEncrypt: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.server-pinned",
+          "detail": "pinned server certificate accepted and reported as authenticated",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.server-impostor",
+          "detail": "an impostor server certificate was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: not yet known)"
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "security.client-untrusted",
+          "detail": "an untrusted client certificate was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: not yet known)"
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "identity.anonymous",
+          "detail": "anonymous session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username",
+          "detail": "username/password session",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "identity.username-rejected",
+          "detail": "a wrong password was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: \"The <redacted> identity token is not valid.\"(BadIdentityTokenInvalid))"
+          },
+          "outcome": "pass",
+          "duration_s": 3.4
+        },
+        {
+          "id": "identity.x509",
+          "detail": "X.509 user session",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "browse.children",
+          "detail": "15 children",
+          "evidence": {
+            "truncated": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "browse.continuation",
+          "detail": "nodes.largeFolder not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "values.scalar",
+          "detail": "19 scalar types read with the right data_type",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "Byte",
+              "ByteString",
+              "DateTime",
+              "Double",
+              "Float",
+              "Guid",
+              "Int16",
+              "Int32",
+              "Int64",
+              "LocalizedText",
+              "NodeId",
+              "QualifiedName",
+              "SByte",
+              "String",
+              "UInt16",
+              "UInt32",
+              "UInt64",
+              "XmlElement"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.array",
+          "detail": "7 array types read as JSON arrays",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "DateTime",
+              "Double",
+              "Int32",
+              "LocalizedText",
+              "String",
+              "UInt64"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.structure",
+          "detail": "CustomStructType: String, not an object; CustomUnionType: String, not an object",
+          "evidence": {
+            "shapes": {
+              "CustomStructType": "String",
+              "CustomUnionType": "String"
+            }
+          },
+          "outcome": "project-bug",
+          "triage": {
+            "summary": "Milo's custom structure and union come back as a string, not an object, on both runtimes: the shared value codec has no ExtensionObject rule, so each runtime returns its client library's own text for the value, and neither decodes a server-defined type from its DataTypeDefinition.",
+            "tracking": "#171"
+          },
+          "duration_s": 0.4
+        },
+        {
+          "id": "write.readback",
+          "detail": "2 nodes written in one batch and read back",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.read",
+          "detail": "100 nodes in one call (server limit 10000)",
+          "evidence": {
+            "server_max_nodes_per_read": 10000,
+            "batch": 100,
+            "good": 100
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.write",
+          "detail": "20 writes in one call (server limit 10000)",
+          "evidence": {
+            "server_max_nodes_per_write": 10000,
+            "batch": 20,
+            "good": 20
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "method.call",
+          "detail": "1 input and 1 output arguments",
+          "evidence": {
+            "output_kinds": [
+              "Number"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.raw",
+          "detail": "server does not advertise AccessHistoryDataCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.continuation",
+          "detail": "nodes.historized or nodes.historyPaging not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "history.aggregate",
+          "detail": "server advertises no aggregate functions",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "subscription.data-change",
+          "detail": "15 data changes in 4 s",
+          "evidence": {
+            "changes": 15
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "subscription.deadband",
+          "detail": "absolute deadband accepted; 6 changes",
+          "evidence": {
+            "changes": 6
+          },
+          "outcome": "pass",
+          "duration_s": 4.4
+        },
+        {
+          "id": "events.subscribe",
+          "detail": "1 events received",
+          "evidence": {
+            "event_types": 1
+          },
+          "outcome": "pass",
+          "duration_s": 2.5
+        },
+        {
+          "id": "events.history",
+          "detail": "server does not advertise AccessHistoryEventsCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "alarms.list",
+          "detail": "nodes.alarms not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "alarms.acknowledge",
+          "detail": "nodes.alarms.acknowledge not enabled",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "authz.denied-write",
+          "detail": "refused per item with BadUserAccessDenied; session intact",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-read",
+          "detail": "refused per item with BadUserAccessDenied",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-method",
+          "detail": "nodes.deniedMethod not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "authz.unknown-node",
+          "detail": "unknown node answered per item with BadNodeIdUnknown",
+          "evidence": {
+            "status": "BadNodeIdUnknown"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "recovery.restart",
+          "detail": "read failed cleanly while down and recovered on the same MCP session",
+          "evidence": {
+            "answered_while_down_s": 11.8
+          },
+          "outcome": "pass",
+          "duration_s": 14.3
+        },
+        {
+          "id": "recovery.subscription",
+          "detail": "subscription resumed; 10 changes after the restart",
+          "evidence": {
+            "changes_after": 10
+          },
+          "outcome": "pass",
+          "duration_s": 11.6
+        },
+        {
+          "id": "recovery.namespace-reorder",
+          "detail": "needs a lab server with lab.reorderedCommand",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        }
+      ],
+      "finished": "2026-09-24T18:28:06Z",
+      "summary": {
+        "pass": 27,
+        "unsupported-optional": 4,
+        "not-configured": 6,
+        "project-bug": 1
+      }
+    },
+    {
+      "runtime": "node",
+      "runtime_version": "22.14.0",
+      "package_version": "0.5.1",
+      "opcua_library": "node-opcua-client 2.186.0",
+      "mcp_sdk": "@modelcontextprotocol/sdk 1.30.0",
+      "started": "2026-09-24T18:28:06Z",
+      "scenarios": [
+        {
+          "id": "connect.status",
+          "detail": "connected; ServerStatus and BuildInfo read",
+          "evidence": {
+            "server_state": "Running",
+            "diagnostics_published": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "connect.namespaces",
+          "detail": "all 1 configured namespace URIs resolved",
+          "evidence": {
+            "namespace_count": 3
+          },
+          "outcome": "pass",
+          "duration_s": 0.3
+        },
+        {
+          "id": "connect.endpoint-discovery",
+          "detail": "Basic256Sha256/SignAndEncrypt with the certificate from GetEndpoints",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.none",
+          "detail": "None/None: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.sign",
+          "detail": "server offers no Basic256Sha256/Sign endpoint",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.0
+        },
+        {
+          "id": "security.sign-and-encrypt",
+          "detail": "Basic256Sha256/SignAndEncrypt: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.server-pinned",
+          "detail": "pinned server certificate accepted and reported as authenticated",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.server-impostor",
+          "detail": "an impostor server certificate was refused",
+          "evidence": {
+            "reason": "The connection may have been rejected by server, Err = (ClientTCP_transport1: socket has been disconnected by third party)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.3
+        },
+        {
+          "id": "security.client-untrusted",
+          "detail": "an untrusted client certificate was refused",
+          "evidence": {
+            "reason": "The connection may have been rejected by server, Err = (ClientTCP_transport3: socket has been disconnected by third party)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.anonymous",
+          "detail": "anonymous session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username",
+          "detail": "username/password session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username-rejected",
+          "detail": "a wrong password was refused",
+          "evidence": {
+            "reason": "serviceResult = BadIdentityTokenInvalid (0x80200000)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.x509",
+          "detail": "X.509 user session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "browse.children",
+          "detail": "15 children",
+          "evidence": {
+            "truncated": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "browse.continuation",
+          "detail": "nodes.largeFolder not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "values.scalar",
+          "detail": "19 scalar types read with the right data_type",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "Byte",
+              "ByteString",
+              "DateTime",
+              "Double",
+              "Float",
+              "Guid",
+              "Int16",
+              "Int32",
+              "Int64",
+              "LocalizedText",
+              "NodeId",
+              "QualifiedName",
+              "SByte",
+              "String",
+              "UInt16",
+              "UInt32",
+              "UInt64",
+              "XmlElement"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.array",
+          "detail": "7 array types read as JSON arrays",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "DateTime",
+              "Double",
+              "Int32",
+              "LocalizedText",
+              "String",
+              "UInt64"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.structure",
+          "detail": "CustomStructType: String, not an object; CustomUnionType: String, not an object",
+          "evidence": {
+            "shapes": {
+              "CustomStructType": "String",
+              "CustomUnionType": "String"
+            }
+          },
+          "outcome": "project-bug",
+          "triage": {
+            "summary": "Milo's custom structure and union come back as a string, not an object, on both runtimes: the shared value codec has no ExtensionObject rule, so each runtime returns its client library's own text for the value, and neither decodes a server-defined type from its DataTypeDefinition.",
+            "tracking": "#171"
+          },
+          "duration_s": 0.5
+        },
+        {
+          "id": "write.readback",
+          "detail": "2 nodes written in one batch and read back",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.read",
+          "detail": "100 nodes in one call (server limit 10000)",
+          "evidence": {
+            "server_max_nodes_per_read": 10000,
+            "batch": 100,
+            "good": 100
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.write",
+          "detail": "20 writes in one call (server limit 10000)",
+          "evidence": {
+            "server_max_nodes_per_write": 10000,
+            "batch": 20,
+            "good": 20
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "method.call",
+          "detail": "1 input and 1 output arguments",
+          "evidence": {
+            "output_kinds": [
+              "Number"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.raw",
+          "detail": "server does not advertise AccessHistoryDataCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.3
+        },
+        {
+          "id": "history.continuation",
+          "detail": "nodes.historized or nodes.historyPaging not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "history.aggregate",
+          "detail": "server advertises no aggregate functions",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.3
+        },
+        {
+          "id": "subscription.data-change",
+          "detail": "15 data changes in 4 s",
+          "evidence": {
+            "changes": 15
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "subscription.deadband",
+          "detail": "absolute deadband accepted; 2 changes",
+          "evidence": {
+            "changes": 2
+          },
+          "outcome": "pass",
+          "duration_s": 4.4
+        },
+        {
+          "id": "events.subscribe",
+          "detail": "1 events received",
+          "evidence": {
+            "event_types": 1
+          },
+          "outcome": "pass",
+          "duration_s": 2.4
+        },
+        {
+          "id": "events.history",
+          "detail": "server does not advertise AccessHistoryEventsCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "alarms.list",
+          "detail": "nodes.alarms not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "alarms.acknowledge",
+          "detail": "nodes.alarms.acknowledge not enabled",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "authz.denied-write",
+          "detail": "refused per item with BadUserAccessDenied; session intact",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-read",
+          "detail": "refused per item with BadUserAccessDenied",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-method",
+          "detail": "nodes.deniedMethod not mapped",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        },
+        {
+          "id": "authz.unknown-node",
+          "detail": "unknown node answered per item with BadNodeIdUnknown",
+          "evidence": {
+            "status": "BadNodeIdUnknown"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "recovery.restart",
+          "detail": "read failed cleanly while down and recovered on the same MCP session",
+          "evidence": {
+            "answered_while_down_s": 15.6
+          },
+          "outcome": "pass",
+          "duration_s": 17.9
+        },
+        {
+          "id": "recovery.subscription",
+          "detail": "subscription resumed; 11 changes after the restart",
+          "evidence": {
+            "changes_after": 11
+          },
+          "outcome": "pass",
+          "duration_s": 7.7
+        },
+        {
+          "id": "recovery.namespace-reorder",
+          "detail": "needs a lab server with lab.reorderedCommand",
+          "outcome": "not-configured",
+          "duration_s": 0.0
+        }
+      ],
+      "finished": "2026-09-24T18:28:52Z",
+      "summary": {
+        "pass": 27,
+        "unsupported-optional": 4,
+        "not-configured": 6,
+        "project-bug": 1
+      }
+    }
+  ]
+}

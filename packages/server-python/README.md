@@ -178,7 +178,7 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
 | `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
 | `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
-| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt. `0` disables retrying, `-1` retries forever |
+| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt, per connection round: a whole number from `-1` to `1000`. `0` disables retrying; `-1` never stops trying, but still in bounded rounds of four retries |
 | `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
 
 Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
@@ -256,6 +256,11 @@ it with `OPCUA_RECONNECT_INITIAL_DELAY_MS`, `OPCUA_RECONNECT_MAX_DELAY_MS`,
 
 Concurrent callers during an outage share one rebuild rather than each running
 their own backoff, and a caller arriving mid-rebuild takes that attempt's answer.
+
+The MCP server starts whether or not the OPC UA server is reachable: it answers
+`initialize` at once and makes its first connection in the background, so an
+endpoint that is down is reported rather than holding the MCP client back for a
+whole round of backoff.
 
 `get_server_status` reports whether the connection is up and what the OPC UA
 server says about itself; it is the one tool that answers while the connection is

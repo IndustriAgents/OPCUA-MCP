@@ -1,0 +1,58 @@
+{
+  "$comment": "What OPCUA_RECONNECT_MAX_RETRY may be, and what one connection round then does, driven through BOTH runtimes: tests/unit/test_reconnect.py and packages/server-node/test/reconnect.test.mjs read this file and assert the same verdict, the same sentence and the same round (#136). `maxRetry` is the parsed value, or `error` is the exact message the setting is refused with. `delays` is the backoff of one round in ms — its length is how many retries that round makes, which on the Node runtime is what node-opcua is handed. -1 means no round is ever the last, not that one round never ends: an unbounded round is a request that never returns, which is what a Node server started against an unreachable endpoint was, from `initialize` onwards. Every case uses initialDelay 1000 and maxDelay 8000, the defaults.",
+  "initialDelay": 1000,
+  "maxDelay": 8000,
+  "cases": [
+    { "value": "3", "maxRetry": 3, "delays": [1000, 2000, 4000] },
+    { "value": " 5 ", "maxRetry": 5, "delays": [1000, 2000, 4000, 8000, 8000] },
+    { "value": "+2", "maxRetry": 2, "delays": [1000, 2000] },
+    { "value": "0", "maxRetry": 0, "delays": [] },
+    { "value": "-0", "maxRetry": 0, "delays": [] },
+    { "value": "-1", "maxRetry": -1, "delays": [1000, 2000, 4000, 8000] },
+    { "value": "1000", "maxRetry": 1000 },
+    {
+      "value": "1001",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"1001\""
+    },
+    {
+      "value": "-2",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"-2\""
+    },
+    {
+      "value": "2.5",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"2.5\""
+    },
+    {
+      "value": "-0.5",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"-0.5\""
+    },
+    {
+      "value": "3.0",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"3.0\""
+    },
+    {
+      "value": "1e2",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"1e2\""
+    },
+    {
+      "value": "0x10",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"0x10\""
+    },
+    {
+      "value": "1e9",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"1e9\""
+    },
+    {
+      "value": "NaN",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"NaN\""
+    },
+    {
+      "value": "Infinity",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"Infinity\""
+    },
+    {
+      "value": "many",
+      "error": "OPCUA_RECONNECT_MAX_RETRY must be a whole number from -1 to 1000, got \"many\""
+    }
+  ]
+}

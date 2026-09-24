@@ -336,9 +336,10 @@ budget (7s by default, 32s with `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised
 every concurrent tool call behind it. Clients list at session start, which is
 exactly when a plant that is down is most likely to be down.
 
-Both runtimes now warm up once, before serving their first request — Python in
-its lifespan, Node in `run()` — and re-probe from the session-replaced callback.
-`tools/list` answers from that, with no network I/O at all. Node's probes take the
+Both runtimes warm up once at start-up — Python from its lifespan, Node from
+`run()`, in the background since #136, with `tools/list` waiting up to 3s for it
+— and re-probe from the session-replaced callback. `tools/list` answers from
+that, with no network I/O of its own. Node's probes take the
 session as an argument for this reason and not as an optimisation: the callback
 runs *inside* `reconnect()`, so a probe that called `ensureConnection()` from
 there would re-enter the connect path it is standing in.
@@ -447,6 +448,34 @@ power-cycled, a switch reboots — so neither server treats a live session as a
 precondition it was handed once at startup. Both start whether or not the
 endpoint answers, and both rebuild a dead session on the next tool call.
 
+**A round, and why -1 is not one without an end (#136).** Every connection is
+made in a *round*: one attempt, then up to `OPCUA_RECONNECT_MAX_RETRY` retries
+on the doubling backoff. The startup warm-up is a round; so is the rebuild a tool
+call starts or joins. `-1` makes a round of four retries, on both runtimes —
+"retry forever" means no round is ever the last, not that one never ends. Node
+used to hand `-1` to node-opcua's `connectionStrategy` as it was, where it means
+a `connect()` that never settles while the endpoint is unreachable; the warm-up
+was awaited before the MCP transport opened, so the client saw a server that
+never started. node-opcua is now handed the round's length instead
+(`connectionStrategy()` in `config.ts`); any positive count still has it repair a
+dropped channel with no limit of its own, which is what `-1` was for. The same
+function also keeps `maxDelay` above `initialDelay`, which node-opcua's backoff
+library insists on and which used to fail every connect on this runtime at once
+for settings such as `1000..1000`.
+
+**The warm-up runs beside the requests, not in front of them (#136).** Both
+runtimes open the MCP transport first and start the warm-up without waiting for
+it — Python from its lifespan, which the SDK must leave before it answers
+`initialize`, Node from `run()`. It had been put in front for a reason that still
+holds: requests served *during* it saw no session and answered as though the
+server supported nothing. So `tools/list` and `get_server_status` wait for it,
+for at most `WARM_UP_WAIT_MS` (3s, the same on both) from its start, and a tool
+call that needs a session joins its round as it joins any other. Past that
+window `get_server_status` never joins a round someone else started: it reports
+`connected: false` with "Still connecting … (last failure: …)" and the round
+carries on. Shutdown ends a round rather than waiting it out — Node disconnects
+the client still dialling, Python's backoff waits on an event `close()` sets.
+
 The two runtimes reach that from opposite directions, which is the interesting
 part:
 
@@ -464,8 +493,10 @@ part:
 
 What they share is the decision-making, and it is shared deliberately:
 `OPCUA_RECONNECT_*` and `OPCUA_SESSION_TIMEOUT_MS` mean the same thing on both
-and produce the same waits (`reconnectBudgetMs` / `reconnect_budget_ms` are
-pinned against each other in `tests/unit/test_reconnect.py`), and one declaration
+and produce the same waits (`reconnectBudgetMs` / `reconnect_budget_ms` and
+`reconnectDelays` / `reconnect_delays` are pinned against each other in
+`tests/unit/test_reconnect.py`, and `tests/fixtures/reconnect-settings.json` is
+the one table of what `OPCUA_RECONNECT_MAX_RETRY` may be), and one declaration
 — `contract/tools.json` -> `deadSession` — decides what is worth reconnecting
 for. That decision is the whole distinction between a failure of the *connection*
 and a failure of the *request*: a `BadNodeIdUnknown` would fail identically on a

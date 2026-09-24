@@ -177,7 +177,7 @@
         },
         {
           "name": "OPCUA_RECONNECT_MAX_RETRY",
-          "description": "Retries after the first attempt before a tool call gives up. 0 never retries; -1 retries forever.",
+          "description": "Retries after the first attempt, per connection round, before a tool call gives up: a whole number from -1 to 1000. 0 never retries; -1 never stops trying, in bounded rounds of four retries so no single call waits forever.",
           "format": "number",
           "default": "3"
         },

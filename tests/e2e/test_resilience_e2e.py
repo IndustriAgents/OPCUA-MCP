@@ -243,9 +243,10 @@ async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
     behind it. Clients list at session start, which is exactly when a plant that
     is down is most likely to be down.
 
-    The startup warm-up is where the waiting now happens, once, and it is not on
-    this path: by the time a request is served the attempt has already been made
-    and given up on.
+    The startup warm-up is where the waiting now happens, once, and beside the
+    requests rather than in front of them (#136). A catalogue request waits for it
+    only up to the shared warm-up window, measured from its start, so the second
+    of these does not wait at all.
     """
     params = _server_params(impl, "opc.tcp://127.0.0.1:1/unreachable")
     params.env.update(SLOW_RETRY)
@@ -265,6 +266,89 @@ async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
     names = {tool.name for tool in listed.tools}
     assert "get_server_status" in names, f"{impl}: {sorted(names)}"
     assert "read_opcua_nodes" in names, f"{impl}: {sorted(names)}"
+
+
+# --- MCP comes up whatever the plant is doing (issue #136) -------------------------
+
+
+#: Retry forever, with a round long enough that a server still waiting on it
+#: cannot hide inside the deadline below: 2s + 4s + 4s + 4s = 14s of backoff per
+#: round on both runtimes, against an endpoint that refuses at once. Before #136
+#: the Node server handed -1 to node-opcua as it was, and its first round — which
+#: it awaited before opening the MCP transport — never ended.
+OFFLINE_RETRY = {
+    "OPCUA_RECONNECT_INITIAL_DELAY_MS": "2000",
+    "OPCUA_RECONNECT_MAX_DELAY_MS": "4000",
+    "OPCUA_RECONNECT_MAX_RETRY": "-1",
+}
+
+#: From spawning the process to having answered `initialize`, `tools/list` and
+#: `get_server_status`. Covers interpreter start-up plus the shared 3s warm-up
+#: window, and is well short of one round above, so a server that waits for the
+#: round anywhere on that path cannot pass.
+DIAGNOSABLE_WITHIN_SECONDS = 10.0
+
+
+async def test_mcp_starts_and_stays_diagnosable_while_the_endpoint_is_offline(
+    impl, restartable_opcua_server
+):
+    """Plant connectivity is runtime state; it must not gate the protocol.
+
+    The MCP server is launched *before* its OPC UA server exists, with unlimited
+    retries — the configuration an operator picks precisely because the plant
+    may be down for a while. The client must get a working MCP server at once:
+    `initialize`, a catalogue, and a status report that says what is wrong. A
+    read has to fail as an outage, in the shared words, not hang. Then the plant
+    comes up, and the same MCP session — never restarted — reads from it.
+    """
+    from test_diagnostics_e2e import status_of
+
+    server = restartable_opcua_server
+    server.stop()
+    params = _server_params(impl, server.url)
+    params.env.update(OFFLINE_RETRY)
+    loop = asyncio.get_running_loop()
+
+    began = loop.time()
+    async with (
+        stdio_client(params) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await asyncio.wait_for(session.initialize(), DIAGNOSABLE_WITHIN_SECONDS)
+        listed = await asyncio.wait_for(session.list_tools(), DIAGNOSABLE_WITHIN_SECONDS)
+        status = status_of(
+            await asyncio.wait_for(
+                session.call_tool("get_server_status", {}), DIAGNOSABLE_WITHIN_SECONDS
+            )
+        )
+        diagnosable = loop.time() - began
+
+        assert diagnosable < DIAGNOSABLE_WITHIN_SECONDS, (
+            f"{impl}: initialize + tools/list + get_server_status took {diagnosable:.1f}s "
+            f"against an endpoint that is down; the protocol is waiting on the plant again"
+        )
+        names = {tool.name for tool in listed.tools}
+        assert {"get_server_status", "read_opcua_nodes"} <= names, f"{impl}: {sorted(names)}"
+        assert status["connected"] is False, f"{impl}: {status}"
+        assert status["endpoint_url"] == server.url
+        assert status["error"], f"{impl}: a disconnected status must say why"
+
+        # A read joins the connection round and fails when it does: bounded, and
+        # worded as the outage it is. One round plus a generous margin.
+        during = await asyncio.wait_for(
+            session.call_tool("read_opcua_nodes", {"node_ids": [NODE["Temperature"]]}), 30
+        )
+        assert during.is_error, f"{impl}: a read against a server that is down succeeded"
+        assert f"Not connected to the OPC UA server at {server.url}" in text_of(during), (
+            f"{impl}: the outage was not reported as one: {text_of(during)}"
+        )
+
+        # The plant arrives. Same MCP session, no restart.
+        server.start()
+        after = await read_until_ok(session, NODE["Temperature"], attempts=30)
+        assert not after.is_error, f"{impl}: never recovered: {text_of(after)}"
+        assert records_of(after)[0]["status"] == "Good", text_of(after)
+        assert status_of(await session.call_tool("get_server_status", {}))["connected"] is True
 
 
 async def test_the_catalogue_gains_the_optional_tools_once_the_server_is_reachable(

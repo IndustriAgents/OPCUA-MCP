@@ -19,7 +19,9 @@ import pytest
 from conftest import ROOT
 from opcua import ua
 from opcua_mcp_server.config import (
+    MAX_RETRY_LIMIT,
     RECONNECT_DEFAULTS,
+    WARM_UP_WAIT_MS,
     ReconnectConfig,
     describe_reconnect,
     parse_reconnect_config,
@@ -27,11 +29,13 @@ from opcua_mcp_server.config import (
     reconnect_delays,
 )
 from opcua_mcp_server.connection import (
+    CLOSED_MESSAGE,
     DEAD_SESSION_MARKERS,
     DEAD_SESSION_STATUS_CODES,
     describe_error,
     is_connection_error,
     not_connected_message,
+    still_connecting_message,
 )
 
 NODE_BUILD = ROOT / "packages" / "server-node" / "build" / "index.js"
@@ -116,6 +120,87 @@ def test_a_bad_setting_is_refused(name, value):
 
 def test_unlimited_retries_are_spelled_minus_one():
     assert parse_reconnect_config({"OPCUA_RECONNECT_MAX_RETRY": "-1"}).max_retry == -1
+
+
+# --- what a retry count may be, and what one round does (#136) -------------------
+
+#: The shared table; `packages/server-node/test/reconnect.test.mjs` drives it too.
+SETTINGS = json.loads(
+    (ROOT / "tests" / "fixtures" / "reconnect-settings.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("case", SETTINGS["cases"], ids=[c["value"] for c in SETTINGS["cases"]])
+def test_the_retry_count_follows_the_shared_table(case):
+    """One grammar for the count on both runtimes, refused in the same words.
+
+    ``2.5`` was truncated to 2 here and handed to node-opcua as 2.5 there, and
+    ``1e9`` was accepted by both — into a loop that built a billion delays.
+    """
+    env = {"OPCUA_RECONNECT_MAX_RETRY": case["value"]}
+    if "error" in case:
+        with pytest.raises(ValueError) as refused:
+            parse_reconnect_config(env)
+        assert str(refused.value) == case["error"]
+        return
+    config = parse_reconnect_config(env)
+    assert config.max_retry == case["maxRetry"]
+    assert isinstance(config.max_retry, int)
+    if "delays" in case:
+        round_config = ReconnectConfig(
+            initial_delay_ms=SETTINGS["initialDelay"],
+            max_delay_ms=SETTINGS["maxDelay"],
+            max_retry=config.max_retry,
+        )
+        assert reconnect_delays(round_config) == case["delays"]
+
+
+def test_the_table_reaches_the_limit_both_ways():
+    """The ceiling is pinned by a case either side of it, not by trusting a constant."""
+    values = {case["value"]: case for case in SETTINGS["cases"]}
+    assert "maxRetry" in values[str(MAX_RETRY_LIMIT)]
+    assert "error" in values[str(MAX_RETRY_LIMIT + 1)]
+
+
+def test_an_unlimited_retry_still_makes_a_bounded_round():
+    """The whole of #136 on the Python side: -1 is never a round without an end."""
+    delays = reconnect_delays(ReconnectConfig(max_retry=-1))
+    assert 0 < len(delays) < 10
+
+
+@pytest.mark.parametrize("case", CASES, ids=[describe_reconnect(c) for c in CASES])
+def test_both_runtimes_make_the_same_round(case):
+    """Node hands the length of this list to node-opcua as its retry count.
+
+    So this is the comparison that says a round on one runtime is a round on the
+    other — and in particular that -1 is a bounded one on both.
+    """
+    assert reconnect_delays(case) == _node_eval(f"m.reconnectDelays({json.dumps(_as_node(case))})")
+
+
+def test_both_runtimes_share_the_limits_of_136():
+    """The retry ceiling and the warm-up window are one number each, on both."""
+    node = _node_eval("[m.MAX_RETRY_LIMIT, m.WARM_UP_WAIT_MS]")
+    assert node == [MAX_RETRY_LIMIT, WARM_UP_WAIT_MS]
+
+
+def test_the_still_connecting_report_is_shared_wording():
+    message = still_connecting_message("opc.tcp://plc:4840", None)
+    assert message == (
+        "Still connecting to the OPC UA server at opc.tcp://plc:4840; a connection "
+        "attempt is in progress (last failure: not yet known)"
+    )
+    for reason in (None, "ECONNREFUSED"):
+        node = _node_eval(
+            "await import('./build/connection.js').then(c => "
+            f"c.stillConnectingMessage('opc.tcp://plc:4840', {json.dumps(reason)}))"
+        )
+        assert node == still_connecting_message("opc.tcp://plc:4840", reason)
+
+
+def test_both_runtimes_refuse_a_closed_connection_in_the_same_words():
+    node = _node_eval("await import('./build/connection.js').then(c => c.CLOSED_MESSAGE)")
+    assert node == CLOSED_MESSAGE
 
 
 def test_describe_reconnect_names_every_setting():

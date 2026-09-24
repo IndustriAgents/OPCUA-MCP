@@ -165,6 +165,8 @@ export interface ConfigSetting {
   choiceAliases?: Record<string, string>;
   runtimeChoices?: Partial<Record<"node" | "python", string[]>>;
   minimum?: number;
+  maximum?: number;
+  integer?: boolean;
   mustExist?: boolean;
   contents?: string;
   itemFormat?: string;

@@ -77,6 +77,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exits when stdin closes. Found by the new binary smoke test; the Python
   runtime already exited.
 - `uv.lock` recorded the workspace packages at 0.5.0 after the 0.5.1 release.
+- **The Node server never started against an unreachable endpoint with
+  `OPCUA_RECONNECT_MAX_RETRY=-1` (#136).** It awaited its first OPC UA
+  connection before opening the MCP stdio transport, and handed `-1` to
+  node-opcua's `connectionStrategy` as it was — where it means a `connect()`
+  that never settles. The MCP client saw a server that never answered
+  `initialize`. Python bounded the round but still held `initialize` back for
+  all of it: 15s with the default delays and `-1`.
+
+  Both runtimes now open the MCP transport first and run the warm-up in the
+  background. `tools/list` and `get_server_status` wait for it for at most 3s
+  from its start — so against a reachable plant the first catalogue is still
+  the whole one, which is why the warm-up had been moved in front of the
+  transport — and a tool call that needs a session joins its round, as before.
+  Past that window `get_server_status` does not join a round someone else
+  started: it answers at once with `connected: false` and "Still connecting to
+  the OPC UA server at … (last failure: …)" (a new shared `stillConnecting`
+  template in `contract/tools.json`). A read during the outage fails with the
+  usual "Not connected to the OPC UA server at …" once its round ends.
+
+  `-1` now means the same on both runtimes: no round is ever the last, but each
+  is four retries long, so no single request and not the start-up can wait
+  forever. node-opcua is handed the round's length; any positive count still
+  has it repair a dropped channel with no limit of its own.
+- **`OPCUA_RECONNECT_MAX_RETRY` is validated identically on both runtimes.** It
+  must be a whole number from `-1` to `1000`. `2.5` used to reach node-opcua as
+  2.5 while Python truncated it to 2, `-0.5` passed the `>= -1` floor, `0x10`
+  was accepted by Node only, and `1e9` was accepted by both — into a loop that
+  built a billion delays. The rules are one shared table,
+  `tests/fixtures/reconnect-settings.json`, driven by both test suites.
+- **Node refused every connection when the two delays were equal.** node-opcua's
+  backoff library requires `OPCUA_RECONNECT_MAX_DELAY_MS` to be strictly greater
+  than `OPCUA_RECONNECT_INITIAL_DELAY_MS`, so a setting such as `1000..1000`,
+  which Python accepts, failed every connect that allowed a retry at once —
+  plant up or not — with
+  "The maximal backoff delay must be greater than the initial backoff delay".
+- **Shutting down ends a connection round instead of waiting it out.** Node
+  disconnects the client that is still dialling, and Python's backoff waits on
+  an event its new `close()` sets rather than in `time.sleep`, so a server asked
+  to stop no longer dials a plant that is down for the rest of the backoff.
+- Node now passes `endpointMustExist` rather than the deprecated
+  `endpoint_must_exist`, which logged a warning on every connect.
 
 ### Added
 - **The identity status is reported everywhere control is decided.**

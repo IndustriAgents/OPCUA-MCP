@@ -244,3 +244,84 @@ def test_the_rebind_is_best_effort():
     subject.on_client_replaced = explode
     assert subject.ensure_connected() is not None
     assert subject.connected
+
+
+# --- a round that someone else is running, and one that has to stop (#136) --------
+
+#: Slow enough that a round which ran to the end is unmistakable in the clock.
+SLOW = ReconnectConfig(initial_delay_ms=5000, max_delay_ms=5000, max_retry=-1)
+
+
+def _in_background(work):
+    """Run ``work`` on a thread; return the thread and a box for its outcome."""
+    outcome: dict = {}
+
+    def run() -> None:
+        try:
+            outcome["result"] = work()
+        except BaseException as error:
+            outcome["error"] = error
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    return worker, outcome
+
+
+def _until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.01)
+
+
+def test_a_round_in_flight_is_visible_and_says_why_it_is_still_going():
+    """`get_server_status` reads these instead of joining the round.
+
+    Against a plant that is down a round is the whole configured backoff, and a
+    status report that sat through it would be no report at all.
+    """
+    opener = _Opener(failures=99)
+    subject = connection(opener, SLOW)
+    assert not subject.connecting
+
+    worker, _ = _in_background(subject.ensure_connected)
+    _until(lambda: opener.calls >= 1 and subject.last_error is not None)
+
+    assert subject.connecting
+    assert subject.last_error == "ECONNREFUSED"
+    subject.close()
+    worker.join(timeout=5)
+    assert not subject.connecting
+
+
+def test_closing_ends_a_round_instead_of_waiting_it_out():
+    """-1 with a 5s backoff is a 20s round; shutting down must not take that long.
+
+    The backoff used to be `time.sleep`, so a server asked to stop kept dialling
+    the plant for the rest of the round — and the interpreter would not exit
+    until the thread doing it had finished.
+    """
+    opener = _Opener(failures=99)
+    subject = connection(opener, SLOW)
+
+    worker, outcome = _in_background(subject.ensure_connected)
+    _until(lambda: opener.calls >= 1)
+
+    began = time.monotonic()
+    subject.close()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive(), "the round carried on after close()"
+    assert time.monotonic() - began < 2, "close() waited for the backoff"
+    assert opener.calls == 1, "a closed connection made another attempt"
+    assert isinstance(outcome.get("error"), ConnectionAbortedError), outcome
+
+
+def test_nothing_connects_after_close():
+    opener = _Opener()
+    subject = connection(opener)
+    subject.close()
+
+    with pytest.raises(ConnectionAbortedError):
+        subject.ensure_connected()
+    assert opener.calls == 0

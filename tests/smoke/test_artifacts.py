@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from pathlib import Path
 
 import pytest
 from conftest import ROOT
@@ -60,6 +61,28 @@ CORE_TOOLS = {
     "list_active_alarms",
     "acknowledge_alarm",
 }
+
+
+# Set by release.yml to the directory holding the exact files it is about to
+# sign and attach. The fixtures below then test those files instead of building
+# their own, so what is driven over MCP is byte-for-byte what ships (#145) —
+# after signing, which rewrites an executable and can stop it launching.
+PREBUILT_DIR = os.environ.get("OPCUA_SMOKE_ARTIFACTS_DIR")
+
+
+def prebuilt(pattern: str) -> Path | None:
+    """The one file in ``OPCUA_SMOKE_ARTIFACTS_DIR`` matching ``pattern``, or None if unset.
+
+    Missing or ambiguous is a failure, not a skip: the variable is only ever set
+    by something that means to test a specific artifact.
+    """
+    if not PREBUILT_DIR:
+        return None
+    matches = sorted(Path(PREBUILT_DIR).glob(pattern))
+    assert len(matches) == 1, f"expected one {pattern} in {PREBUILT_DIR}, found {matches}"
+    # Resolved, as ROOT is: a single-file build records its own real path, and
+    # on macOS a directory under /tmp is really under /private/tmp.
+    return matches[0].resolve()
 
 
 def _run(cmd, cwd, **kw):
@@ -101,9 +124,11 @@ def npm_install(tmp_path_factory):
     """Pack the npm tarball and install it into a scratch project."""
     npm = node_tool("npm")
 
-    staging = tmp_path_factory.mktemp("npm-pack")
-    out = _run([npm, "pack", "--pack-destination", str(staging)], cwd=NODE_PKG_DIR)
-    tarball = staging / out.stdout.strip().splitlines()[-1]
+    tarball = prebuilt("*.tgz")
+    if tarball is None:
+        staging = tmp_path_factory.mktemp("npm-pack")
+        out = _run([npm, "pack", "--pack-destination", str(staging)], cwd=NODE_PKG_DIR)
+        tarball = staging / out.stdout.strip().splitlines()[-1]
     assert tarball.is_file(), f"npm pack did not produce {tarball}"
 
     project = tmp_path_factory.mktemp("npm-consumer")
@@ -159,14 +184,17 @@ def wheel_venv(tmp_path_factory):
     if shutil.which("uv") is None:
         pytest.skip("uv not available")
 
-    dist = tmp_path_factory.mktemp("wheel")
+    if PREBUILT_DIR:
+        dist = prebuilt("*.whl").parent
+    else:
+        dist = tmp_path_factory.mktemp("wheel")
+        # Plain `uv build`, not `--wheel`: it builds the sdist and then the wheel
+        # *from that sdist*, which is what PyPI publishing and `pip install <sdist>`
+        # do. Building only the wheel skips that path entirely — and that is how a
+        # release shipped with a `force-include` that resolved in a checkout but not
+        # in an sdist, failing the publish job.
+        _run(["uv", "build", "--out-dir", str(dist)], cwd=PY_PKG_DIR)
     _DIST_DIRS.append(dist)
-    # Plain `uv build`, not `--wheel`: it builds the sdist and then the wheel
-    # *from that sdist*, which is what PyPI publishing and `pip install <sdist>`
-    # do. Building only the wheel skips that path entirely — and that is how a
-    # release shipped with a `force-include` that resolved in a checkout but not
-    # in an sdist, failing the publish job.
-    _run(["uv", "build", "--out-dir", str(dist)], cwd=PY_PKG_DIR)
     wheels = list(dist.glob("*.whl"))
     assert len(wheels) == 1, f"expected exactly one wheel, got {wheels}"
 
@@ -317,8 +345,11 @@ def packed_mcpb(tmp_path_factory):
     if not (NODE_PKG_DIR / "node_modules").is_dir():
         pytest.skip("Node dependencies not installed — run `npm ci` in packages/server-node")
 
-    _run([npm, "run", "build:mcpb"], cwd=NODE_PKG_DIR)
-    bundles = list((NODE_PKG_DIR / "dist").glob("*.mcpb"))
+    if PREBUILT_DIR:
+        bundles = [prebuilt("*.mcpb")]
+    else:
+        _run([npm, "run", "build:mcpb"], cwd=NODE_PKG_DIR)
+        bundles = list((NODE_PKG_DIR / "dist").glob("*.mcpb"))
     assert len(bundles) == 1, f"expected exactly one .mcpb, got {bundles}"
 
     unpacked = tmp_path_factory.mktemp("mcpb") / "extension"

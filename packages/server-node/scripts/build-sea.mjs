@@ -15,8 +15,9 @@
 //   * macOS requires the copied binary's signature to be stripped before
 //     injection and re-applied after, or the result will not launch at all.
 //     The ad-hoc signature it gets here is enough for that, but not enough for
-//     Gatekeeper — first launch still needs the quarantine flag cleared. See
-//     docs/install.md.
+//     Gatekeeper; release.yml replaces it with a Developer ID signature and
+//     notarizes the result when the signing secrets are configured (with the
+//     JIT entitlements in macos-entitlements.plist). See docs/releasing.md.
 //
 // Requires Node 20+ to build (`--experimental-sea-config`), but CI builds on a
 // Node that satisfies `engines.node` (>=22.13.0) because the executable embeds

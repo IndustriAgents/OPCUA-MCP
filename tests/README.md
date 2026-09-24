@@ -37,7 +37,17 @@ rather than trusted:
 
 The executables cannot be cross-compiled, so this tier only ever covers the
 platform it runs on. `.github/workflows/release.yml` builds and checks the other
-two. PyInstaller comes from an opt-in dependency group:
+two.
+
+To test files that already exist instead of building fresh ones, point
+`OPCUA_SMOKE_ARTIFACTS_DIR` at a directory holding them (the `.tgz`, `.whl` +
+`.tar.gz`, `.mcpb`, and this platform's `opcua-mcp-server-{node,python}-*`).
+`release.yml` does this with the exact files it is about to attach — after the
+macOS and Windows executables are signed, since signing rewrites them — so what
+is driven over MCP is what ships. A missing or ambiguous file is a failure, not
+a skip.
+
+PyInstaller comes from an opt-in dependency group:
 `uv sync --all-packages --group packaging`.
 
 ## What the e2e tier covers

@@ -333,4 +333,4 @@ itself, are in [certificates.md](certificates.md).
 | **Values "snap back" after a write** | Expected — the mock republishes sensor/actuator state every ~1s; use command variables/methods for lasting changes |
 | **Node value lags after a method call** | The mock propagates method effects via its 1 Hz loop; re-read after ~1s |
 | **Works in the terminal, fails in Claude Desktop** | Desktop apps do not inherit a login shell's `PATH`, so a bare `"command": "npx"` or `"node"` cannot be found. Use absolute paths — `--install claude-desktop` writes them for you |
-| **macOS refuses to run a downloaded executable** | It is ad-hoc signed, not notarised: `xattr -d com.apple.quarantine <binary>` |
+| **macOS refuses to run a downloaded executable** | Unless the release notes say it is notarized, it is ad-hoc signed only: [verify it](install.md#verifying-a-download), then `xattr -d com.apple.quarantine <binary>` |

@@ -484,6 +484,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   floor stays put until a new major moves it.
 
 
+### Security
+- **Every release asset is now checksummed, signed, attested and described by an
+  SBOM, and the release workflow verifies all of it before publishing** (#145).
+  `release.yml` writes one `SHA256SUMS` over every asset, signs it keyless with
+  Sigstore cosign (`SHA256SUMS.sigstore.json`), attaches GitHub build-provenance
+  attestations to every file, and generates a CycloneDX SBOM per artifact —
+  npm tarball, wheel, sdist, `.mcpb` bundle and each executable
+  ([`scripts/sbom.py`](scripts/sbom.py), from `package-lock.json` / `uv.lock`,
+  with the embedded Node or CPython/PyInstaller runtime, the lockfile digest and
+  toolchain versions) — each attested against its artifact's digest. The
+  release is created as a draft, downloaded back, checked (file list,
+  `sha256sum --check`, `cosign verify-blob`, `gh attestation verify` for every
+  file and every SBOM), and only then published. The npm tarball, wheel and
+  sdist are now attached to the release as well. Copy-paste verification
+  commands, including npm provenance and PyPI attestations, are in
+  [docs/install.md](docs/install.md#verifying-a-download).
+- **Executables are exercised over MCP as shipped.** After staging (and signing),
+  the release re-runs the binary smoke tests against the exact files it uploads,
+  via the new `OPCUA_SMOKE_ARTIFACTS_DIR`; the packages job does the same for the
+  npm tarball, wheel and sdist.
+- **macOS Developer ID signing with notarization, and Windows Authenticode
+  signing, are wired in** — hardened runtime with per-runtime entitlements,
+  `notarytool`, and AzureSignTool against Azure Key Vault — and switch on when
+  the secrets listed in [docs/releasing.md](docs/releasing.md#platform-signing--secrets-to-add)
+  exist. The project has no certificates yet, so each release's notes and job
+  summary now state per platform whether the executables are platform-signed,
+  instead of shipping unsigned silently.
+- **Workflows are pinned and least-privilege.** Every third-party action in CI,
+  publish, release and the conformance action is pinned to a full commit SHA with
+  its version as a comment (Dependabot now also watches the composite action).
+  Each workflow starts from no or read-only permissions and grants `id-token`,
+  `attestations` or `contents: write` only to the job that needs it; checkouts no
+  longer persist credentials; release builds restore no caches. In `publish.yml`
+  the wheel and sdist are built in a job with no OIDC token and handed to the
+  PyPI job, and the npm job runs no install or lifecycle scripts while it holds
+  the token. A manual `publish.yml` run from a branch now verifies and stops; the
+  publish jobs need a tag.
+- **An emergency process for a compromised artifact, certificate or credential**
+  is documented in [SECURITY.md](SECURITY.md#emergency-process-compromised-artifact-signing-identity-or-credential),
+  with the reproducibility limits of the PyInstaller and Node SEA builds in
+  [docs/install.md](docs/install.md#reproducibility).
+
 ### Documentation
 - **Both runtimes are first-class, and that is now a written promise rather
   than a habit** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md), #143).

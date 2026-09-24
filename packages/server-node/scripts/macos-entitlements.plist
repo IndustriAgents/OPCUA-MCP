@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements for the Node single-file executable, applied
+  only when release.yml signs it with a Developer ID (#145). The ad-hoc
+  signature build-sea.mjs applies needs none of this.
+
+  V8 compiles JavaScript to machine code at run time, which the hardened runtime
+  forbids unless these two are granted; without them the signed binary is killed
+  on launch. This is the minimum of the set Node's own macOS release signs with:
+  the bundle loads no native addons, so library validation stays on.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

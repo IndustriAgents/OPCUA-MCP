@@ -27,6 +27,8 @@ AI assistant / MCP client  ──stdio──►  MCP server (Python OR Node)  �
 
 The two MCP servers share a single tool contract ([`contract/tools.json`](contract/tools.json)): the Node server builds its `tools/list` from it and the Python server reads descriptions and capability node IDs from it, so they cannot drift (`tests/e2e/test_contract_parity.py` enforces this). The same file defines the **resource** surface, under `resources` — both servers build their `resources/list` from it.
 
+The **configuration** surface has its own contract, [`contract/config.json`](contract/config.json): every `OPCUA_*` variable, its type, default, secrecy and which runtimes read it. To add or change a setting, edit it there first, implement it in **both** runtimes, then run `npm run config:generate` in `packages/server-node` — that rewrites the settings form in `mcpb/manifest.json` and the environment variables in `server.json`, which are generated and must not be edited by hand. `tests/unit/test_config_schema.py` fails if a runtime reads a variable the schema does not declare (or the reverse), if a parser disagrees with a declared choice, minimum or default, or if the configuration table in a README misses the variable; CI runs `npm run config:check` for the generated files.
+
 ## Prerequisites
 
 - **Python 3.10+** and [`uv`](https://docs.astral.sh/uv/)

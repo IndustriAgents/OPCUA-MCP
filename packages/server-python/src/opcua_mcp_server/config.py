@@ -6,8 +6,11 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-#: OPC UA endpoint both the server and the capability probes connect to.
-SERVER_URL = os.getenv("OPCUA_SERVER_URL", "opc.tcp://localhost:4840")
+#: OPC UA endpoint both the server and the capability probes connect to. Blank
+#: counts as unset, as it does for every other setting and for the Node runtime's
+#: `||`: an MCP client passes an unset optional field as an empty string, and ""
+#: is not an endpoint anyone meant.
+SERVER_URL = os.getenv("OPCUA_SERVER_URL") or "opc.tcp://localhost:4840"
 
 
 @dataclass(frozen=True)

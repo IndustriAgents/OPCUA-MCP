@@ -1,4 +1,7 @@
-"""Build hook that stages the shared tool contract inside the wheel.
+"""Build hook that stages the shared contract files inside the wheel.
+
+Two files, both from `/contract`: `tools.json` (the tool surface) and
+`config.json` (the configuration schema, #133). Everything below applies to both.
 
 The canonical contract lives at the repo root (`/contract/tools.json`), outside
 this package. A static `force-include` pointing at `../../` works when building
@@ -20,8 +23,11 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-#: Where the wheel expects to find it; `contract.py` reads this path.
-WHEEL_PATH = "opcua_mcp_server/tools.json"
+#: The files staged, and where the wheel carries each; `contract.py` reads them there.
+STAGED = {
+    "tools.json": "opcua_mcp_server/tools.json",
+    "config.json": "opcua_mcp_server/config.json",
+}
 
 
 class ContractBuildHook(BuildHookInterface):
@@ -32,15 +38,15 @@ class ContractBuildHook(BuildHookInterface):
             return
 
         root = Path(self.root)
-        candidates = (
-            root.parents[1] / "contract" / "tools.json",  # repo checkout
-            root / "contract" / "tools.json",  # unpacked sdist
-        )
-        for candidate in candidates:
-            if candidate.is_file():
-                build_data["force_include"][str(candidate)] = WHEEL_PATH
-                return
-
-        raise FileNotFoundError(
-            "Shared tool contract not found; looked in " + ", ".join(str(c) for c in candidates)
-        )
+        for name, wheel_path in STAGED.items():
+            candidates = (
+                root.parents[1] / "contract" / name,  # repo checkout
+                root / "contract" / name,  # unpacked sdist
+            )
+            found = next((c for c in candidates if c.is_file()), None)
+            if found is None:
+                raise FileNotFoundError(
+                    f"Shared contract file {name} not found; looked in "
+                    + ", ".join(str(c) for c in candidates)
+                )
+            build_data["force_include"][str(found)] = wheel_path

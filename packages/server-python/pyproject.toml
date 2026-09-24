@@ -38,3 +38,4 @@ include = ["src", "hatch_build.py", "pyproject.toml", "README.md"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "../../contract/tools.json" = "contract/tools.json"
+"../../contract/config.json" = "contract/config.json"

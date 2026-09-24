@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Claude Desktop bundle could not configure server-certificate pinning,
+  X.509 user login or the audit trail** (#133). Claude Desktop passes a bundled
+  server exactly the environment its manifest declares, and the hand-written
+  manifest had fallen behind the runtimes: `OPCUA_SERVER_CERT`,
+  `OPCUA_APPLICATION_URI`, `OPCUA_USER_CERT`, `OPCUA_USER_KEY`,
+  `OPCUA_ALLOW_OUT_OF_RANGE_WRITES`, `OPCUA_AUDIT_FILE` and `OPCUA_OPERATOR_ID`
+  were supported by both servers and unreachable from the one-click install.
+  `server.json` was missing six of the same. Both now list every variable, and
+  the private-key paths join the password in being marked sensitive (MCPB) /
+  `isSecret` (registry). The smoke test that claimed to check "every security
+  setting" while pinning six by hand now derives its expectation from the schema
+  below.
+- **A blank `OPCUA_SERVER_URL` now means the default endpoint on the Python
+  runtime too.** It was read as an endpoint of `""`, where the Node runtime and
+  every other setting treat blank as unset — as an MCP client sends an optional
+  field nobody filled in.
+
+### Added
+- **`contract/config.json`, one machine-readable definition of the configuration
+  surface** (#133). Every `OPCUA_*` variable with its stable key, category, type,
+  choices (and per-runtime subsets), minimum, default, secrecy, security
+  consequence, supporting runtimes and the surfaces it belongs on. The bundle's
+  `user_config` and `mcp_config.env` and `server.json`'s environment variables are
+  generated from it by `npm run config:generate` (`packages/server-node/scripts/
+  config-artifacts.mjs`); CI runs `npm run config:check`, and
+  `tests/unit/test_config_schema.py` fails if either runtime reads a variable the
+  schema omits or the reverse, if a README's configuration table misses one, or
+  if a parser disagrees with a declared choice, minimum or blank default — the
+  same cases drive the Node parsers in `test/config-schema.test.mjs`. The schema
+  ships in both packages (`build/config.json`; `opcua_mcp_server/config.json`,
+  loaded by `load_config_schema()`), so the installers (#135) and generated
+  reference docs (#149) can consume it rather than keep another list.
+
 ## [0.5.1] — 2026-09-22
 
 0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for

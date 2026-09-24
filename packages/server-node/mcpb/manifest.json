@@ -30,8 +30,12 @@
         "OPCUA_SECURITY_MODE": "${user_config.opcua_security_mode}",
         "OPCUA_CLIENT_CERT": "${user_config.opcua_client_cert}",
         "OPCUA_CLIENT_KEY": "${user_config.opcua_client_key}",
+        "OPCUA_APPLICATION_URI": "${user_config.opcua_application_uri}",
+        "OPCUA_SERVER_CERT": "${user_config.opcua_server_cert}",
         "OPCUA_USERNAME": "${user_config.opcua_username}",
         "OPCUA_PASSWORD": "${user_config.opcua_password}",
+        "OPCUA_USER_CERT": "${user_config.opcua_user_cert}",
+        "OPCUA_USER_KEY": "${user_config.opcua_user_key}",
         "OPCUA_PROFILE": "${user_config.opcua_profile}",
         "OPCUA_POLICY_FILE": "${user_config.opcua_policy_file}",
         "OPCUA_ALLOWED_TOOLS": "${user_config.opcua_allowed_tools}",
@@ -39,9 +43,12 @@
         "OPCUA_ALLOWED_METHODS": "${user_config.opcua_allowed_methods}",
         "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS": "${user_config.opcua_allow_acknowledge_alarms}",
         "OPCUA_ALLOW_INSECURE_CONTROL": "${user_config.opcua_allow_insecure_control}",
-        "OPCUA_RECONNECT_MAX_RETRY": "${user_config.opcua_reconnect_max_retry}",
+        "OPCUA_ALLOW_OUT_OF_RANGE_WRITES": "${user_config.opcua_allow_out_of_range_writes}",
+        "OPCUA_AUDIT_FILE": "${user_config.opcua_audit_file}",
+        "OPCUA_OPERATOR_ID": "${user_config.opcua_operator_id}",
         "OPCUA_RECONNECT_INITIAL_DELAY_MS": "${user_config.opcua_reconnect_initial_delay_ms}",
         "OPCUA_RECONNECT_MAX_DELAY_MS": "${user_config.opcua_reconnect_max_delay_ms}",
+        "OPCUA_RECONNECT_MAX_RETRY": "${user_config.opcua_reconnect_max_retry}",
         "OPCUA_SESSION_TIMEOUT_MS": "${user_config.opcua_session_timeout_ms}"
       }
     }
@@ -50,114 +57,159 @@
     "opcua_server_url": {
       "type": "string",
       "title": "OPC UA endpoint",
-      "description": "URL of the OPC UA server to connect to, e.g. opc.tcp://192.168.0.10:4840",
+      "description": "URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned.",
       "default": "opc.tcp://localhost:4840",
       "required": true
     },
     "opcua_security_policy": {
       "type": "string",
       "title": "Security policy",
-      "description": "Encryption suite to negotiate: None, Basic128Rsa15, Basic256, Basic256Sha256, Aes128_Sha256_RsaOaep or Aes256_Sha256_RsaPss. Leave blank for an unencrypted connection. Anything other than None needs the certificate and key below.",
+      "description": "Encryption suite to negotiate for the secure channel. Anything other than None needs a client certificate and key. The two AES suites are Node-only: the Python runtime refuses them at startup rather than downgrading. One of: None, Basic128Rsa15, Basic256, Basic256Sha256, Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss. None is unencrypted and unauthenticated, and keeps control tools blocked unless insecure control is explicitly allowed. An unknown policy stops the server at startup. Leave blank for None.",
       "required": false
     },
     "opcua_security_mode": {
       "type": "string",
       "title": "Security mode",
-      "description": "Sign or SignAndEncrypt. Leave blank to let the policy choose, which means SignAndEncrypt.",
+      "description": "Message security mode for the secure channel. Sign authenticates messages without encrypting them. One of: None, Sign, SignAndEncrypt. A policy with mode None, or a mode without a policy, stops the server at startup; leaving it blank never downgrades a policy to signing only. Leave blank for SignAndEncrypt once a security policy is set, otherwise None.",
       "required": false
     },
     "opcua_client_cert": {
       "type": "file",
       "title": "Client certificate",
-      "description": "PEM or DER certificate this client presents. Required by any policy other than None.",
+      "description": "Path to the certificate (PEM or DER) this client presents as its application identity. Required by any security policy other than None. A path that does not exist stops the server at startup.",
       "required": false
     },
     "opcua_client_key": {
       "type": "file",
       "title": "Client private key",
-      "description": "Private key matching the certificate above.",
+      "description": "Path to the private key matching the client certificate. A path, never key material. Whoever can read the file can impersonate this client: keep it readable only by the account running the server. A path that does not exist stops the server at startup.",
+      "sensitive": true,
+      "required": false
+    },
+    "opcua_application_uri": {
+      "type": "string",
+      "title": "Application URI",
+      "description": "Application URI announced to the server. Set it only for a certificate that carries no URI of its own: a server may reject a session whose URI does not match the certificate. Leave blank for the subjectAltName URI of the client certificate.",
+      "required": false
+    },
+    "opcua_server_cert": {
+      "type": "file",
+      "title": "Pinned server certificate",
+      "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint. Set without a security policy, it stops the server at startup rather than pinning nothing.",
       "required": false
     },
     "opcua_username": {
       "type": "string",
       "title": "Username",
-      "description": "Leave blank to connect anonymously.",
+      "description": "OPC UA username. The session is anonymous when unset. Cannot be combined with a user certificate. Requires a password; either one alone stops the server at startup.",
       "required": false
     },
     "opcua_password": {
       "type": "string",
       "title": "Password",
-      "description": "Required if a username is set. Sent in clear text unless a security policy is configured.",
+      "description": "Password for the username. Without a security policy it crosses the network in clear text. Supply it through the client's secret storage, never on a command line.",
+      "sensitive": true,
+      "required": false
+    },
+    "opcua_user_cert": {
+      "type": "file",
+      "title": "User certificate",
+      "description": "Path to the certificate identifying the user, for X.509 user authentication: a different key pair from the client certificate, which secures the channel. Requires the user key and a security policy other than None; cannot be combined with a username. Any of those combinations broken stops the server at startup.",
+      "required": false
+    },
+    "opcua_user_key": {
+      "type": "file",
+      "title": "User private key",
+      "description": "Path to the private key for the user certificate. It signs the server's challenge and is never sent. Whoever can read the file can log in as this user: keep it readable only by the account running the server.",
       "sensitive": true,
       "required": false
     },
     "opcua_profile": {
       "type": "string",
       "title": "Tool profile",
-      "description": "observe (read/monitor only), operator (explicit target allowlists), or full. Restart the connector after changing it.",
+      "description": "Which tools are offered. observe reads, browses, reads history and monitors; operator adds explicitly allowlisted writes, method calls and alarm actions; full exposes every tool and is meant only for a tightly scoped OPC UA account. One of: observe, operator, full (read-only and readonly mean observe). Unset fails closed to observe; an unknown profile stops the server at startup.",
       "default": "observe",
       "required": true
     },
     "opcua_policy_file": {
       "type": "file",
       "title": "Policy file",
-      "description": "Optional version-1 JSON policy. Form fields below override values from this file.",
+      "description": "Path to a version-1 JSON policy file, the only place per-node value bounds can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup.",
       "required": false
     },
     "opcua_allowed_tools": {
       "type": "string",
       "title": "Allowed tools",
-      "description": "Optional comma-separated tool allowlist. It can only narrow the selected profile.",
+      "description": "Comma-separated tool allowlist. It can only narrow the selected profile, never widen it. An unknown tool name stops the server at startup.",
       "required": false
     },
     "opcua_allowed_write_nodes": {
       "type": "string",
       "title": "Writable node IDs",
-      "description": "Comma-separated exact node IDs writable in operator mode.",
+      "description": "Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=<namespace-uri>;i=5. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA.",
       "required": false
     },
     "opcua_allowed_methods": {
       "type": "string",
       "title": "Callable methods",
-      "description": "Comma-separated object_node_id|method_node_id pairs callable in operator mode.",
+      "description": "Comma-separated object_node_id|method_node_id pairs the operator profile may call. Empty fails closed: operator can call nothing. An entry without | stops the server at startup.",
       "required": false
     },
     "opcua_allow_acknowledge_alarms": {
       "type": "boolean",
-      "title": "Allow alarm acknowledgement",
-      "description": "Expose acknowledgement in operator mode.",
+      "title": "Allow alarm actions",
+      "description": "Let the operator profile act on alarms: acknowledge_alarm and every act_on_alarm action.",
       "default": false,
       "required": false
     },
     "opcua_allow_insecure_control": {
       "type": "boolean",
       "title": "Allow insecure control (lab only)",
-      "description": "Permit control tools without OPC UA channel security. Never enable against production equipment.",
+      "description": "Permit control tools on an OPC UA channel with no security policy. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Never enable it against production equipment.",
       "default": false,
       "required": false
     },
-    "opcua_reconnect_max_retry": {
+    "opcua_allow_out_of_range_writes": {
+      "type": "boolean",
+      "title": "Allow writes outside EURange",
+      "description": "Allow a write outside the EURange the OPC UA server itself published for the node. Fail-open override: it discards the only value bound a deployment with no policy file has.",
+      "default": false,
+      "required": false
+    },
+    "opcua_audit_file": {
       "type": "string",
-      "title": "Reconnection attempts",
-      "description": "How many times to retry a dropped or refused connection before a tool call gives up. 0 never retries, -1 retries forever. Leave blank for 3.",
+      "title": "Audit file",
+      "description": "Path to an append-only file for the control audit trail, one JSON object per line, written beside stderr. Created if it does not exist. A file that cannot be opened stops the server rather than falling back to stderr alone.",
+      "required": false
+    },
+    "opcua_operator_id": {
+      "type": "string",
+      "title": "Operator label",
+      "description": "Label stamped on every audit record, so a shipped log says which deployment a control call came from. A label, not a verified identity.",
       "required": false
     },
     "opcua_reconnect_initial_delay_ms": {
       "type": "string",
       "title": "First retry delay (ms)",
-      "description": "Wait before the first reconnection attempt; it doubles each time. Leave blank for 1000.",
+      "description": "Wait before the first attempt to repair a dropped or refused connection, in milliseconds. It doubles with each further attempt. Leave blank for 1000.",
       "required": false
     },
     "opcua_reconnect_max_delay_ms": {
       "type": "string",
       "title": "Longest retry delay (ms)",
-      "description": "Ceiling for that doubling. Leave blank for 8000.",
+      "description": "Ceiling for the doubling retry delay, in milliseconds. Leave blank for 8000.",
+      "required": false
+    },
+    "opcua_reconnect_max_retry": {
+      "type": "string",
+      "title": "Reconnection attempts",
+      "description": "Retries after the first attempt before a tool call gives up. 0 never retries; -1 retries forever. Leave blank for 3.",
       "required": false
     },
     "opcua_session_timeout_ms": {
       "type": "string",
       "title": "Session timeout (ms)",
-      "description": "Session lifetime asked of the OPC UA server; it also sets how often a keep-alive is sent, so it decides how quickly an idle connection notices the server has gone. Leave blank for 60000.",
+      "description": "Session lifetime asked of the OPC UA server, in milliseconds. It also sets the keep-alive period, so it decides how quickly an idle connection notices the server has gone. Leave blank for 60000.",
       "required": false
     }
   },
@@ -166,6 +218,11 @@
     "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
       "node": ">=22.13.0"
+    }
+  },
+  "_meta": {
+    "io.github.industriagents/opcua-mcp": {
+      "generated": "user_config and server.mcp_config.env are generated from contract/config.json by packages/server-node/scripts/config-artifacts.mjs. Edit the schema and run `npm run config:generate` in packages/server-node; CI fails if they drift."
     }
   }
 }

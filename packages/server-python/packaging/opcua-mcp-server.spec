@@ -22,11 +22,14 @@ HERE = Path(SPECPATH).resolve()  # noqa: F821 — injected by PyInstaller
 PKG_ROOT = HERE.parent
 REPO_ROOT = PKG_ROOT.parents[1]
 
-# `contract.py` looks for `tools.json` beside the package before falling back to
-# the repo root. Only the first of those exists inside a frozen app, so the
-# canonical contract is staged there — the same placement the wheel uses, and for
-# the same reason.
-datas = [(str(REPO_ROOT / "contract" / "tools.json"), "opcua_mcp_server")]
+# `contract.py` looks for `tools.json` and `config.json` beside the package
+# before falling back to the repo root. Only the first of those exists inside a
+# frozen app, so the canonical files are staged there — the same placement the
+# wheel uses, and for the same reason.
+datas = [
+    (str(REPO_ROOT / "contract" / "tools.json"), "opcua_mcp_server"),
+    (str(REPO_ROOT / "contract" / "config.json"), "opcua_mcp_server"),
+]
 
 # Match the Node build's artifact naming exactly, so a release page lists the two
 # runtimes' executables side by side under one obvious scheme. `platform.machine()`

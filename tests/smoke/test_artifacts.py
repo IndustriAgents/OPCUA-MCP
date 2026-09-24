@@ -115,7 +115,12 @@ def npm_install(tmp_path_factory):
 def test_npm_tarball_contains_runtime_assets(npm_install):
     """The published package must carry everything index.js reads at runtime."""
     pkg = npm_install / "node_modules" / "opcua-mcp-server"
-    for asset in ("build/index.js", "build/contract.json", "build/version.json"):
+    for asset in (
+        "build/index.js",
+        "build/contract.json",
+        "build/config.json",
+        "build/version.json",
+    ):
         assert (pkg / asset).is_file(), f"{asset} missing from the npm package"
 
 
@@ -194,6 +199,24 @@ def test_wheel_imports_outside_source_tree(wheel_venv, tmp_path):
     assert set(json.loads(proc.stdout)) >= CORE_TOOLS
 
 
+def test_wheel_ships_the_config_schema(wheel_venv, tmp_path):
+    """The configuration schema must load from an installed wheel, outside any
+    checkout, for the same reason the tool contract must: `--install` (#135)
+    reads it from wherever the package was installed."""
+    python = wheel_venv / ("python.exe" if sys.platform == "win32" else "python")
+    proc = _run(
+        [
+            str(python),
+            "-c",
+            "from opcua_mcp_server.contract import load_config_schema as load; "
+            "import json; print(json.dumps(load()))",
+        ],
+        cwd=tmp_path,
+    )
+    canonical = json.loads((ROOT / "contract" / "config.json").read_text(encoding="utf-8"))
+    assert json.loads(proc.stdout) == canonical
+
+
 def test_sdist_is_self_contained(wheel_venv, tmp_path_factory):
     """A wheel must be buildable from the sdist alone, outside any checkout.
 
@@ -220,9 +243,8 @@ def test_sdist_is_self_contained(wheel_venv, tmp_path_factory):
     assert len(built) == 1, f"expected one wheel from the sdist, got {built}"
 
     with zipfile.ZipFile(built[0]) as zf:
-        assert "opcua_mcp_server/tools.json" in zf.namelist(), (
-            "wheel built from the sdist is missing the bundled tool contract"
-        )
+        for staged in ("opcua_mcp_server/tools.json", "opcua_mcp_server/config.json"):
+            assert staged in zf.namelist(), f"wheel built from the sdist is missing {staged}"
 
 
 def test_wheel_does_not_pollute_site_packages(wheel_venv):
@@ -340,54 +362,40 @@ def test_mcpb_exposes_the_endpoint_as_user_config(packed_mcpb):
     assert env["OPCUA_SERVER_URL"] == "${user_config.opcua_server_url}"
 
 
-def test_mcpb_exposes_every_security_setting(packed_mcpb):
-    """The bundle must be able to express a secured connection.
+def test_mcpb_exposes_every_applicable_setting(packed_mcpb):
+    """The bundle must be able to express every setting the schema offers it.
 
     Claude Desktop passes the server exactly the env this manifest declares and
-    nothing else, so a security variable missing here is one a bundle user can
-    never set — the one-click install would be permanently stuck on the
-    unencrypted, anonymous default. Pinned against the runtime's own variable
-    names so the two cannot drift apart in silence.
+    nothing else, so a variable missing here is one a bundle user can never set.
+    This test was once named for "every security setting" while pinning six of
+    them by hand, and passed while server-certificate pinning, X.509 user login
+    and the audit file were all unreachable (#133). The expected set now comes
+    from `contract/config.json`, so it cannot be a smaller list than the truth.
+
+    Checked on the *packed* manifest: `tests/unit/test_config_schema.py` checks
+    the committed one, and this catches a build step that loses what it had.
     """
+    schema = json.loads((ROOT / "contract" / "config.json").read_text(encoding="utf-8"))
+    expected = [s for s in schema["settings"] if "mcpb" in s["surfaces"]]
     manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
     env = manifest["server"]["mcp_config"]["env"]
+    user_config = manifest["user_config"]
 
-    required = {
-        "OPCUA_SECURITY_POLICY",
-        "OPCUA_SECURITY_MODE",
-        "OPCUA_CLIENT_CERT",
-        "OPCUA_CLIENT_KEY",
-        "OPCUA_USERNAME",
-        "OPCUA_PASSWORD",
-    }
-    assert required <= set(env), f"not settable from the bundle: {sorted(required - set(env))}"
+    missing = sorted({s["env"] for s in expected} - set(env))
+    assert not missing, f"not settable from the bundle: {missing}"
 
-    # Every one must be wired to a user_config field, not hardcoded.
-    for name in required:
-        assert env[name].startswith("${user_config."), f"{name} is not user-settable"
-        key = env[name].removeprefix("${user_config.").rstrip("}")
-        assert key in manifest["user_config"], f"{name} points at a missing field {key}"
+    for setting in expected:
+        # Wired to a form field, not hardcoded, and masked if it must be.
+        field = f"opcua_{setting['key']}"
+        assert env[setting["env"]] == "${user_config." + field + "}", setting["env"]
+        assert field in user_config, f"{setting['env']} points at a missing field {field}"
+        assert user_config[field].get("sensitive", False) is setting["sensitive"], (
+            f"{field} must be marked sensitive exactly when the schema says so"
+        )
+        if setting["type"] == "boolean":
+            assert user_config[field]["default"] is setting["default"], field
 
-    assert manifest["user_config"]["opcua_password"].get("sensitive") is True, (
-        "the password field must be marked sensitive so it is masked and encrypted"
-    )
-
-
-def test_mcpb_exposes_the_production_policy(packed_mcpb):
-    manifest = json.loads((packed_mcpb / "manifest.json").read_text(encoding="utf-8"))
-    env = manifest["server"]["mcp_config"]["env"]
-    required = {
-        "OPCUA_PROFILE",
-        "OPCUA_POLICY_FILE",
-        "OPCUA_ALLOWED_TOOLS",
-        "OPCUA_ALLOWED_WRITE_NODES",
-        "OPCUA_ALLOWED_METHODS",
-        "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
-        "OPCUA_ALLOW_INSECURE_CONTROL",
-    }
-    assert required <= set(env)
-    assert manifest["user_config"]["opcua_profile"]["default"] == "observe"
-    assert manifest["user_config"]["opcua_allow_insecure_control"]["default"] is False
+    assert user_config["opcua_profile"]["default"] == "observe"
 
 
 async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):

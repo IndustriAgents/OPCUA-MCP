@@ -1,5 +1,6 @@
-// The shared tool contract and the package version, both staged into build/ by
-// scripts/prepare-build.mjs so the published package is self-contained.
+// The shared tool contract, the configuration schema and the package version, all
+// staged into build/ by scripts/prepare-build.mjs so the published package is
+// self-contained.
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -150,3 +151,53 @@ export const CONTRACT: {
 export const { version: VERSION }: { version: string } = JSON.parse(
   readFileSync(join(BUILD_DIR, "version.json"), "utf8")
 );
+
+/** One environment variable, as `/contract/config.json` declares it. See that
+ *  file's `fields` for what each member means. */
+export interface ConfigSetting {
+  env: string;
+  key: string;
+  category: string;
+  title: string;
+  description: string;
+  type: "string" | "enum" | "boolean" | "number" | "path" | "list";
+  choices?: string[];
+  choiceAliases?: Record<string, string>;
+  runtimeChoices?: Partial<Record<"node" | "python", string[]>>;
+  minimum?: number;
+  mustExist?: boolean;
+  contents?: string;
+  itemFormat?: string;
+  default: string | number | boolean | null;
+  defaultDescription?: string;
+  example?: string;
+  required: boolean;
+  secret: boolean;
+  sensitive: boolean;
+  securityRelevant: boolean;
+  securityNote?: string;
+  runtimes: Array<"node" | "python">;
+  surfaces: Array<"mcpb" | "registry" | "installer" | "docs">;
+  deprecatedAliases?: Array<{ env: string; removeIn: string }>;
+}
+
+export interface ConfigSchema {
+  version: number;
+  categories: Record<string, { title: string; description: string }>;
+  booleanValues: { true: string[]; false: string[] };
+  settings: ConfigSetting[];
+}
+
+let configSchemaCache: ConfigSchema | null = null;
+
+/** Every setting this server reads, from the canonical schema (#133).
+ *
+ * Read on first use rather than at import: the server's own startup does not
+ * need it, so a fault in it must not be able to stop the server starting. It
+ * exists for code that runs from an installed package and has to describe the
+ * configuration surface — `--install` (#135) — without a second hand-kept list.
+ */
+export function configSchema(): ConfigSchema {
+  configSchemaCache ??= JSON.parse(readFileSync(join(BUILD_DIR, "config.json"), "utf8"));
+  return configSchemaCache as ConfigSchema;
+}

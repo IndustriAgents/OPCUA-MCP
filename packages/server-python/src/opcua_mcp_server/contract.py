@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 #: Levels above this module to reach the repo root in a source checkout:
@@ -10,15 +11,18 @@ from pathlib import Path
 _REPO_ROOT_DEPTH = 4
 
 
-def contract_candidates(module_file: Path) -> list[Path]:
-    """Where to look for the contract, in order, given this module's location.
+def contract_candidates(module_file: Path, name: str = "tools.json") -> list[Path]:
+    """Where to look for a contract file, in order, given this module's location.
 
-    1. ``tools.json`` inside this package — how it ships in the wheel (see the
+    ``name`` is the file under ``/contract``: ``tools.json`` (the tool surface) by
+    default, or ``config.json`` (the configuration schema). Both ship the same way.
+
+    1. ``name`` inside this package — how it ships in the wheel (see the
        ``force-include`` in pyproject.toml) and in the frozen single-file build
        (see ``packaging/opcua-mcp-server.spec``). Bundling it *inside* the package
        rather than at the install root keeps the distribution from adding
        top-level files to ``site-packages``.
-    2. ``/contract/tools.json`` at the repo root — the canonical source, used when
+    2. ``/contract/<name>`` at the repo root — the canonical source, used when
        running from a checkout (dev, editable installs, tests).
 
     The second candidate is omitted when this module is not five levels deep,
@@ -30,10 +34,21 @@ def contract_candidates(module_file: Path) -> list[Path]:
     shallow enough for the index to be out of range at all.
     """
     parents = module_file.parents
-    candidates = [module_file.parent / "tools.json"]
+    candidates = [module_file.parent / name]
     if len(parents) > _REPO_ROOT_DEPTH:
-        candidates.append(parents[_REPO_ROOT_DEPTH] / "contract" / "tools.json")
+        candidates.append(parents[_REPO_ROOT_DEPTH] / "contract" / name)
     return candidates
+
+
+def _load(name: str, what: str) -> dict:
+    candidates = contract_candidates(Path(__file__).resolve(), name)
+    for path in candidates:
+        if path.is_file():
+            # Explicit UTF-8: `read_text` otherwise defaults to the system locale,
+            # so a non-ASCII character in a tool description would make the
+            # package unimportable on a Windows machine and nowhere else.
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"{what} not found; looked in " + ", ".join(str(p) for p in candidates))
 
 
 def load_contract() -> dict:
@@ -43,16 +58,20 @@ def load_contract() -> dict:
     FileNotFoundError on import, because the repo-root path does not exist outside
     a checkout. See :func:`contract_candidates` for the search order.
     """
-    candidates = contract_candidates(Path(__file__).resolve())
-    for path in candidates:
-        if path.is_file():
-            # Explicit UTF-8: `read_text` otherwise defaults to the system locale,
-            # so a non-ASCII character in a tool description would make the
-            # package unimportable on a Windows machine and nowhere else.
-            return json.loads(path.read_text(encoding="utf-8"))
-    raise FileNotFoundError(
-        "Shared tool contract not found; looked in " + ", ".join(str(p) for p in candidates)
-    )
+    return _load("tools.json", "Shared tool contract")
+
+
+@lru_cache(maxsize=1)
+def load_config_schema() -> dict:
+    """Every setting this server reads, from the canonical schema (#133).
+
+    Loaded on first use rather than at import: the server's own startup does not
+    need it, so a fault in it must not be able to stop the server starting. It
+    exists for code that runs from an installed package and has to describe the
+    configuration surface — ``--install`` (#135) — without a second hand-kept
+    list. Cached, so treat the result as read-only.
+    """
+    return _load("config.json", "Configuration schema")
 
 
 # Shared tool contract so tool descriptions and capability node IDs stay in sync

@@ -52,6 +52,13 @@ jobs:
         working-directory: packages/server-node
         run: npm run typecheck
 
+      # The `.mcpb` form and server.json's environment variables are generated
+      # from contract/config.json (#133). A step of its own, rather than only the
+      # unit test that also checks it, so the failure names the command to run.
+      - name: Generated config metadata matches contract/config.json
+        working-directory: packages/server-node
+        run: npm run config:check
+
       # Unit tests need no mock OPC UA server: seconds, not the ~50s e2e suite.
       - name: Build Node server
         working-directory: packages/server-node

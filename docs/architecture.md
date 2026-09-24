@@ -617,6 +617,9 @@ green, so both are built and driven over MCP in `tests/smoke/`. See
 ```
 contract/tools.json          single source of truth for the tool + resource surface,
                              including every failure message and result shape
+contract/config.json         single source of truth for the configuration surface:
+                             every OPCUA_* variable, generating the .mcpb form
+                             and server.json's environment variables
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records

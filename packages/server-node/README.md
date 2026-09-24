@@ -105,7 +105,10 @@ One resource, `opcua://subscriptions`: the active data-change subscriptions and 
 
 ## Configuration
 
-The server is configured entirely through environment variables:
+The server is configured entirely through environment variables. Every one is
+declared, with its type, default and secrecy, in the repository's
+[`contract/config.json`](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/config.json),
+which both runtimes are tested against and which ships inside this package:
 
 | Variable                           | Default                                                 | Meaning                                                                                                                                                                            |
 | ---------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

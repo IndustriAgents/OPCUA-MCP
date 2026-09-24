@@ -9,20 +9,18 @@ stdio transport, and every environment variable it reads. That last part —
 The npm manifest carries the matching `"mcpName": "io.github.midhunxavier/opcua"`, which is how
 the registry proves the package and this repository belong to the same owner.
 
-> **Status: metadata only.** Nothing here publishes a listing. `server.json` is
-> at 0.3.0 to match the manifests, but the already-published `opcua-mcp-server@0.3.0`
-> on npm predates `mcpName`, and an npm version is immutable — editing this
-> repository cannot add the field to it. **The first registry submission needs a
-> new npm release.**
+> **Status: metadata only.** Nothing here publishes a listing, and no listing has
+> been submitted yet. `server.json` carries the release version, stamped from the
+> npm manifest by the same generator; every published npm version from 0.4.1 on
+> carries `mcpName`, so the published release is the one to submit.
 
 ## Before submitting
 
-1. Cut a release as usual ([releasing.md](releasing.md)): bump all four
-   manifests, refresh the npm lockfile, move the `[Unreleased]` changelog
-   entries, and tag.
-2. Set `version` and `packages[0].version` in `server.json` to that same new
-   version. The unit tests fail if they drift from the npm manifest.
-3. Wait for the tag-triggered publish to finish. The registry reads npm, not
+1. Cut a release as usual ([releasing.md](releasing.md)). Setting the version in
+   `packages/server-node/package.json` and running `npm run config:generate`
+   stamps it into both `version` fields of `server.json`; `npm run config:check`
+   and the unit tests fail if they drift from the npm manifest.
+2. Wait for the tag-triggered publish to finish. The registry reads npm, not
    this repository, so submitting first simply fails.
 
 Then check what npm actually serves, from the repository root:

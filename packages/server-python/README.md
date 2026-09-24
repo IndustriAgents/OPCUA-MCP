@@ -27,34 +27,39 @@ targets it, and each MCP client opens its own OPC UA session.
 
 ## Tools
 
-Fifteen tools, defined once in
-**[contract/tools.json](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/tools.json)**
-and shared with the Node runtime so the two cannot drift apart.
+<!-- BEGIN GENERATED: tool-reference from contract/tools.json by packages/server-node/scripts/config-artifacts.mjs. Do not edit by hand: edit the source, then run `npm run config:generate` in packages/server-node. -->
 
-| Tool | What it does |
-|---|---|
-| `read_opcua_nodes` | Read one or more nodes — value, data type, status, timestamps, engineering unit and range |
-| `browse_opcua_nodes` | List children, walk a subtree, resolve a browse path, search by name |
-| `write_opcua_nodes` | Write to one or more nodes |
-| `call_opcua_method` | Invoke a method on an object node |
-| `get_server_status` | Connection state, server health, the namespace array and the server's own diagnostics |
-| `subscribe_opcua_nodes` | Watch nodes for data changes instead of polling them, with an optional deadband |
-| `list_subscriptions` | The active subscriptions, each with its buffered changes |
-| `unsubscribe_opcua_nodes` | Cancel subscriptions |
-| `subscribe_events` | Start collecting events from a notifier node |
-| `read_events` | Read the events collected since the last read |
-| `list_active_alarms` | The alarms the server is currently retaining |
-| `acknowledge_alarm` | Acknowledge one of them, with a comment |
-| `act_on_alarm` | Confirm, annotate or shelve an alarm — the rest of the operator workflow |
-| `read_opcua_history` † | Historical values, raw or summarised by a server-side aggregate |
-| `read_event_history` † | Events the server stored, for a range that has already passed |
+Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action and 2 control — defined once in [`contract/tools.json`](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/tools.json).
 
-† **Capability-gated.** `read_opcua_history` appears only when the connected
-server advertises historical access (`AccessHistoryDataCapability`) or aggregates
-(a non-empty `AggregateFunctions` folder). `read_event_history` is gated
-separately on `AccessHistoryEventsCapability` — keeping values and keeping events
-are different features and a server commonly does one without the other. What a
-server cannot do is not on the menu, rather than failing at call time.
+| Tool | Access | Hints | What it does |
+|---|---|---|---|
+| `read_opcua_nodes` | read | read-only, idempotent | Read the current value of one or more OPC UA nodes in a single request. |
+| `browse_opcua_nodes` | read | read-only, idempotent | Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. |
+| `read_opcua_history` † | read | read-only, idempotent | Read what a node's value has been over time. |
+| `read_event_history` † | read | read-only, idempotent | Read events the OPC UA server stored, for a time range that has already passed. |
+| `get_server_status` | read | read-only, idempotent | Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. |
+| `list_subscriptions` | read | read-only, idempotent | List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. |
+| `list_active_alarms` | read | read-only, idempotent | List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. |
+| `subscribe_opcua_nodes` | monitor | — | Watch one or more OPC UA nodes for value changes instead of polling them. |
+| `unsubscribe_opcua_nodes` | monitor | — | Cancel one or more active data-change subscriptions and discard what they had buffered. |
+| `subscribe_events` | monitor | — | Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. |
+| `read_events` | monitor | — | Read the events buffered by subscribe_events, oldest first. |
+| `acknowledge_alarm` | alarm-action | — | Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). |
+| `act_on_alarm` | alarm-action | — | Confirm, annotate or shelve an alarm — the rest of the operator workflow that acknowledge_alarm starts. |
+| `write_opcua_nodes` | control | destructive, idempotent | Write a value to one or more OPC UA nodes. |
+| `call_opcua_method` | control | destructive | Call a method on an OPC UA object. |
+
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool annotations each tool advertises.
+
+† **Capability-gated**: listed only when the connected server advertises what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
+
+<!-- END GENERATED: tool-reference -->
+
+A capability-gated tool is not on the menu of a server that cannot do it,
+rather than failing at call time. `read_opcua_history` is offered for either
+stored values or server-side aggregates (a non-empty `AggregateFunctions`
+folder), and `read_event_history` separately — keeping values and keeping events
+are different features, and a server commonly does one without the other.
 
 **One tool per operation, not one per arity.** Reading one node and reading fifty
 is the same request with a longer list, so it is one tool and one code path.
@@ -162,37 +167,66 @@ declared, with its type, default and secrecy, in the repository's
 [`contract/config.json`](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/contract/config.json),
 which both runtimes are tested against and which ships inside this package:
 
-| Variable | Default | Meaning |
+<!-- BEGIN GENERATED: config-reference from contract/config.json by packages/server-node/scripts/config-artifacts.mjs. Do not edit by hand: edit the source, then run `npm run config:generate` in packages/server-node. -->
+
+25 settings in six groups. A blank value means the default, whatever the type; a boolean accepts `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off`.
+
+**Connection** — Which OPC UA server to talk to.
+
+| Variable | Default | Description |
 |---|---|---|
-| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | OPC UA endpoint to connect to |
-| `OPCUA_SECURITY_POLICY` | `None` | `None`, `Basic128Rsa15`, `Basic256` or `Basic256Sha256` (the AES suites are Node-only) |
-| `OPCUA_SECURITY_MODE` | `SignAndEncrypt` once a policy is set, otherwise `None` | `None`, `Sign` or `SignAndEncrypt` |
-| `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
-| `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
-| `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
-| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint, and **control tools are refused**. Requires a policy other than `None`; an expired pin refuses to connect |
-| `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
-| `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
-| `OPCUA_USER_CERT` | — | Certificate identifying the **user**, for X.509 authentication. A different key pair from `OPCUA_CLIENT_CERT`, which secures the channel. Cannot be combined with `OPCUA_USERNAME` |
-| `OPCUA_USER_KEY` | — | Private key for `OPCUA_USER_CERT`. Signs the server's challenge; never sent |
-| `OPCUA_PROFILE` | `observe` | `observe`, `operator`, or `full` tool profile (`read-only` is an alias for `observe`) |
-| `OPCUA_POLICY_FILE` | — | Optional version-1 JSON policy file; environment variables override it |
-| `OPCUA_ALLOWED_TOOLS` | — | Comma-separated allowlist that can only narrow the selected profile |
-| `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated node IDs writable by the `operator` profile. `ns=2;i=5` or, preferably, `nsu=<namespace-uri>;i=5` |
-| `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id\|method_node_id` pairs callable by `operator` |
-| `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to act on alarms — `acknowledge_alarm` and every `act_on_alarm` action |
-| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools over a channel with **no** security (`SecurityPolicy=None`). Does not cover an unverified server on a secured one |
-| `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Lab-only override permitting control tools over a secured channel whose server certificate is **not pinned** — encrypted, but to whoever answered |
-| `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node |
-| `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. Created `0600`; a symlink, non-regular file, another account's file or a group/world-writable one stops the server, as does a file that cannot be opened. Reopened safely when rotated away. See [What is audited](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/SECURITY.md#what-is-audited) |
-| `OPCUA_AUDIT_FSYNC` | `always` | `always` fsyncs each audit record before the control call proceeds (survives power loss); `none` stops at the OS (survives a process crash only) |
-| `OPCUA_AUDIT_CHAIN` | `none` | `sha256` or `hmac-sha256` adds `seq`/`prev_hash`/`hash` to every record so edits, deletions and reordering are detectable with `--verify-audit`. Requires `OPCUA_AUDIT_FILE` |
-| `OPCUA_AUDIT_CHAIN_KEY_FILE` | — | HMAC key (≥ 32 bytes, e.g. `openssl rand -hex 32`, mode `0600`) for `OPCUA_AUDIT_CHAIN=hmac-sha256`; refused with any other chain |
-| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record as `operator_label`, so a shipped log says which deployment a control call came from. Configured, never verified — it is not an identity |
-| `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Delay before the first reconnection attempt; doubles each attempt |
-| `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for that doubling |
-| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt, per connection round: a whole number from `-1` to `1000`. `0` disables retrying; `-1` never stops trying, but still in bounded rounds of four retries |
-| `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session timeout asked of the OPC UA server; also sets the keep-alive period |
+| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned. |
+
+**Channel security** — How the OPC UA secure channel is signed, encrypted and verified.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_SECURITY_POLICY` | `None` | Encryption suite to negotiate for the secure channel. Anything other than None needs a client certificate and key. The two AES suites are Node-only: the Python runtime refuses them at startup rather than downgrading. One of `None`, `Basic128Rsa15`, `Basic256`, `Basic256Sha256`. None is unencrypted and unauthenticated, and keeps control tools blocked unless insecure control is explicitly allowed. An unknown policy stops the server at startup. |
+| `OPCUA_SECURITY_MODE` | SignAndEncrypt once a security policy is set, otherwise None | Message security mode for the secure channel. Sign authenticates messages without encrypting them. One of `None`, `Sign`, `SignAndEncrypt`. A policy with mode None, or a mode without a policy, stops the server at startup; leaving it blank never downgrades a policy to signing only. |
+| `OPCUA_CLIENT_CERT` | — | Path to the certificate (PEM or DER) this client presents as its application identity. Required by any security policy other than None. A path that does not exist stops the server at startup. |
+| `OPCUA_CLIENT_KEY` | — | Path to the private key matching the client certificate. A path, never key material. Whoever can read the file can impersonate this client: keep it readable only by the account running the server. A path that does not exist stops the server at startup. |
+| `OPCUA_APPLICATION_URI` | the subjectAltName URI of the client certificate | Application URI announced to the server. Set it only for a certificate that carries no URI of its own: a server may reject a session whose URI does not match the certificate. |
+| `OPCUA_SERVER_CERT` | — | Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint. Set without a security policy, it stops the server at startup rather than pinning nothing. |
+
+**User identity** — Who the OPC UA session logs in as.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_USERNAME` | — | OPC UA username. The session is anonymous when unset. Cannot be combined with a user certificate. Requires a password; either one alone stops the server at startup. |
+| `OPCUA_PASSWORD` | — | **Secret.** Password for the username. Without a security policy it crosses the network in clear text. Supply it through the client's secret storage, never on a command line. |
+| `OPCUA_USER_CERT` | — | Path to the certificate identifying the user, for X.509 user authentication: a different key pair from the client certificate, which secures the channel. Requires the user key and a security policy other than None; cannot be combined with a username. Any of those combinations broken stops the server at startup. |
+| `OPCUA_USER_KEY` | — | Path to the private key for the user certificate. It signs the server's challenge and is never sent. Whoever can read the file can log in as this user: keep it readable only by the account running the server. |
+
+**Tool policy** — Which MCP tools are offered, and what a control tool may touch.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_PROFILE` | `observe` | Which tools are offered. observe reads, browses, reads history and monitors; operator adds explicitly allowlisted writes, method calls and alarm actions; full exposes every tool and is meant only for a tightly scoped OPC UA account. One of `observe`, `operator`, `full` (`read-only` means `observe`; `readonly` means `observe`). Unset fails closed to observe; an unknown profile stops the server at startup. |
+| `OPCUA_POLICY_FILE` | — | Path to a version-1 JSON policy file, the only place per-node value bounds can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup. |
+| `OPCUA_ALLOWED_TOOLS` | — | Comma-separated tool allowlist. It can only narrow the selected profile, never widen it. An unknown tool name stops the server at startup. |
+| `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=&lt;namespace-uri>;i=5. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA. |
+| `OPCUA_ALLOWED_METHODS` | — | Comma-separated object_node_id\|method_node_id pairs the operator profile may call. Empty fails closed: operator can call nothing. An entry without \| stops the server at startup. |
+| `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Let the operator profile act on alarms: acknowledge_alarm and every act_on_alarm action. |
+| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Permit control tools on an OPC UA channel with no security policy. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Never enable it against production equipment. |
+| `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the EURange the OPC UA server itself published for the node. Fail-open override: it discards the only value bound a deployment with no policy file has. |
+
+**Audit** — Where the control audit trail goes, and what it is labelled with.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_AUDIT_FILE` | — | Path to an append-only file for the control audit trail, one JSON object per line, written beside stderr. Created if it does not exist. A file that cannot be opened stops the server rather than falling back to stderr alone. |
+| `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from. A label, not a verified identity. |
+
+**Reconnection** — How a refused or dropped connection is retried.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_RECONNECT_INITIAL_DELAY_MS` | `1000` | Wait before the first attempt to repair a dropped or refused connection, in milliseconds. It doubles with each further attempt. |
+| `OPCUA_RECONNECT_MAX_DELAY_MS` | `8000` | Ceiling for the doubling retry delay, in milliseconds. |
+| `OPCUA_RECONNECT_MAX_RETRY` | `3` | Retries after the first attempt before a tool call gives up. 0 never retries; -1 retries forever. |
+| `OPCUA_SESSION_TIMEOUT_MS` | `60000` | Session lifetime asked of the OPC UA server, in milliseconds. It also sets the keep-alive period, so it decides how quickly an idle connection notices the server has gone. |
+
+<!-- END GENERATED: config-reference -->
 
 Names are case-insensitive, and a policy on its own implies `SignAndEncrypt`.
 An unusable combination — a mode without a policy, a policy without a

@@ -252,7 +252,7 @@
   },
   "_meta": {
     "io.github.industriagents/opcua-mcp": {
-      "generated": "user_config and server.mcp_config.env are generated from contract/config.json by packages/server-node/scripts/config-artifacts.mjs. Edit the schema and run `npm run config:generate` in packages/server-node; CI fails if they drift."
+      "generated": "user_config and server.mcp_config.env are generated from contract/config.json by packages/server-node/scripts/config-artifacts.mjs, and the version is stamped from packages/server-node/package.json. Edit those and run `npm run config:generate` in packages/server-node; CI fails if they drift."
     }
   }
 }

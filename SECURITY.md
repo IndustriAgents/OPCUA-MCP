@@ -295,7 +295,8 @@ make a record look attributable when it is not. Unset, `operator_label` is `null
 **Schema version.** `schema_version` is `2`. Version 1 (0.5.x, no
 `schema_version` field) had `operator` only; version 2 adds `schema_version`,
 `session_generation`, `operator_label`, `mcp_principal`, `process_identity` and
-`opcua_user_identity`, and timestamps are milliseconds on both runtimes. `operator`
+`opcua_user_identity`, and timestamps are milliseconds on both runtimes; `control`
+(#134, above) sits after `profile`. `operator`
 is still written with the same value as `operator_label` so existing readers keep
 working; it is deprecated and will be dropped in a future schema version. Every
 field a version-1 reader looked for is still there, with the same meaning.

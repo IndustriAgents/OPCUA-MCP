@@ -98,7 +98,7 @@ Discover these any time with `browse_opcua_nodes`.
 
 ## Partial results: `completeness`
 
-Seven tools can return fewer records than their request covered, and every one of
+Seven of the tools can return fewer records than their request covered, and every one of
 them says so as a field — `completeness`, beside `result` in `structuredContent`
 (issue #137) — on every call, not only when something is missing:
 

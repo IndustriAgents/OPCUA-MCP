@@ -11,7 +11,8 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { MAX_HISTORY_VALUES, historyValues, historyWasClipped } from "../build/limits.js";
+import { historyCompleteness } from "../build/completeness.js";
+import { MAX_HISTORY_VALUES, historyValues } from "../build/limits.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const table = JSON.parse(
@@ -28,12 +29,19 @@ describe("history limits", () => {
     });
   }
 
+  // The notice fires on `contractLimit`, and only on it. Driven through the
+  // completeness builder since #137, because that is now where the decision is
+  // made; the table and its verdicts are unchanged.
   for (const testCase of table.clipping) {
     it(testCase.name, () => {
-      assert.equal(
-        historyWasClipped(number(testCase.returned), number(testCase.wanted)),
-        testCase.clipped
-      );
+      const completeness = historyCompleteness({
+        returned: number(testCase.returned),
+        fetched: number(testCase.returned),
+        wanted: number(testCase.wanted),
+        continuationPoint: false,
+        nextStart: null,
+      });
+      assert.equal(completeness.reasons.includes("contractLimit"), testCase.clipped);
     });
   }
 });

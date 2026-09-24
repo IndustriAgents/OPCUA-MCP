@@ -668,14 +668,16 @@ packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
                              · capabilities · aggregates · records
                              · subscriptions · events · connection
                              · diagnostics · errors · notices · validation
-                             · limits · transport_limits · version
+                             · limits · operation_limits · completeness
+                             · history · transport_limits · version
                              · install · cli · server
   packaging/                 PyInstaller spec for the single-file executable
 packages/server-node/        @modelcontextprotocol/sdk + node-opcua-client
   src/                       config · security · contract · dates · records
                              · subscriptions · events · connection
                              · diagnostics · errors · notices · validation
-                             · limits · transport-limits · tools
+                             · limits · operation-limits · completeness
+                             · history · transport-limits · tools
                              · install · index · sea
   mcpb/manifest.json         MCP bundle manifest (Claude Desktop extension)
   scripts/                   build steps: npm package · .mcpb · executable
@@ -722,9 +724,45 @@ readings is indistinguishable from a complete one. And because there is one OPC
 UA subscription per monitored node — which is what lets a single unsubscribe take
 the whole thing down — an unbounded `subscribe_opcua_nodes` asks a PLC for one
 subscription per node past whatever it is willing to hold, so `maxSubscriptions`
-counts them. An aggregate read is deliberately uncapped: how many results it
-returns is decided by `processing_interval`, which is the whole point of asking
-for one.
+counts them. An aggregate read is bounded by the same cap on the number of
+intervals it would ask for: how many results it returns is decided by
+`processing_interval`, which is the point of asking for one, but a millisecond
+interval over a year is still billions of records.
+
+Issue #139 bounded the rest of what a request can carry, in two layers. The
+request-wide bounds — `maxRequestBytes`, `maxStringBytes`, `maxArrayItems`,
+`maxNestingDepth` — are one walk of the decoded arguments (`limits.ts` /
+`limits.py`), run for every tool *before* the contract schema is checked, the
+policy authorizes, or anything is converted to an OPC UA type. The walk stops at
+the first thing out of bounds and its recursion is bounded by the nesting limit
+it enforces, so neither a million-item array nor a ten-thousand-deep one costs
+more than the check. The per-tool counts — `maxNodesPerRead`, `maxNodesPerWrite`,
+`maxMethodArguments` — are the schemas' `maxItems`, where a model reads them.
+`maxByteStringBytes` is the one bound that needs the value decoded, so it is in
+the variant codec, and it refuses the whole write rather than failing one node.
+Neither SDK's stdio transport can refuse a line before decoding it, so these
+bound the work a request causes rather than the bytes the transport has read.
+
+The OPC UA server's own `OperationLimits` are read with the capabilities and can
+only lower ours. A read is chunked to them, in order; a write is not, and a batch
+over the server's `MaxNodesPerWrite` is refused before anything is sent. Part 4
+§5.11.4 already lets one Write partially succeed and leaves rollback to the
+client, and splitting a batch into several Writes would add a failure where one
+part has moved the plant and the next dies on the session — which
+`errors.uncertainOutcome`, reporting on one request, could no longer describe.
+
+Every bounded result says whether it is whole (issue #137). A trailing notice was
+how a capped history read and an overflowed event buffer used to report it, kept
+deliberately out of `structuredContent` because a notice is not a record — which
+left a client reading the structured result unable to tell a partial answer from
+a complete one. The answer is a sibling of `result` rather than a change to it:
+`completeness`, one shape for every tool that can be partial, built by
+`completeness.ts` / `completeness.py` from a shared table. Its `continuation` is
+arguments, not a token: OPC UA continuation points are session state that a
+server holds a limited number of, and exposing them would mean binding them to a
+session, expiring them and refusing stale ones. Arguments need none of that, so
+each continuation point a history read receives is released as soon as it has
+been noticed — which neither runtime did before.
 
 Identity is derived rather than restated: with a client certificate configured,
 both runtimes announce the `subjectAltName` URI of that certificate as the

@@ -201,6 +201,44 @@ async def test_an_overflowing_buffer_tells_the_caller_what_it_lost(server):
         "filled up. Raise buffer_size or read more often."
     ), f"{impl}: got {blocks[1]!r}"
 
+    # The sentence is for a reader of the text alone. A client reading
+    # structuredContent is told the same thing as fields (issue #137), and the
+    # records themselves carry no notice.
+    assert len(result.structured_content["result"]) == 1, result.structured_content
+    assert result.structured_content["completeness"] == {
+        "complete": False,
+        "reasons": ["bufferOverflow"],
+        "returned": 1,
+        "truncated": False,
+        "limit": None,
+        "dropped": 1,
+        "remaining": False,
+        "continuation": None,
+    }, f"{impl}: {result.structured_content['completeness']}"
+
+
+async def test_a_read_that_leaves_events_buffered_says_where_to_continue(server):
+    """`limit` reached with more waiting: partial, and calling again is the way on."""
+    impl, params = server
+    async with connect(params) as session:
+        await session.call_tool("subscribe_events", {})
+        try:
+            await _trigger_alarm(session)
+            await _reset_plant(session)
+            first = await session.call_tool("read_events", {"limit": 1})
+            rest = await session.call_tool("read_events", {})
+        finally:
+            await _reset_plant(session)
+
+    assert not first.is_error, text_of(first)
+    completeness = first.structured_content["completeness"]
+    assert completeness["complete"] is False, f"{impl}: {completeness}"
+    assert completeness["reasons"] == ["requestLimit"], completeness
+    assert completeness["limit"] == 1 and completeness["remaining"] is True, completeness
+    assert completeness["continuation"] == {}, completeness
+    # Calling again unchanged is what `{}` means, and it returns what was left.
+    assert rest.structured_content["result"], f"{impl}: nothing was left to continue with"
+
 
 async def test_a_refresh_that_never_finishes_is_an_error(alarm_server):
     """A partial ConditionRefresh must not be handed over as if it were complete.

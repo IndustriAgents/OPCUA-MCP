@@ -12,8 +12,9 @@ import json
 
 import pytest
 from conftest import ROOT
+from opcua_mcp_server.completeness import history_completeness
 from opcua_mcp_server.contract import CONTRACT
-from opcua_mcp_server.limits import MAX_HISTORY_VALUES, history_values, history_was_clipped
+from opcua_mcp_server.limits import MAX_HISTORY_VALUES, history_values
 
 LIMITS = CONTRACT["limits"]
 NODE_SRC = (ROOT / "packages" / "server-node" / "src" / "tools.ts").read_text(encoding="utf-8")
@@ -43,7 +44,9 @@ def test_the_limits_are_the_ones_both_runtimes_enforce():
     node_limits = (ROOT / "packages" / "server-node" / "src" / "limits.ts").read_text(
         encoding="utf-8"
     )
-    for name in ("maxNodesPerRead", "maxHistoryValues", "maxSubscriptions"):
+    for name in LIMITS:
+        if name.startswith("$"):
+            continue
         assert f'LIMITS["{name}"]' in python_limits, f"Python does not read limits.{name}"
         assert f"CONTRACT.limits.{name}" in node_limits, f"Node does not read limits.{name}"
 
@@ -59,8 +62,11 @@ def test_the_limits_are_the_ones_both_runtimes_enforce():
     ("limit", "tool"),
     [
         ("maxNodesPerRead", "read_opcua_nodes"),
+        ("maxNodesPerWrite", "write_opcua_nodes"),
+        ("maxMethodArguments", "call_opcua_method"),
         ("maxHistoryValues", "read_opcua_history"),
         ("maxSubscriptions", "subscribe_opcua_nodes"),
+        ("maxEventBufferSize", "subscribe_events"),
     ],
 )
 def test_the_tool_description_quotes_its_limit(limit, tool):
@@ -76,6 +82,48 @@ def test_the_tool_description_quotes_its_limit(limit, tool):
         f"{tool} never mentions limits.{limit} ({LIMITS[limit]}), so a model "
         f"has no way to size a request that will be accepted"
     )
+
+
+@pytest.mark.parametrize(
+    ("limit", "tool", "argument"),
+    [
+        ("maxNodesPerRead", "read_opcua_nodes", "node_ids"),
+        ("maxNodesPerWrite", "write_opcua_nodes", "nodes"),
+        ("maxMethodArguments", "call_opcua_method", "arguments"),
+    ],
+)
+def test_the_schema_ceiling_is_the_limit(limit, tool, argument):
+    """The per-tool counts are written twice in the contract, so they are held equal.
+
+    Once in ``limits``, where the runtimes and the documentation read them, and
+    once as the schema's ``maxItems``, where a model reads them and the validator
+    enforces them (issue #139). A ceiling in one place and not the other is a
+    promise made in one place and kept in the other.
+    """
+    spec = next(entry for entry in CONTRACT["tools"] if entry["name"] == tool)
+    assert spec["inputSchema"]["properties"][argument]["maxItems"] == LIMITS[limit]
+
+
+def test_every_array_argument_has_a_ceiling_of_its_own_or_the_request_wide_one():
+    """No collection input is unbounded (issue #139's first acceptance criterion).
+
+    The three arrays with a per-tool count carry it as ``maxItems``; the others —
+    subscribe's node_ids, bounded by maxSubscriptions at runtime, and
+    unsubscribe's ids — fall under ``maxArrayItems``, which applies to every
+    array in every request. This pins that the list of exceptions does not grow
+    by accident.
+    """
+    unbounded = sorted(
+        f"{tool['name']}.{name}"
+        for tool in CONTRACT["tools"]
+        for name, schema in tool["inputSchema"]["properties"].items()
+        if schema.get("type") == "array" and "maxItems" not in schema
+    )
+    assert unbounded == [
+        "subscribe_opcua_nodes.node_ids",
+        "unsubscribe_opcua_nodes.subscription_ids",
+    ]
+    assert LIMITS["maxArrayItems"] > 0
 
 
 def test_a_raw_history_read_of_everything_is_no_longer_a_thing_that_can_be_asked_for():
@@ -117,5 +165,16 @@ def test_num_values_resolves_as_the_shared_table_says(case):
     "case", TABLE["clipping"], ids=[case["name"] for case in TABLE["clipping"]]
 )
 def test_the_truncation_notice_fires_when_the_shared_table_says(case):
-    clipped = history_was_clipped(_number(case["returned"]), _number(case["wanted"]))
-    assert clipped is case["clipped"]
+    """The notice fires on ``contractLimit``, and only on it.
+
+    Driven through the completeness builder since #137, because that is now
+    where the decision is made; the table and its verdicts are unchanged.
+    """
+    completeness = history_completeness(
+        returned=_number(case["returned"]),
+        fetched=_number(case["returned"]),
+        wanted=_number(case["wanted"]),
+        continuation_point=False,
+        next_start=None,
+    )
+    assert ("contractLimit" in completeness["reasons"]) is case["clipped"]

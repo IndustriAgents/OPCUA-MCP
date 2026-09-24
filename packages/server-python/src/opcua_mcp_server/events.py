@@ -25,12 +25,14 @@ import sys
 import threading
 from base64 import b64decode
 from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 from opcua import ua
 
 from .contract import EVENTS
 from .errors import message
+from .history import continues, release_continuation_point
 from .notices import notice
 from .records import variant_to_json
 
@@ -288,7 +290,7 @@ def read_event_history(
     end,
     num_values: int,
     severity_min: int,
-) -> list[dict]:
+) -> EventHistoryPage:
     """Events the server stored, for a range that has already passed (#117).
 
     ``subscribe_events`` only sees what arrives after it subscribes, so nothing
@@ -309,6 +311,13 @@ def read_event_history(
     Severity is filtered here rather than in a where clause, as the live path
     does, so a server that mishandles a ContentFilter cannot silently drop
     events on us.
+
+    Returns what ``completeness`` needs as well as the records (issue #137): how
+    many events the server sent before the severity filter — a cap is reached by
+    those, not by the survivors — whether it returned a continuation point, and
+    the time of the last one, which is where a forward read resumes. The
+    continuation point itself is released rather than kept; see
+    :mod:`history`.
     """
     details = ua.ReadEventDetails()
     details.StartTime = start
@@ -320,8 +329,30 @@ def read_event_history(
     if not result.StatusCode.is_good():
         raise ValueError(f"Read event history failed with status: {result.StatusCode.name}")
 
-    records = [event_record(event.EventFields) for event in result.HistoryData.Events]
-    return [record for record in records if _severity_at_least(record, severity_min)]
+    continued = continues(result.ContinuationPoint)
+    release_continuation_point(client, node_id, result.ContinuationPoint, details)
+
+    fetched = [event_record(event.EventFields) for event in result.HistoryData.Events]
+    last = fetched[-1]["time"] if fetched else None
+    return EventHistoryPage(
+        records=[record for record in fetched if _severity_at_least(record, severity_min)],
+        fetched=len(fetched),
+        continued=continued,
+        last_time=last if isinstance(last, str) else None,
+    )
+
+
+@dataclass
+class EventHistoryPage:
+    """One event-history read, with what ``completeness`` is built from."""
+
+    records: list[dict]
+    #: Events the server sent, before ``severity_min`` filtered any out.
+    fetched: int
+    #: Whether the server said it holds more.
+    continued: bool
+    #: When the last event the server sent occurred, or None.
+    last_time: str | None
 
 
 def _severity_at_least(record: dict, severity_min: int) -> bool:

@@ -232,6 +232,11 @@ class _Entry:
                 "deadband_value": self.data_filter.deadband_value,
                 "data_change_trigger": self.data_filter.trigger,
                 "changes": list(self.changes),
+                # What the ring buffer discarded, as a field (issue #137). It was
+                # always derivable from change_count, but only by a caller who
+                # knew to subtract — and a trend read from `changes` alone starts
+                # late without saying so.
+                "dropped": self.change_count - len(self.changes),
             }
 
 

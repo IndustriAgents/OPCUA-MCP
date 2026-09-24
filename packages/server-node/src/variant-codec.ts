@@ -1,5 +1,8 @@
 import { DataType, VariantArrayType, coerceNodeId } from "node-opcua-client";
 
+import { ContractRefusal, message } from "./errors.js";
+import { MAX_BYTE_STRING_BYTES } from "./limits.js";
+
 const INTEGER_RANGES = new Map<DataType, [bigint, bigint]>([
   [DataType.SByte, [-128n, 127n]],
   [DataType.Byte, [0n, 255n]],
@@ -42,14 +45,26 @@ function boolean(raw: unknown): boolean {
 }
 
 function bytes(raw: unknown): Buffer {
-  if (Buffer.isBuffer(raw)) return raw;
-  if (
+  let decoded: Buffer;
+  if (Buffer.isBuffer(raw)) {
+    decoded = raw;
+  } else if (
     typeof raw !== "string" ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw)
   ) {
     throw new Error("ByteString values must be standard base64");
+  } else {
+    decoded = Buffer.from(raw, "base64");
   }
-  return Buffer.from(raw, "base64");
+  // A refusal of the request, not a conversion failure of one value: a write
+  // reports a conversion failure as that node's status and sends the rest,
+  // while this has to stop the batch before anything is sent (issue #139).
+  if (decoded.length > MAX_BYTE_STRING_BYTES) {
+    throw new ContractRefusal(
+      message("byteStringTooLong", { size: decoded.length, limit: MAX_BYTE_STRING_BYTES })
+    );
+  }
+  return decoded;
 }
 
 function scalar(raw: unknown, dataType: DataType): unknown {

@@ -163,6 +163,32 @@ class IndustrialControlSystem:
 
         logging.info("Address space setup completed")
 
+    #: The OperationLimits this mock publishes (Part 5 §6.3.11), both below the
+    #: MCP servers' own per-call caps (contract limits: 500 per read, 100 per
+    #: write). python-opcua's default is 10000 for every one, which no client
+    #: limit is ever lower than — so against the default, the path where a
+    #: server's stated limit is the one that binds would never run in the suite.
+    #: python-opcua does not enforce them; they are a statement for clients to
+    #: honour, which is exactly what is being tested (issue #139).
+    MAX_NODES_PER_READ = 100
+    MAX_NODES_PER_WRITE = 50
+
+    def advertise_operation_limits(self):
+        """Publish per-call limits smaller than the MCP servers' own."""
+        for identifier, value in (
+            (
+                ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead,
+                self.MAX_NODES_PER_READ,
+            ),
+            (
+                ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite,
+                self.MAX_NODES_PER_WRITE,
+            ),
+        ):
+            self.server.get_node(ua.NodeId(identifier)).set_value(
+                ua.Variant(value, ua.VariantType.UInt32)
+            )
+
     def historize(self):
         accessHistoryDataCapability = self.server.get_node("ns=0;i=11193")
         accessHistoryDataCapability.set_value(True)
@@ -788,6 +814,7 @@ def main():
 
         # Start the server
         server.start()
+        industrial_system.advertise_operation_limits()
         industrial_system.historize()
         industrial_system.setup_events()
         logging.info(f"OPC UA Server started at {args.endpoint}")

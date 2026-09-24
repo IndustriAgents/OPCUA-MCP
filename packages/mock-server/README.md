@@ -78,6 +78,17 @@ There are no **conditions** here: python-opcua has no condition model, so
 `packages/mock-server-alarms` is the mock for `list_active_alarms` and
 `acknowledge_alarm`.
 
+### 📏 **Operation Limits**
+
+The server publishes `Server/ServerCapabilities/OperationLimits` of
+**MaxNodesPerRead = 100** and **MaxNodesPerWrite = 50** — deliberately below the
+MCP servers' own per-call caps (500 and 100), so the suite exercises the path
+where the plant's stated limit is the one that binds: reads are sent in chunks of
+100, and a write of more than 50 nodes is refused before anything is sent.
+python-opcua's default is 10000 for every limit, which never binds. The limits
+are published, not enforced — python-opcua does not police them — so what is
+tested is that clients honour them.
+
 ## Installation
 
 1. Ensure you have Python 3.10+ installed

@@ -136,6 +136,7 @@ def test_subscribe_returns_the_contract_record():
         "deadband_value": 0.0,
         "data_change_trigger": "statusValue",
         "changes": [],
+        "dropped": 0,
     }
 
 
@@ -222,6 +223,8 @@ def test_the_buffer_keeps_the_newest_changes_and_counts_them_all():
     record = manager.list()[0]
     assert record["change_count"] == 3
     assert [change["value"] for change in record["changes"]] == [2.0, 3.0]
+    # And says what it discarded, rather than leaving a caller to subtract (#137).
+    assert record["dropped"] == 1
 
 
 def test_close_all_deletes_every_subscription_and_empties_the_list():

@@ -33,6 +33,16 @@ Three of them were added later, and each closes a hole the six original ones lef
     stay clamps rather than refusals: they are documented caps on how much work
     one call may ask for, and the result says when one was hit.
 
+And one for issue #139:
+
+``maxItems``
+    ``write_opcua_nodes`` declared a ``minItems`` and no ceiling, so a batch of
+    any length reached the plant. The per-call counts in ``contract/tools.json``
+    -> ``limits`` are now written into the schemas, where a model reads them,
+    and enforced here, where the call is refused before anything is sent. The
+    request-wide bounds — size, string length, array length, nesting — are
+    :func:`limits.check_request_bounds`, which runs before this does.
+
 Why check at all, when each server already has a schema-shaped thing of its own:
 the Node runtime had none (the low-level MCP ``Server`` does not validate against
 the advertised ``inputSchema``), so a malformed call reached ``node-opcua`` as
@@ -58,6 +68,7 @@ SUPPORTED_KEYWORDS = frozenset(
         "properties",
         "required",
         "minItems",
+        "maxItems",
         "description",
         "additionalProperties",
         "enum",
@@ -203,6 +214,11 @@ def _check_value(tool: str, schema: dict, value: Any, path: str) -> None:
             # trips over: an empty list is a well-formed array and a meaningless
             # request, and "must be a non-empty array" says what to do about it.
             raise ValueError(message("emptyArray", tool=tool, argument=path))
+        maximum = schema.get("maxItems")
+        if maximum is not None and len(value) > maximum:
+            raise ValueError(
+                message("tooManyItems", tool=tool, argument=path, limit=maximum, count=len(value))
+            )
         items = schema.get("items")
         if items is not None:
             for index, element in enumerate(value):

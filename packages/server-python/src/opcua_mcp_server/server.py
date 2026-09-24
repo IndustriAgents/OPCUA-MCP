@@ -28,6 +28,12 @@ from .capabilities import (
     client_supports_history,
     client_supports_history_events,
 )
+from .completeness import (
+    buffer_completeness,
+    drain_completeness,
+    history_completeness,
+    traversal_completeness,
+)
 from .config import describe_reconnect, reconnect_config
 from .connection import (
     OpcuaConnection,
@@ -40,15 +46,26 @@ from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .errors import message as error_message
+from .history import continues, raw_details, release_continuation_point
 from .limits import (
-    MAX_NODES_PER_READ,
+    MAX_HISTORY_VALUES,
     MAX_SUBSCRIPTIONS,
+    LimitExceeded,
+    aggregate_intervals,
+    check_request_bounds,
+    chunked,
+    event_buffer_size,
     history_values,
-    history_was_clipped,
 )
 from .node_ids import canonical_node_id
 from .node_metadata import AnalogInfo
 from .notices import notice
+from .operation_limits import (
+    browse_chunk,
+    read_chunk,
+    read_operation_limits,
+    write_limit,
+)
 from .policy import (
     ValueBound,
     as_number,
@@ -304,6 +321,10 @@ def _probe_capabilities(state: ServerState, client) -> bool:
     capabilities["history"] = _probe(client_supports_history, client, False)
     capabilities["history_events"] = _probe(client_supports_history_events, client, False)
     capabilities["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
+    # Read with the capabilities because it changes when they do — on a new
+    # session — and a tool that needs it can then use it without a round trip.
+    state.operation_limits = read_operation_limits(client)
+    state.node_metadata.server_limits = dict(state.operation_limits)
     return before != snapshot()
 
 
@@ -500,6 +521,12 @@ class PolicyMCPServer(MCPServer):
                     "required": ["result"],
                     "additionalProperties": False,
                 }
+                # Beside `result`, for a tool that can return fewer records than
+                # it was asked for (issue #137). `outputSchema` in tools.ts builds
+                # the same object.
+                if spec.get("reportsCompleteness"):
+                    output_schema["properties"]["completeness"] = CONTRACT["completeness"]["schema"]
+                    output_schema["required"] = ["result", "completeness"]
             visible.append(
                 tool.model_copy(
                     update={
@@ -524,6 +551,12 @@ class PolicyMCPServer(MCPServer):
             # aimed at. `MCPServer` would validate later, against the looser
             # signature-derived schema, and word it differently from the Node
             # runtime; this is the contract's own schema on both.
+            #
+            # Size before shape: the validator's work grows with the request, and
+            # this stops at the first thing out of bounds (issue #139). A
+            # `LimitExceeded` is a `ValueError`, so it is refused and audited
+            # exactly as a malformed call is. See limits.py.
+            check_request_bounds(name, arguments)
             validate_arguments(name, spec["inputSchema"], arguments)
             # Before the policy and the audit trail read the session, not merely
             # before the request goes out. `get_server_status` is the exception:
@@ -734,27 +767,82 @@ def _node_value_record(
     }
 
 
-def _history_result(records: list[dict], wanted: int) -> Any:
-    """History records, with a notice when the call hit the per-call maximum.
+def _records_result(
+    records: list[dict], completeness: dict | None = None, text: str | None = None
+) -> CallToolResult:
+    """Records, one text block each, and whether they are all of them.
 
-    A trailing plain-text block rather than a field, because ``historyRecords``
-    is an array of readings and a truncation flag is not a reading — the same
-    shape and the same reason ``read_events`` reports dropped events this way.
-    Outside ``structuredContent`` for the same reason.
+    The same framing ``MCPServer`` gives a returned list — one block per record
+    and ``{"result": [...]}`` — built by hand because ``completeness`` sits
+    beside ``result`` (issue #137), never inside it: ``result`` stays the array
+    every existing client already reads. ``recordBlocks`` in tools.ts is the
+    Node half.
 
-    Only when the cap itself was reached: a caller who asked for 10 and got 10
-    has what they asked for.
+    ``text`` is a notice for a reader that only has the text, repeating what
+    ``completeness`` says. Only for a loss the caller did not choose — this
+    server's cap, the OPC UA server's, or a full buffer — never for a count the
+    caller asked for and got: telling someone who asked for 10 readings that
+    there may be more would be noise on every small read.
     """
-    if not history_was_clipped(len(records), wanted):
-        return records
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
-        + [TextContent(type="text", text=notice("historyTruncated", count=len(records)))],
-        structured_content={"result": records},
-    )
+    content = [TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
+    if text is not None:
+        content.append(TextContent(type="text", text=text))
+    structured: dict[str, Any] = {"result": records}
+    if completeness is not None:
+        structured["completeness"] = completeness
+    return CallToolResult(content=content, structured_content=structured)
 
 
-def _object_result(record: Any) -> CallToolResult:
+def _history_result(records: list[dict], completeness: dict, cap_notice: str) -> CallToolResult:
+    """History records (``resultShapes.historyRecords``), and whether they are all.
+
+    The notice for a capped read predates ``completeness`` and is kept for
+    text-only readers, and fires exactly when it always did: when this server's
+    own cap was reached, which is ``contractLimit``. The count it names is the
+    cap rather than the records returned — an event-history read reaches its cap
+    on what the server sent, and ``severity_min`` may have kept fewer.
+    """
+    text = None
+    if "contractLimit" in completeness["reasons"]:
+        count = completeness["limit"] if completeness["limit"] is not None else len(records)
+        text = notice(cap_notice, count=count)
+    elif "serverLimit" in completeness["reasons"]:
+        text = notice("serverTruncated", count=completeness["returned"])
+    return _records_result(records, completeness, text)
+
+
+def _forward_from(start: datetime | None, end: datetime | None, last: Any) -> str | None:
+    """Where a truncated history read resumes, or None when its arguments cannot say.
+
+    Only a forward read can be continued with ``start_time``: a start was given
+    and the range runs up from it. Without one, an OPC UA server reads backwards
+    from the end, newest first (Part 11 §6.4.3.2), and the rest of the answer is
+    then *older* records — which no start_time asks for. The last record's own
+    timestamp is the resume point, inclusive, so a boundary record repeats
+    rather than being lost. ``forwardFrom`` in tools.ts is the other half.
+    """
+    if start is None or (end is not None and end <= start):
+        return None
+    return last if isinstance(last, str) else None
+
+
+def _read_values(client: Any, node_ids: list[Any], attribute: Any, chunk: int) -> list[Any]:
+    """One logical read, sent as consecutive Reads of at most ``chunk`` nodes.
+
+    Sequential rather than in parallel: the chunking exists because the server
+    said how much one request may carry, and firing every chunk at once would
+    put the same load on it in a different envelope. The results are
+    concatenated in the order asked, so each node keeps its own status in its
+    own place (issue #139).
+    """
+    return [
+        value
+        for part in chunked(node_ids, chunk)
+        for value in client.uaclient.get_attributes(part, attribute)
+    ]
+
+
+def _object_result(record: Any, completeness: dict | None = None) -> CallToolResult:
     """A result that is one object rather than a list of records.
 
     One text block and a ``result`` that is the object itself. Used by every
@@ -762,9 +850,12 @@ def _object_result(record: Any) -> CallToolResult:
     one ``truncated`` flag for the whole walk, a method call has one result, and
     a status report is one report. The Node server frames these identically.
     """
+    structured: dict[str, Any] = {"result": record}
+    if completeness is not None:
+        structured["completeness"] = completeness
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(record, indent=2))],
-        structured_content={"result": record},
+        structured_content=structured,
     )
 
 
@@ -778,6 +869,11 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
     Parameters:
         node_ids (list[str]): The node IDs to read. Example: ['ns=2;i=2', 'ns=2;i=3'].
 
+    More than ``limits.maxNodesPerRead`` is refused by the input schema's
+    ``maxItems`` before this runs: a short list of readings is indistinguishable
+    from a complete one, so the list is never quietly cut. A server whose
+    MaxNodesPerRead is lower gets the list in consecutive Reads instead.
+
     Returns:
         list[dict]: One record per node, shaped by `contract/tools.json` ->
             `resultShapes.nodeValues`. A node the server rejects is one 'Bad…'
@@ -786,24 +882,11 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
     """
     if not node_ids:
         raise ToolError(error_message("emptyArray", tool="read_opcua_nodes", argument="node_ids"))
-    if len(node_ids) > MAX_NODES_PER_READ:
-        # Refused, not truncated: a short list of readings is indistinguishable
-        # from a complete one, and dropping nodes from a read is the kind of
-        # quiet wrong answer the browse caps exist to prevent.
-        raise ToolError(
-            error_message(
-                "tooManyNodes",
-                tool="read_opcua_nodes",
-                limit=MAX_NODES_PER_READ,
-                count=len(node_ids),
-            )
-        )
     client = ctx.request_context.lifespan_context["opcua_client"]
+    chunk = read_chunk(_state(ctx).operation_limits)
     try:
         nodes = [client.get_node(node_id) for node_id in node_ids]
-        values = client.uaclient.get_attributes(
-            [node.nodeid for node in nodes], ua.AttributeIds.Value
-        )
+        values = _read_values(client, [node.nodeid for node in nodes], ua.AttributeIds.Value, chunk)
         # Two extra round trips on a cold cache for the whole batch, none on a
         # warm one, and never a reason for the read to fail. See node_metadata.
         engineering = _state(ctx).node_metadata.for_nodes(client, node_ids)
@@ -823,7 +906,7 @@ def read_opcua_history(
     num_values: int = 0,
     aggregate_function: str | None = None,
     processing_interval: float = 0,
-) -> list[dict]:
+) -> CallToolResult:
     """
     Read a node's stored history, raw or summarised by a server-side aggregate.
 
@@ -832,8 +915,8 @@ def read_opcua_history(
     one tool whose ``aggregate_function`` argument decides which is sent.
 
     Returns:
-        list[dict]: One record per reading or interval, shaped by
-            ``resultShapes.historyRecords``.
+        CallToolResult: One record per reading or interval, shaped by
+            ``resultShapes.historyRecords``, and ``completeness`` beside them.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
 
@@ -843,12 +926,29 @@ def read_opcua_history(
         # caps beside it have always been refusals rather than tuning knobs.
         wanted = history_values(num_values)
         try:
-            values = client.get_node(node_id).read_raw_history(
-                parse_iso_datetime(start_time),
-                parse_iso_datetime(end_time),
-                wanted,
+            start = parse_iso_datetime(start_time)
+            end = parse_iso_datetime(end_time)
+            # What `Node.read_raw_history` sends, through the call that keeps the
+            # continuation point it throws away; see history.py.
+            details = raw_details(start, end, wanted)
+            result = client.get_node(node_id).history_read(details)
+            result.StatusCode.check()
+            continued = continues(result.ContinuationPoint)
+            release_continuation_point(client, node_id, result.ContinuationPoint, details)
+            records = history_records(result.HistoryData.DataValues)
+            return _history_result(
+                records,
+                history_completeness(
+                    returned=len(records),
+                    fetched=len(records),
+                    wanted=wanted,
+                    continuation_point=continued,
+                    next_start=_forward_from(
+                        start, end, records[-1]["timestamp"] if records else None
+                    ),
+                ),
+                "historyTruncated",
             )
-            return _history_result(history_records(values), wanted)
         except Exception as e:
             raise ToolError(
                 error_message("historyFailed", node_id=node_id, reason=describe_error(e))
@@ -876,14 +976,54 @@ def read_opcua_history(
         details.ProcessingInterval = processing_interval
         details.AggregateType = [aggregate_functions[aggregate_function]]
 
+        # The number of results is decided by `processing_interval` over the
+        # range, which is the whole point of asking for one — it is how to see a
+        # week without transferring a week. It is still a number of records,
+        # though, and a millisecond interval over a year is billions of them; so
+        # it is bounded by the same cap as a raw read, and refused before it is
+        # sent.
+        intervals = aggregate_intervals(
+            details.StartTime.timestamp() * 1000,
+            details.EndTime.timestamp() * 1000,
+            processing_interval,
+        )
+        if intervals > MAX_HISTORY_VALUES:
+            raise LimitExceeded(
+                error_message(
+                    "tooManyIntervals",
+                    tool="read_opcua_history",
+                    count=intervals,
+                    processing_interval=format_number(processing_interval),
+                    limit=MAX_HISTORY_VALUES,
+                )
+            )
+
         result = client.get_node(node_id).history_read(details)
         if not result.StatusCode.is_good():
             raise ValueError(f"Read aggregate failed with status: {result.StatusCode.name}")
-
-        # No cap on an aggregate read: the number of results is decided by
-        # `processing_interval` over the range, which is the whole point of
-        # asking for one — it is how to see a week without transferring a week.
-        return history_records(result.HistoryData.DataValues)
+        continued = continues(result.ContinuationPoint)
+        release_continuation_point(client, node_id, result.ContinuationPoint, details)
+        records = history_records(result.HistoryData.DataValues)
+        # No count was asked for, so only the server can have cut this short.
+        # Where it resumes is the interval after the last one returned, which is
+        # not a timestamp this server should compute and round on the caller's
+        # behalf — so there is no `continuation`, and `serverTruncated` says to
+        # narrow.
+        return _history_result(
+            records,
+            history_completeness(
+                returned=len(records),
+                fetched=len(records),
+                wanted=None,
+                continuation_point=continued,
+                next_start=None,
+            ),
+            "historyTruncated",
+        )
+    except LimitExceeded as e:
+        # A refusal of the request never reached the server, so it did not fail
+        # to be read — and wrapping it would say it had.
+        raise ToolError(str(e)) from e
     except Exception as e:
         raise ToolError(
             error_message("historyFailed", node_id=node_id, reason=describe_error(e))
@@ -902,7 +1042,7 @@ def read_event_history(
     end_time: str | None = None,
     num_values: int = 0,
     severity_min: int = events.DEFAULTS["severityMin"],
-) -> list[dict]:
+) -> CallToolResult:
     """
     Read the events the server stored, for a range that has already passed.
 
@@ -912,8 +1052,9 @@ def read_event_history(
     identical whether it was seen live or recovered afterwards.
 
     Returns:
-        list[dict]: One record per event, shaped by the shared
-            ``resultShapes.eventRecords`` in ``contract/tools.json``.
+        CallToolResult: One record per event, shaped by the shared
+            ``resultShapes.eventRecords`` in ``contract/tools.json``, and
+            ``completeness`` beside them.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
     end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
@@ -926,11 +1067,22 @@ def read_event_history(
     # that never returns.
     wanted = history_values(num_values)
     try:
-        return events.read_event_history(client, node_id, start, end, wanted, severity_min)
+        page = events.read_event_history(client, node_id, start, end, wanted, severity_min)
     except Exception as e:
         raise ToolError(
             error_message("eventHistoryFailed", node_id=node_id, reason=describe_error(e))
         ) from e
+    return _history_result(
+        page.records,
+        history_completeness(
+            returned=len(page.records),
+            fetched=page.fetched,
+            wanted=wanted,
+            continuation_point=page.continued,
+            next_start=_forward_from(start, end, page.last_time),
+        ),
+        "eventHistoryTruncated",
+    )
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
@@ -1143,7 +1295,7 @@ def type_definition_of(is_good: bool, browse_names: list[str]) -> str | None:
     return browse_names[0] or None
 
 
-def _fill_type_definitions(client, records: list[dict]) -> None:
+def _fill_type_definitions(client, records: list[dict], server_limits: dict) -> None:
     """Fill in ``type_definition`` for ``records``, in one batched browse.
 
     ``HasTypeDefinition`` is non-hierarchical, so the traversal's own browse —
@@ -1173,8 +1325,9 @@ def _fill_type_definitions(client, records: list[dict]) -> None:
 
     # Chunked for the same reason the property reads are: MaxNodesPerBrowse is
     # an operational limit a conformant server may enforce, and the default walk
-    # already returns up to 500 nodes.
-    size = _TRAVERSAL["maxTypeDefinitionsPerRequest"]
+    # already returns up to 500 nodes. A server that states a lower one gets
+    # smaller chunks.
+    size = browse_chunk(server_limits, _TRAVERSAL["maxTypeDefinitionsPerRequest"])
     for start in range(0, len(descriptions), size):
         chunk = descriptions[start : start + size]
         params = ua.BrowseParameters()
@@ -1192,7 +1345,7 @@ def _fill_type_definitions(client, records: list[dict]) -> None:
             )
 
 
-def _fill_variable_detail(client, records: list[dict]) -> None:
+def _fill_variable_detail(client, records: list[dict], server_limits: dict) -> None:
     """Fill in value, data type and description for the Variables among ``records``.
 
     One batched read of each attribute rather than three reads per node: a
@@ -1203,9 +1356,10 @@ def _fill_variable_detail(client, records: list[dict]) -> None:
     if not variables:
         return
     node_ids = [client.get_node(record["node_id"]).nodeid for record in variables]
+    chunk = read_chunk(server_limits)
     try:
-        values = client.uaclient.get_attributes(node_ids, ua.AttributeIds.Value)
-        descriptions = client.uaclient.get_attributes(node_ids, ua.AttributeIds.Description)
+        values = _read_values(client, node_ids, ua.AttributeIds.Value, chunk)
+        descriptions = _read_values(client, node_ids, ua.AttributeIds.Description, chunk)
     except Exception:
         # Best-effort enrichment: the nodes were found, and reporting them
         # without their values beats failing a browse that succeeded.
@@ -1271,6 +1425,7 @@ def browse_opcua_nodes(
         found: list[dict] = []
         inspected = 0
         truncated = False
+        unbrowsable = False
 
         # `depth: 0` is "tell me about this node and nothing else" — which is how
         # a browse_path is turned into a node id without also listing everything
@@ -1291,9 +1446,12 @@ def browse_opcua_nodes(
                     # The root failing is the caller's problem; a node deeper in
                     # may simply be one this session cannot read, and stopping
                     # the whole walk for it would make a large browse hostage to
-                    # its worst node.
+                    # its worst node. It is still a gap in the answer, and
+                    # `completeness` says so rather than letting "could not list"
+                    # pass for "has no children".
                     if current_id == root:
                         raise
+                    unbrowsable = True
                     continue
 
                 for reference in references:
@@ -1335,10 +1493,19 @@ def browse_opcua_nodes(
         # Unconditional, unlike the variable detail: the type is what the record
         # *is*, not extra reading about its value, and it costs one batched
         # browse however many nodes were found.
-        _fill_type_definitions(client, found)
+        server_limits = _state(ctx).operation_limits
+        _fill_type_definitions(client, found, server_limits)
         if include_values:
-            _fill_variable_detail(client, found)
-        return _object_result({"nodes": found, "truncated": truncated, "inspected": inspected})
+            _fill_variable_detail(client, found, server_limits)
+        return _object_result(
+            {"nodes": found, "truncated": truncated, "inspected": inspected},
+            traversal_completeness(
+                returned=len(found),
+                truncated=truncated,
+                max_nodes=max_nodes,
+                unbrowsable=unbrowsable,
+            ),
+        )
     except Exception as e:
         raise ToolError(
             error_message("browseFailed", node_id=root, reason=describe_error(e))
@@ -1357,6 +1524,14 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     type is exactly what such a node refuses (issue #9). The rest are read first,
     in one batch, and converted to the type the server reports.
 
+    The whole batch goes out as one Write, and that is a promise rather than an
+    accident (issue #139). A batch over the server's MaxNodesPerWrite is refused
+    here, before anything is read or sent, instead of being split: OPC UA lets
+    one Write partially succeed already, and splitting would add a failure where
+    the first part has moved the plant and the second never arrives — which
+    ``uncertainOutcome`` could not then describe. ``limits.maxNodesPerWrite`` is
+    the schema's ``maxItems``, enforced before this runs.
+
     Returns:
         list[dict]: One record per node, in the order asked, shaped by
             ``resultShapes.writeResults``. A node the server rejects is one
@@ -1367,6 +1542,13 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     client = ctx.request_context.lifespan_context["opcua_client"]
     state = _state(ctx)
+    limit = write_limit(state.operation_limits)
+    if len(nodes) > limit:
+        raise ToolError(
+            error_message(
+                "tooManyWritesForServer", tool="write_opcua_nodes", count=len(nodes), limit=limit
+            )
+        )
     policy = state.policy
     bounds = {
         index: policy.bound_for(str(node.get("node_id", ""))) for index, node in enumerate(nodes)
@@ -1396,9 +1578,11 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         )
         current: dict[int, Any] = {}
         if needs_current:
-            read = client.uaclient.get_attributes(
+            read = _read_values(
+                client,
                 [client.get_node(nodes[index]["node_id"]).nodeid for index in needs_current],
                 ua.AttributeIds.Value,
+                read_chunk(state.operation_limits),
             )
             current = dict(zip(needs_current, read, strict=True))
 
@@ -1436,6 +1620,12 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
                 write_ids.append(client.get_node(node["node_id"]).nodeid)
                 write_values.append(ua.DataValue(ua.Variant(converted, variant_type)))
                 write_indices.append(index)
+            except LimitExceeded as e:
+                # A value this server refuses to send at all — a ByteString over
+                # limits.maxByteStringBytes — stops the batch rather than
+                # becoming one node's status: nothing has been sent yet, and
+                # nothing should be.
+                raise ToolError(str(e)) from e
             except Exception as e:
                 results[index] = {
                     "node_id": results[index]["node_id"],
@@ -1661,6 +1851,10 @@ def call_opcua_method(
                 "outputs": [scalar_to_json(output) for output in outputs],
             }
         )
+    except LimitExceeded as e:
+        # Refused before the call was sent, so it did not fail: wrapping it in
+        # "Failed to call method" would say the plant had turned it down.
+        raise ToolError(str(e)) from e
     except Exception as e:
         raise ToolError(
             error_message(
@@ -1684,13 +1878,13 @@ async def subscribe_opcua_nodes(
     deadband_type: str | None = None,
     deadband_value: float | None = None,
     data_change_trigger: str | None = None,
-) -> list[dict]:
+) -> CallToolResult:
     """
     Watch one or more OPC UA nodes for value changes instead of polling them.
 
     Returns:
-        list[dict]: One record per new subscription, shaped by
-            ``resultShapes.subscriptionRecords``.
+        CallToolResult: One record per new subscription, shaped by
+            ``resultShapes.subscriptionRecords``, and ``completeness``.
     """
     if not node_ids:
         raise ToolError(
@@ -1748,24 +1942,33 @@ async def subscribe_opcua_nodes(
             raise ToolError(
                 error_message("subscribeFailed", node_id=node_id, reason=describe_error(e))
             ) from e
-    return records
+    return _subscription_result(records)
 
 
-def list_subscriptions(ctx: Context) -> list[dict]:
+def _subscription_result(records: list[dict]) -> CallToolResult:
+    """The subscription family's records, and the changes their buffers dropped.
+
+    Each record carries its own ring buffer's ``dropped``; ``completeness``
+    totals them so one field answers for the whole result (issue #137).
+    """
+    return _records_result(records, buffer_completeness(records))
+
+
+def list_subscriptions(ctx: Context) -> CallToolResult:
     """
     List the active OPC UA data-change subscriptions and their buffered changes.
 
     Returns:
-        list[dict]: One record per active subscription, shaped by
-            `contract/tools.json` -> `resultShapes.subscriptionRecords`. An empty
-            list when nothing is subscribed.
+        CallToolResult: One record per active subscription, shaped by
+            `contract/tools.json` -> `resultShapes.subscriptionRecords`, and
+            ``completeness``. No records when nothing is subscribed.
     """
     # No thread hop and no OPC UA call: this reads buffers already filled by
     # python-opcua's publishing thread, so it answers even if the server is down.
-    return _state(ctx).subscriptions.list()
+    return _subscription_result(_state(ctx).subscriptions.list())
 
 
-async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> list[dict]:
+async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> CallToolResult:
     """
     Cancel one or more subscriptions, reporting each as it was when cancelled.
 
@@ -1774,9 +1977,9 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> 
     gone, and their buffered changes would be lost to a typo.
 
     Returns:
-        list[dict]: The cancelled subscriptions, shaped by
+        CallToolResult: The cancelled subscriptions, shaped by
             ``resultShapes.subscriptionRecords``, so anything still buffered can
-            be read one last time.
+            be read one last time, and ``completeness``.
     """
     if not subscription_ids:
         raise ToolError(
@@ -1799,7 +2002,7 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> 
             # The OPC UA server refused the delete. Already worded for the caller
             # by `delete_failed_message`, and shared with the Node server.
             raise ToolError(str(e)) from e
-    return records
+    return _subscription_result(records)
 
 
 # --- events and Alarms & Conditions -----------------------------------------------
@@ -1819,10 +2022,12 @@ def subscribe_events(
             reports the clamped values actually in force and whether an existing
             subscription was replaced.
     """
-    # 0 means "unset" for a size, as it does everywhere else in both servers:
-    # the Node side gets this from `||`, and a buffer that keeps nothing would be
-    # a strange thing to have asked for.
-    buffer_size = buffer_size or events.DEFAULTS["bufferSize"]
+    # 0 means "unset" for a size, as it does everywhere else in both servers,
+    # and a buffer that keeps nothing would be a strange thing to have asked for.
+    # Clamped, and reported as clamped: the buffer is memory this process holds
+    # for as long as the subscription lives, and "as many as you like" was a
+    # request with no ceiling at all (issue #139).
+    buffer_size = event_buffer_size(buffer_size)
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
         replaced = _state(ctx).events.subscribe(client, node_id, severity_min, buffer_size)
@@ -1849,19 +2054,25 @@ def read_events(
     Read and drain the events buffered by subscribe_events.
 
     Returns:
-        CallToolResult: Event records in text and structured form, plus a
-            plain-text compatibility notice when the buffer overflowed.
+        CallToolResult: Event records in text and structured form, with
+            ``completeness`` beside them, plus a plain-text compatibility notice
+            when the buffer overflowed.
     """
-    drained = _state(ctx).events.drain(node_id, limit or events.DEFAULTS["readLimit"])
+    limit = limit or events.DEFAULTS["readLimit"]
+    drained = _state(ctx).events.drain(node_id, limit)
     if drained is None:
         raise ToolError(error_message("notSubscribedToEvents", node_id=node_id))
-    records, _remaining, dropped, size = drained
-    content = [TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
-    if dropped:
-        # The notice remains visible to models in compatibility content, but is
-        # not an event record and therefore stays outside structuredContent.
-        content.append(TextContent(type="text", text=events.dropped_events_message(dropped, size)))
-    return CallToolResult(content=content, structured_content={"result": records})
+    records, remaining, dropped, size = drained
+    # In the response, not only on stderr: an agent that cannot tell a complete
+    # event stream from one that lost alarms reads the gap as quiet. As a field
+    # since issue #137, and as a sentence still for a reader of the text alone.
+    return _records_result(
+        records,
+        drain_completeness(
+            returned=len(records), limit=limit, remaining=remaining, dropped=dropped
+        ),
+        events.dropped_events_message(dropped, size) if dropped else None,
+    )
 
 
 def list_active_alarms(

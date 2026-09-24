@@ -187,3 +187,37 @@ async def test_aggregate_rejects_unknown_function(agg_server):
     assert "Invalid aggregate function" in text, f"{impl}: unexpected error: {text}"
     assert "Average" in text, f"{impl}: supported functions not listed: {text}"
     assert result.is_error is True, f"{impl}: expected an error result"
+
+
+async def test_an_aggregate_over_too_many_intervals_is_refused_identically(aggregate_opcua_server):
+    """A millisecond interval over an hour is 3.6 million records: refused, not sent.
+
+    The number of intervals is what the server would have to compute and send
+    back, so it is held to the same cap as a raw read (issue #139). Both runtimes
+    must say so in the same words, before the request reaches the server.
+    """
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    arguments = {
+        "node_id": AGGREGATE_NODE_ID,
+        "start_time": "2026-01-01T00:00:00Z",
+        "end_time": "2026-01-01T01:00:00Z",
+        "aggregate_function": "Average",
+        "processing_interval": 1,
+    }
+    refusals = {}
+    for impl in ("python", "node"):
+        async with connect(_server_params(impl, aggregate_opcua_server)) as session:
+            result = await session.call_tool(AGGREGATE_TOOL, arguments)
+        assert result.is_error, f"{impl}: 3.6 million intervals were asked for"
+        refusals[impl] = text_of(result)
+    assert (
+        refusals["python"]
+        == refusals["node"]
+        == (
+            "read_opcua_history would ask the OPC UA server for 3600000 intervals of 1 ms over "
+            "that range, over the 5000-interval limit on one aggregate read "
+            "(limits.maxHistoryValues). Nothing was sent. Widen processing_interval or narrow "
+            "start_time/end_time."
+        )
+    ), refusals

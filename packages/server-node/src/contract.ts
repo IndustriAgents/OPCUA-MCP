@@ -43,6 +43,9 @@ export interface ToolSpec {
   description: string;
   inputSchema: any;
   resultShape?: string;
+  /** Whether the result can be partial, and so carries `completeness` beside
+   *  `result`; see completeness.ts. */
+  reportsCompleteness?: boolean;
   guard?: ToolGuard;
   annotations: {
     readOnlyHint: boolean;
@@ -133,7 +136,28 @@ export const CONTRACT: {
   /** Message templates for notices added beside a result; see notices.ts. */
   notices: Record<string, string>;
   /** How much one call may ask for. Refusals, not tuning knobs. */
-  limits: { maxNodesPerRead: number; maxHistoryValues: number; maxSubscriptions: number };
+  limits: {
+    maxNodesPerRead: number;
+    maxNodesPerWrite: number;
+    maxMethodArguments: number;
+    maxHistoryValues: number;
+    maxSubscriptions: number;
+    maxEventBufferSize: number;
+    maxRequestBytes: number;
+    maxStringBytes: number;
+    maxByteStringBytes: number;
+    maxArrayItems: number;
+    maxNestingDepth: number;
+  };
+  /** Where the OPC UA server publishes its own per-call limits; see operation-limits.ts. */
+  operationLimits: {
+    maxNodesPerRead: string;
+    maxNodesPerWrite: string;
+    maxNodesPerBrowse: string;
+    maxNodesPerTranslateBrowsePathsToNodeIds: string;
+  };
+  /** The shape every partial-capable result carries beside `result`; see completeness.ts. */
+  completeness: { schema: any; reasons: Record<string, string> };
   /** What the OPC UA server on the other end may send us; see transport-limits.ts. */
   transport: { maxChunkCount: number; maxChunkSize: number; maxMessageSize: number };
   resources: Array<{

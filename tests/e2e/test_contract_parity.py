@@ -187,12 +187,20 @@ async def test_servers_match_contract(impl_params):
         )
 
         if shape_name := spec.get("resultShape"):
-            assert tool.output_schema == {
+            expected = {
                 "type": "object",
                 "properties": {"result": RESULT_SHAPES[shape_name]},
                 "required": ["result"],
                 "additionalProperties": False,
-            }, f"{impl}/{name}: outputSchema differs from the shared result shape"
+            }
+            # A tool that can be partial also declares `completeness` beside
+            # `result` (issue #137), from the one schema in the contract.
+            if spec.get("reportsCompleteness"):
+                expected["properties"]["completeness"] = CONTRACT["completeness"]["schema"]
+                expected["required"] = ["result", "completeness"]
+            assert tool.output_schema == expected, (
+                f"{impl}/{name}: outputSchema differs from the shared result shape"
+            )
 
 
 #: Tools this mock cannot exercise, with the reason. Named rather than omitted,
@@ -297,6 +305,15 @@ async def test_every_tool_output_matches_its_declared_shape(impl_params):
             body = payload["result"]
             records = body if isinstance(body, list) else [body]
             assert_matches_result_shape(records, shape_name, f"{impl}/{name}")
+            # And the completeness object, on exactly the tools that declare it.
+            if spec.get("reportsCompleteness"):
+                _assert_matches_object(
+                    payload.get("completeness"),
+                    CONTRACT["completeness"]["schema"],
+                    f"{impl}/{name}.completeness",
+                )
+            else:
+                assert "completeness" not in payload, f"{impl}/{name}: undeclared completeness"
 
             # The compatibility text blocks must carry the same records, so a
             # client reading either one sees the same answer. `eventRecords` is
@@ -325,6 +342,15 @@ async def test_a_browse_reports_whether_it_was_cut_short(impl_params):
     clipped_body = clipped.structured_content["result"]
     assert clipped_body["truncated"] is True, f"{impl}: a clipped browse must say so"
     assert clipped_body["inspected"] <= 2, f"{impl}: max_nodes was not honoured"
+
+    # And the shared completeness object says the same thing (issue #137), so a
+    # client can test one field whichever tool it called.
+    assert complete.structured_content["completeness"]["complete"] is True, f"{impl}"
+    clipped_completeness = clipped.structured_content["completeness"]
+    assert clipped_completeness["complete"] is False, clipped_completeness
+    assert clipped_completeness["reasons"] == ["requestLimit"], clipped_completeness
+    assert clipped_completeness["limit"] == 2 and clipped_completeness["remaining"] is True
+    assert clipped_completeness["returned"] == len(clipped_body["nodes"])
 
 
 async def test_a_browse_path_resolves_to_the_same_node_id_on_both(impl_params):

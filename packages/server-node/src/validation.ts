@@ -29,6 +29,13 @@
  *   *ceilings* stay clamps rather than refusals: they are documented caps on how
  *   much work one call may ask for, and the result says when one was hit.
  *
+ * And one for issue #139: `maxItems`. `write_opcua_nodes` declared a `minItems`
+ * and no ceiling, so a batch of any length reached the plant; the per-call counts
+ * in `contract/tools.json` -> `limits` are now written into the schemas, where a
+ * model reads them, and enforced here, where the call is refused before anything
+ * is sent. The request-wide bounds — size, string length, array length, nesting
+ * — are `checkRequestBounds` in `limits.ts`, which runs before this does.
+ *
  * Why check at all: this runtime had no validation whatsoever. The low-level MCP
  * `Server` does not check `arguments` against the advertised `inputSchema`, and
  * `dispatch` cast straight off the wire (`args.node_ids as string[]`), so a
@@ -181,6 +188,16 @@ function checkValue(tool: string, schema: any, value: unknown, path: string): vo
       // over: an empty list is a well-formed array and a meaningless request,
       // and "must be a non-empty array" says what to do about it.
       throw new Error(message("emptyArray", { tool, argument: path }));
+    }
+    if (schema.maxItems !== undefined && list.length > schema.maxItems) {
+      throw new Error(
+        message("tooManyItems", {
+          tool,
+          argument: path,
+          limit: schema.maxItems,
+          count: list.length,
+        })
+      );
     }
     // `items: {}` is truthy here and falsy in Python; compare against undefined
     // on both sides so the two halves take the same route, not merely reach the

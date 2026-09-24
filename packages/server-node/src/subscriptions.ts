@@ -51,6 +51,7 @@ export interface SubscriptionRecord {
   deadband_value: number;
   data_change_trigger: string;
   changes: HistoryRecord[];
+  dropped: number;
 }
 
 export interface SubscribeOptions {
@@ -442,6 +443,10 @@ function toRecord(entry: Entry): SubscriptionRecord {
     deadband_value: entry.filter.deadbandValue,
     data_change_trigger: entry.filter.trigger,
     changes: [...entry.changes],
+    // What the ring buffer discarded, as a field (issue #137). It was always
+    // derivable from change_count, but only by a caller who knew to subtract —
+    // and a trend read from `changes` alone starts late without saying so.
+    dropped: entry.changeCount - entry.changes.length,
   };
 }
 

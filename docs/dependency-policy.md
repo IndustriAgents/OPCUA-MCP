@@ -14,27 +14,35 @@ the manifests declare, and pick whatever is newest inside them on the day. This
 document says what those ranges are, how each end of them is tested, and how
 fast we respond when a dependency changes under us.
 
-The maintainer decision in [#143](https://github.com/IndustriAgents/OPCUA-MCP/issues/143)
-is that both runtimes are first-class, so everything here applies to the Python
-and the Node package equally.
+[ADR 0001](adr/0001-two-first-class-runtimes.md) (#143) makes both runtimes
+first-class, so everything here applies to the Python and the Node package
+equally. The ADR sets the runtime floors, the end-of-life rule and the response
+targets; this document is where they are made concrete for dependencies, and
+where it is more specific it tightens the ADR, never loosens it.
 
 ## Supported runtimes
 
 | Runtime | Manifest declares | Tested in CI | Supported |
 |---|---|---|---|
 | Python | `requires-python = ">=3.10"` | 3.10 and 3.13 on every PR; 3.10 with the lowest dependency set, 3.13 with the latest | 3.10 – 3.13 |
-| Node.js | `"engines": { "node": ">=22.13.0" }` | newest 22.x and 24.x on every PR; exactly 22.13.0 with the lowest dependency set | 22.13+ and 24 |
+| Node.js | `"engines": { "node": ">=22.13.0" }`, and the `.mcpb` manifest's `compatibility.runtimes.node` | newest 22.x and 24.x on every PR; exactly 22.13.0 with the lowest dependency set | 22.13+ and 24 |
 
+The floors are the ones [ADR 0001](adr/0001-two-first-class-runtimes.md#minimum-supported-runtimes)
+fixes, and `tests/unit/test_runtime_differences.py` holds the manifests to them.
 Newer runtimes (Python 3.14, Node 26) are not blocked by the manifests — an
 upper bound on `requires-python` or `engines` breaks installers rather than
-protecting anyone — but they are **not supported** until they are in the CI
-matrix. Adding one is a PR to `ci.yml` (and to the ruleset's required checks,
-in the order the notes in `ci.yml` describe).
+protecting anyone — but they are unverified, and so **not supported**, until
+they are in the CI matrix. Adding one is a PR to `ci.yml` (and to the ruleset's
+required checks, in the order the notes in `ci.yml` describe).
 
-A runtime version is dropped in the first minor release after it reaches
-upstream end of life, by raising the floor in the manifest and removing it from
-CI in the same PR. Next up: **Python 3.10 reaches end of life in October 2026**;
-Node 22 in April 2027.
+End of life follows the ADR's
+[rule](adr/0001-two-first-class-runtimes.md#dependency-maintenance-and-end-of-life):
+a floor rises no later than the first minor release after that version's
+upstream end of life, to the oldest release still supported upstream, with both
+manifests, the `.mcpb` manifest, the CI matrix (and the ruleset), the badges and
+the docs moving in one PR. That PR also moves the `lowest` job in
+`dependency-matrix.yml` to the new floor. Next up: **Python 3.10 reaches end of
+life in October 2026**; Node 22 in April 2027.
 
 ## Direct runtime dependencies
 
@@ -66,10 +74,10 @@ Floor notes:
 - `@modelcontextprotocol/sdk` was `^1.0.4`. The Node unit tests and the core
   e2e files do pass on 1.0.4, but every release before 1.26.0 carries a
   published high-severity advisory (GHSA-w48q-cv73-mx4w, GHSA-8r9q-7v3j-jr4g,
-  GHSA-345p-7cg4-v4c7). They concern
-  HTTP transports and resource templates, which this server does not use — but a
-  scanner cannot tell that, and a reachability argument is one refactor away
-  from being wrong. The floor is the first release clear of all three.
+  GHSA-345p-7cg4-v4c7). They concern HTTP transports and resource templates,
+  which this server does not use — but a scanner cannot tell that, and a
+  reachability argument is one refactor away from being wrong. The floor is the
+  first release clear of all three.
 - `opcua` has one release in range and no successor: python-opcua is
   unmaintained, and its open advisory (CVE-2022-25304) is mitigated in this
   project as [SECURITY.md](../SECURITY.md#known-advisories-in-dependencies)
@@ -160,18 +168,22 @@ Its CHANGELOG entry names the package and both versions.
 ## Response times
 
 Targets, from when the advisory, failure or announcement becomes public or is
-reported to us:
+reported to us. ADR 0001's
+[commitment](adr/0001-two-first-class-runtimes.md#ownership-and-response-expectations)
+is that every dependency security advisory is assessed within 7 days on
+whichever runtime it touches; the rows below keep that as the outer limit and
+set the rest. Like the ADR's, they are a single maintainer's commitments for a
+pre-1.0 project, not a contractual SLA.
 
-| Event | Triage | Resolution |
+| Event | Assessed within | Resolution |
 |---|---|---|
 | Critical or high advisory in a runtime dependency | 2 working days | Release within 7 days: floor raised past the vulnerable versions, or a documented mitigation |
-| Moderate advisory | 7 days | Next release, within 30 days |
-| Low advisory | 30 days | Next release |
-| Advisory with no upstream fix | as above | Mitigation, plus an entry in [SECURITY.md](../SECURITY.md#known-advisories-in-dependencies) saying what is and is not covered |
-| New major of a runtime dependency | 30 days | Ceiling widened, or the reason it is not recorded on the Dependabot PR. 7 days if the old major has stopped receiving security fixes |
+| Moderate or low advisory | 7 days | Next release; moderate within 30 days |
+| Advisory with no upstream fix | as above | Patched locally or the feature refused on that runtime, declared in `contract/runtime-differences.json` as the ADR requires, plus an entry in [SECURITY.md](../SECURITY.md#known-advisories-in-dependencies) saying what is and is not covered |
+| New major of a runtime dependency | 30 days | Ceiling widened, or the reason it is not recorded on the Dependabot PR. 7 days if the old major has stopped receiving security fixes. A new major of either MCP SDK is also checked against the `mcp-protocol-generation` entry in the differences list |
 | `dependency-matrix.yml` goes red | 7 days | Fixed; floor raised; or the broken version excluded (`!=`) with an issue to remove the exclusion. Never by deleting or skipping the job |
-| A dependency announces end of life | 30 days | An issue with a migration plan. python-opcua is the standing case: [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
-| A runtime reaches end of life | — | Dropped in the next minor release |
+| A dependency announces end of life, or is found unmaintained | 30 days | An issue with a migration plan, and any local mitigation declared as a runtime difference. python-opcua is the standing case: [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| A runtime reaches end of life | — | Floor raised no later than the next minor release (see [Supported runtimes](#supported-runtimes)) |
 
 A security fix ships in a new release of **both** packages, as every release does.
 

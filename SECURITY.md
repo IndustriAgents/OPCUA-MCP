@@ -72,8 +72,11 @@ What this does **not** do, and you should still plan for:
   the server's user-token policy specifies no security policy of its own. Both
   servers warn about this on stderr; set `OPCUA_SECURITY_POLICY` rather than
   relying on the server to encrypt the token.
-- **Input validation on node IDs and written values**, beyond what the OPC UA
-  server itself enforces.
+- **A value bound for a node that publishes none.** A write is refused outside
+  the node's own `EURange` and outside any `min`, `max`, `enum` or `max_change`
+  the policy file sets ([below](#bounding-the-value-not-only-the-node)). A node
+  with neither — most plain variables — accepts whatever its data type can
+  hold, and what the equipment then does with it is up to the equipment.
 - **Secret handling.** `OPCUA_PASSWORD` is read from the environment, so it is
   as protected as the MCP client config file that holds it.
 

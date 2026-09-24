@@ -53,9 +53,11 @@ jobs:
         run: npm run typecheck
 
       # The `.mcpb` form and server.json's environment variables are generated
-      # from contract/config.json (#133). A step of its own, rather than only the
+      # from contract/config.json (#133); the README tool and configuration
+      # tables from contract/tools.json and config.json, and every copy of the
+      # version from package.json (#149). A step of its own, rather than only the
       # unit test that also checks it, so the failure names the command to run.
-      - name: Generated config metadata matches contract/config.json
+      - name: Generated files match the contracts and the release version
         working-directory: packages/server-node
         run: npm run config:check
 

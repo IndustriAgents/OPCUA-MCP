@@ -207,6 +207,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python: an invalid `start_time`/`end_time` on `read_event_history` crashed
   the tool** with the SDK's generic *"Error executing tool"*. It now gets the
   same refusal as on Node (#157, B11).
+- **Documentation that contradicted what ships** (#149). The roadmap counted 13
+  tools at 15, gave the version as 0.4.1 at 0.5.1, called a finished plan the
+  current one, and said nothing writes a durable audit trail although
+  `OPCUA_AUDIT_FILE` does; the README summary had to be kept in step with its own
+  table by hand. `SECURITY.md` listed validation of written values as missing
+  beside its own section on value bounds, and `CONTRIBUTING.md` and
+  `docs/architecture.md` still said the server certificate cannot be pinned.
+  `CONTRIBUTING.md`'s add-a-tool steps named a `capability` field and a function
+  that no longer exist, and `docs/mcp-registry.md` and `docs/releasing.md`
+  described a four-manifest bump at 0.3.0. `uv.lock` recorded both workspace
+  packages at 0.5.0 through the 0.5.1 release.
 
 ### Added
 - **The identity status is reported everywhere control is decided.**
@@ -272,6 +283,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splitting it would add the case where one part moved the plant and the next
   never arrived. The bundled mock now publishes 100 and 50, so both paths run in
   the suite.
+- **The tool and configuration reference, and every copy of the version, are
+  generated** (#149). The same `npm run config:generate` now rewrites, between
+  `<!-- BEGIN/END GENERATED -->` markers, the tool table in the README, both
+  package READMEs and `docs/examples.md` (count, access class, MCP annotations,
+  capability gates and each tool's one-line summary, from `contract/tools.json`;
+  the `docs/examples.md` index links each tool to its section), and the
+  configuration tables in the three READMEs (from `contract/config.json`, grouped
+  by category, each package README narrowed to what its runtime reads). The
+  version has one source, `packages/server-node/package.json`: the generator
+  stamps it into `mcpb/manifest.json`, both `version` fields of `server.json`,
+  both `pyproject.toml`s, `package-lock.json`, `uv.lock` and the roadmap.
+  `npm run config:check` in CI fails on a stale block, a missing marker pair, a
+  tool with no section in `docs/examples.md`, or a version copy left behind — and
+  normalises line endings, so a Windows checkout is not drift. The
+  hand-maintained README coverage test in `tests/unit/test_config_schema.py` is
+  gone, superseded by that check. A new `tests/unit/test_docs.py` fails on a
+  relative link, or a link into this repository on GitHub, whose file or heading
+  does not exist, and on a tool count in any live document other than the
+  contract's. The PR template gains a regeneration item and a security-doc review
+  item, which [docs/releasing.md](docs/releasing.md#security-doc-review) makes a
+  release requirement.
 
 ### Documentation
 - **Both runtimes are first-class, and that is now a written promise rather

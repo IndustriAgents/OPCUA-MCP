@@ -1,31 +1,52 @@
-// Generates the configuration sections of the distribution metadata from the
-// canonical schema at /contract/config.json (issue #133).
+// Generates everything in the repository that restates a contract or the
+// release version, and checks that none of it has drifted:
 //
-//   packages/server-node/mcpb/manifest.json   user_config + server.mcp_config.env
-//   server.json                               packages[0].environmentVariables
+//   packages/server-node/mcpb/manifest.json   user_config, server.mcp_config.env   contract/config.json (#133)
+//   server.json                               packages[].environmentVariables      contract/config.json (#133)
+//   README.md, packages/*/README.md,          tool and configuration reference     contract/tools.json and
+//   docs/examples.md, ROADMAP.md              blocks (reference-docs.mjs)          contract/config.json (#149)
+//   both manifests above, both pyproject      the release version                  package.json (#149)
+//   files, package-lock.json, uv.lock
 //
 // Why generated: these were hand-maintained copies of the runtime's variable
 // list, and they fell behind it. For the `.mcpb` that is not a documentation
 // bug — Claude Desktop passes the server exactly the env the manifest declares,
 // so a variable missing there (server-certificate pinning, X.509 user login, the
-// audit file) was a capability a bundle user could not reach at all.
+// audit file) was a capability a bundle user could not reach at all. The docs
+// and the version copies drifted the same way (#149): a README counting 13 tools
+// beside a table of 15, and a uv.lock still recording the previous release.
 //
-// Only those sections are generated. Everything else in both files — names,
-// prose, links, versions — stays hand-written, and the generator rewrites a file
-// by replacing its sections in place, so the files remain the reviewable source
-// they were. Each carries a `_meta` note saying which parts are generated, since
-// JSON has no comments and both schemas reject unknown top-level keys.
+// Only those sections are generated. Everything else in these files — names,
+// prose, links — stays hand-written, and the generator rewrites a file by
+// replacing its sections in place, so the files remain the reviewable source
+// they were. The two JSON files carry a `_meta` note saying which parts are
+// generated, since JSON has no comments and both schemas reject unknown
+// top-level keys; the Markdown blocks sit between BEGIN/END GENERATED markers.
 //
-//   npm run config:generate   rewrite both files
-//   npm run config:check      exit 1 if either differs from what it would write (CI)
+// The release version has one source, packages/server-node/package.json — the
+// file `publish.yml` checks the tag against. A release sets it there and runs
+// the generator, which stamps it everywhere else.
 //
-// The rendering helpers are exported for the next consumers of the schema: the
-// --install helpers (#135) and the generated reference tables (#149).
+//   npm run config:generate   rewrite every generated file
+//   npm run config:check      exit 1 if any differs from what it would write (CI)
+//
+// The rendering helpers are exported for the other consumers of the schema: the
+// --install helpers (#135) and the reference docs (reference-docs.mjs).
 import { readFileSync, writeFileSync } from "fs";
 import { dirname, join, relative } from "path";
 import { fileURLToPath } from "url";
 
 import * as prettier from "prettier";
+
+import {
+  DOC_TARGETS,
+  formattedByPrettier,
+  loadTools,
+  releaseVersion,
+  renderDocument,
+  repositoryUrl,
+  targetPath,
+} from "./reference-docs.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/server-node/scripts
 const PKG_ROOT = join(here, "..");
@@ -33,6 +54,12 @@ export const REPO_ROOT = join(PKG_ROOT, "..", "..");
 export const SCHEMA_PATH = join(REPO_ROOT, "contract", "config.json");
 export const MCPB_MANIFEST_PATH = join(PKG_ROOT, "mcpb", "manifest.json");
 export const SERVER_JSON_PATH = join(REPO_ROOT, "server.json");
+const PYPROJECT_PATHS = [
+  join(REPO_ROOT, "packages", "server-python", "pyproject.toml"),
+  join(REPO_ROOT, "packages", "mock-server", "pyproject.toml"),
+];
+const NPM_LOCKFILE_PATH = join(PKG_ROOT, "package-lock.json");
+const UV_LOCKFILE_PATH = join(REPO_ROOT, "uv.lock");
 
 /** The `_meta` namespace both files carry their "generated" note under. */
 const MCPB_META_KEY = "io.github.industriagents/opcua-mcp";
@@ -153,14 +180,15 @@ export function registryVariable(setting) {
 
 function generatedNote(sections) {
   return (
-    `${sections} generated from contract/config.json by ${GENERATOR}. ` +
-    "Edit the schema and run `npm run config:generate` in packages/server-node; " +
+    `${sections} generated from contract/config.json by ${GENERATOR}, and the ` +
+    "version is stamped from packages/server-node/package.json. " +
+    "Edit those and run `npm run config:generate` in packages/server-node; " +
     "CI fails if they drift."
   );
 }
 
-/** The manifest with its configuration sections regenerated. */
-export function renderMcpbManifest(schema, manifest) {
+/** The manifest with its version and configuration sections regenerated. */
+export function renderMcpbManifest(schema, manifest, version = manifest.version) {
   const settings = settingsFor(schema, "mcpb");
   const env = {};
   const userConfig = {};
@@ -170,6 +198,7 @@ export function renderMcpbManifest(schema, manifest) {
   }
   return {
     ...manifest,
+    version,
     server: {
       ...manifest.server,
       mcp_config: { ...manifest.server.mcp_config, env },
@@ -184,12 +213,18 @@ export function renderMcpbManifest(schema, manifest) {
   };
 }
 
-/** server.json with every package's environment variables regenerated. */
-export function renderServerJson(schema, serverJson) {
+/** server.json with its versions and every package's environment variables
+ *  regenerated. It carries the version twice, and the registry reads both. */
+export function renderServerJson(schema, serverJson, version = serverJson.version) {
   const variables = settingsFor(schema, "registry").map(registryVariable);
   return {
     ...serverJson,
-    packages: serverJson.packages.map((pkg) => ({ ...pkg, environmentVariables: variables })),
+    version,
+    packages: serverJson.packages.map((pkg) => ({
+      ...pkg,
+      version,
+      environmentVariables: variables,
+    })),
     _meta: {
       ...serverJson._meta,
       [REGISTRY_META_KEY]: {
@@ -201,12 +236,48 @@ export function renderServerJson(schema, serverJson) {
 }
 
 /** Serialise as the repository formats it, so a regenerated file passes
- *  `prettier --check` and a no-op run leaves no diff. Indented before prettier
- *  sees it because prettier keeps an object expanded only if it already was —
- *  which is how the hand-written parts of both files are laid out. */
+ *  `prettier --check` and a no-op run leaves no diff. A JSON document is
+ *  indented before prettier sees it because prettier keeps an object expanded
+ *  only if it already was — which is how the hand-written parts of both files
+ *  are laid out. Markdown arrives as text. */
 async function format(document, path) {
   const options = (await prettier.resolveConfig(join(PKG_ROOT, ".prettierrc.json"))) ?? {};
-  return prettier.format(JSON.stringify(document, null, 2), { ...options, filepath: path });
+  const source = typeof document === "string" ? document : JSON.stringify(document, null, 2);
+  return prettier.format(source, { ...options, filepath: path });
+}
+
+/** A pyproject.toml with its `[project]` version stamped. A targeted rewrite
+ *  rather than a TOML round trip, which would reformat the whole file. */
+export function stampPyproject(text, version) {
+  const project = /^(\[project\]\n(?:(?!\[)[^\n]*\n)*?version = ")[^"]*(")/m;
+  if (!project.test(text)) throw new Error("pyproject.toml has no [project] version");
+  return text.replace(project, `$1${version}$2`);
+}
+
+/** package-lock.json with the root package's version stamped. npm records it
+ *  twice, and editing package.json updates neither; the next `npm install`
+ *  would, as a version diff inside some unrelated change. */
+export function stampNpmLockfile(text, version) {
+  const lock = JSON.parse(text);
+  lock.version = version;
+  lock.packages[""].version = version;
+  return `${JSON.stringify(lock, null, 2)}\n`;
+}
+
+/** uv.lock with the workspace's own two packages at the release version. uv
+ *  rewrites these on the next `uv sync`, which is how a stale copy (0.5.0,
+ *  through the whole 0.5.1 release) went unnoticed. */
+export function stampUvLockfile(text, version) {
+  const local =
+    /(\[\[package\]\]\nname = "[^"]+"\nversion = ")[^"]*("\nsource = \{ editable = "packages\/(?:server-python|mock-server)" \})/g;
+  const found = text.match(local)?.length ?? 0;
+  if (found !== 2) throw new Error(`uv.lock: expected 2 workspace packages, found ${found}`);
+  return text.replace(local, `$1${version}$2`);
+}
+
+/** `rendered` (LF) in the line ending `current` already uses. */
+function inEolOf(current, rendered) {
+  return current.includes("\r\n") ? rendered.replace(/\n/g, "\r\n") : rendered;
 }
 
 /** `text` with LF line endings. The repository stores these files with LF, but
@@ -224,42 +295,70 @@ export function normalizeEol(text) {
  * every line; git normalises it back to LF on commit either way. Compare the two
  * with `normalizeEol` on both sides, as `main` does.
  */
-export async function renderAll(schema = loadSchema()) {
-  const targets = [
-    [MCPB_MANIFEST_PATH, renderMcpbManifest],
-    [SERVER_JSON_PATH, renderServerJson],
+export async function renderAll(schema = loadSchema(), contract = loadTools()) {
+  const version = releaseVersion();
+  const repoUrl = repositoryUrl();
+  const jsonTargets = [
+    [MCPB_MANIFEST_PATH, (doc) => renderMcpbManifest(schema, doc, version)],
+    [SERVER_JSON_PATH, (doc) => renderServerJson(schema, doc, version)],
   ];
-  return Promise.all(
-    targets.map(async ([path, render]) => {
+  // Rendered from LF text, whatever the checkout hands over.
+  const textTargets = [
+    ...PYPROJECT_PATHS.map((path) => [path, (text) => stampPyproject(text, version)]),
+    [NPM_LOCKFILE_PATH, (text) => stampNpmLockfile(text, version)],
+    [UV_LOCKFILE_PATH, (text) => stampUvLockfile(text, version)],
+    ...DOC_TARGETS.map((target) => [
+      targetPath(target),
+      async (text) => {
+        const rendered = renderDocument(target, text, { schema, contract, version, repoUrl });
+        // A file `npm run format:check` covers must come out as prettier leaves it.
+        return formattedByPrettier(target) ? format(rendered, targetPath(target)) : rendered;
+      },
+    ]),
+  ];
+  return Promise.all([
+    ...jsonTargets.map(async ([path, render]) => {
       const current = readFileSync(path, "utf8");
-      const rendered = await format(render(schema, JSON.parse(current)), path);
-      const expected = current.includes("\r\n") ? rendered.replace(/\n/g, "\r\n") : rendered;
-      return [path, expected, current];
-    })
-  );
+      const rendered = await format(render(JSON.parse(current)), path);
+      return [path, inEolOf(current, rendered), current];
+    }),
+    ...textTargets.map(async ([path, render]) => {
+      const current = readFileSync(path, "utf8");
+      const rendered = await render(normalizeEol(current));
+      return [path, inEolOf(current, rendered), current];
+    }),
+  ]);
 }
 
 async function main(argv) {
   const check = argv.includes("--check");
   const drifted = [];
-  for (const [path, expected, current] of await renderAll()) {
+  let rendered;
+  try {
+    rendered = await renderAll();
+  } catch (error) {
+    // A missing marker pair or an undocumented tool: nothing to write, only to fix.
+    console.error(error.message);
+    process.exit(1);
+  }
+  for (const [path, expected, current] of rendered) {
     if (normalizeEol(expected) === normalizeEol(current)) continue;
     drifted.push(relative(REPO_ROOT, path));
     if (!check) writeFileSync(path, expected);
   }
   if (check && drifted.length) {
     console.error(
-      `Out of date with contract/config.json: ${drifted.join(", ")}\n` +
+      `Out of date with the contracts or the release version: ${drifted.join(", ")}\n` +
         "Run `npm run config:generate` in packages/server-node and commit the result."
     );
     process.exit(1);
   }
   console.error(
     check
-      ? "config artifacts match contract/config.json"
+      ? "generated files match the contracts and the release version"
       : drifted.length
         ? `regenerated ${drifted.join(", ")}`
-        : "config artifacts already up to date"
+        : "generated files already up to date"
   );
 }
 

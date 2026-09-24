@@ -807,5 +807,6 @@ The **default is `None`/`None`**: unauthenticated and unencrypted, appropriate
 for the bundled mock and local development and **not** appropriate for
 production industrial systems. Both servers warn on stderr when running that
 way. For what the secured path does and does not verify — notably that the
-server certificate is not pinned — see [SECURITY.md](../SECURITY.md), and for
+server certificate is checked only when `OPCUA_SERVER_CERT` pins it — see
+[SECURITY.md](../SECURITY.md), and for
 certificate generation and trust setup [certificates.md](certificates.md).

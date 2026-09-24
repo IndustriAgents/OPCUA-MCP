@@ -23,6 +23,36 @@ OPCUA_SERVER_URL=opc.tcp://localhost:4840/freeopcua/server/ node build/index.js
 
 Both read the endpoint from `OPCUA_SERVER_URL` (default `opc.tcp://localhost:4840`).
 
+## Tools at a glance
+
+<!-- BEGIN GENERATED: tool-index from contract/tools.json by packages/server-node/scripts/config-artifacts.mjs. Do not edit by hand: edit the source, then run `npm run config:generate` in packages/server-node. -->
+
+Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action and 2 control — defined once in [`contract/tools.json`](../contract/tools.json).
+
+| Tool | Access | Hints | What it does |
+|---|---|---|---|
+| [`read_opcua_nodes`](#read_opcua_nodes) | read | read-only, idempotent | Read the current value of one or more OPC UA nodes in a single request. |
+| [`browse_opcua_nodes`](#browse_opcua_nodes) | read | read-only, idempotent | Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. |
+| [`read_opcua_history`](#read_opcua_history-both-servers) † | read | read-only, idempotent | Read what a node's value has been over time. |
+| [`read_event_history`](#read_event_history) † | read | read-only, idempotent | Read events the OPC UA server stored, for a time range that has already passed. |
+| [`get_server_status`](#get_server_status) | read | read-only, idempotent | Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. |
+| [`list_subscriptions`](#list_subscriptions) | read | read-only, idempotent | List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. |
+| [`list_active_alarms`](#list_active_alarms) | read | read-only, idempotent | List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. |
+| [`subscribe_opcua_nodes`](#subscribe_opcua_nodes) | monitor | — | Watch one or more OPC UA nodes for value changes instead of polling them. |
+| [`unsubscribe_opcua_nodes`](#unsubscribe_opcua_nodes) | monitor | — | Cancel one or more active data-change subscriptions and discard what they had buffered. |
+| [`subscribe_events`](#subscribe_events) | monitor | — | Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. |
+| [`read_events`](#read_events) | monitor | — | Read the events buffered by subscribe_events, oldest first. |
+| [`acknowledge_alarm`](#acknowledge_alarm) | alarm-action | — | Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). |
+| [`act_on_alarm`](#act_on_alarm) | alarm-action | — | Confirm, annotate or shelve an alarm — the rest of the operator workflow that acknowledge_alarm starts. |
+| [`write_opcua_nodes`](#write_opcua_nodes) | control | destructive, idempotent | Write a value to one or more OPC UA nodes. |
+| [`call_opcua_method`](#call_opcua_method) | control | destructive | Call a method on an OPC UA object. |
+
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool annotations each tool advertises.
+
+† **Capability-gated**: listed only when the connected server advertises what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
+
+<!-- END GENERATED: tool-index -->
+
 ## Node ID reference (mock server)
 
 Discover these any time with `browse_opcua_nodes`.
@@ -68,7 +98,7 @@ Discover these any time with `browse_opcua_nodes`.
 
 ## Partial results: `completeness`
 
-Seven tools can return fewer records than their request covered, and every one of
+Seven of the tools can return fewer records than their request covered, and every one of
 them says so as a field — `completeness`, beside `result` in `structuredContent`
 (issue #137) — on every call, not only when something is missing:
 

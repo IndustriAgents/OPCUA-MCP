@@ -27,7 +27,32 @@ AI assistant / MCP client  ──stdio──►  MCP server (Python OR Node)  �
 
 The two MCP servers share a single tool contract ([`contract/tools.json`](contract/tools.json)): the Node server builds its `tools/list` from it and the Python server reads descriptions and capability node IDs from it, so they cannot drift (`tests/e2e/test_contract_parity.py` enforces this). The same file defines the **resource** surface, under `resources` — both servers build their `resources/list` from it.
 
-The **configuration** surface has its own contract, [`contract/config.json`](contract/config.json): every `OPCUA_*` variable, its type, default, secrecy and which runtimes read it. To add or change a setting, edit it there first, implement it in **both** runtimes, then run `npm run config:generate` in `packages/server-node` — that rewrites the settings form in `mcpb/manifest.json` and the environment variables in `server.json`, which are generated and must not be edited by hand. `tests/unit/test_config_schema.py` fails if a runtime reads a variable the schema does not declare (or the reverse), if a parser disagrees with a declared choice, minimum or default, or if the configuration table in a README misses the variable; CI runs `npm run config:check` for the generated files.
+The **configuration** surface has its own contract, [`contract/config.json`](contract/config.json): every `OPCUA_*` variable, its type, default, secrecy and which runtimes read it. To add or change a setting, edit it there first, implement it in **both** runtimes, then run `npm run config:generate` in `packages/server-node` — that rewrites the settings form in `mcpb/manifest.json`, the environment variables in `server.json` and the configuration tables in the READMEs, which are generated and must not be edited by hand. `tests/unit/test_config_schema.py` fails if a runtime reads a variable the schema does not declare (or the reverse), or if a parser disagrees with a declared choice, minimum or default; CI runs `npm run config:check` for the generated files.
+
+### Generated documentation
+
+Facts the contracts already hold are generated into the docs rather than copied
+by hand, because every hand copy drifted (#149). `npm run config:generate` (in
+`packages/server-node`) rewrites them all, and `npm run config:check` — a step of
+the CI `lint` job — fails if any is out of date:
+
+| What | Where | Source |
+|---|---|---|
+| Tool table, count, access classes, annotations, capability gates | `README.md`, both package READMEs, `docs/examples.md` | `contract/tools.json` |
+| Configuration reference, grouped by category | `README.md`, both package READMEs (each narrowed to what its runtime reads) | `contract/config.json` |
+| The release version | `ROADMAP.md`, `mcpb/manifest.json`, `server.json`, both `pyproject.toml`s, `package-lock.json`, `uv.lock` | `packages/server-node/package.json` |
+
+In Markdown, only what sits between a `<!-- BEGIN GENERATED: name ... -->` /
+`<!-- END GENERATED: name -->` pair is generated. Edit the prose around a block
+freely; edit inside one and the next run puts it back. To change a generated
+table, change its source and regenerate. After a rebase that conflicts inside a
+block, take either side and regenerate — the result depends only on the
+sources. The generator refuses a file that has lost a marker pair it expects, and
+`docs/examples.md` must keep a heading naming each tool in code
+(`` ### `foo` ``), because the tool index links to it. The rest is checked by
+`tests/unit/test_docs.py`: every relative link and every link into this
+repository resolves, heading anchors included, and no live document states a
+tool count other than the contract's.
 
 **Both runtimes are first-class** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md)). A change to what either server does lands in **both**, with tests for both, in the same PR — a rule both runtimes must agree on goes in a shared table under `tests/fixtures/` driven by both unit suites, rather than being asserted twice. The only exception is a difference the ADR allows (an extra capability, a stricter input rule, a distribution channel — never a different tool surface or a weaker security baseline): declare it in [`contract/runtime-differences.json`](contract/runtime-differences.json) (a runtime-specific setting is also marked in `contract/config.json` with `runtimes` or `runtimeChoices`, and a test keeps the two in step), add it to the table in [docs/compatibility.md](docs/compatibility.md#runtime-differences), and say so in the changelog.
 
@@ -95,14 +120,14 @@ agent, see **[docs/testing.md](docs/testing.md)**.
 
 ## Adding a new MCP tool
 
-The tool surface is defined once in [`contract/tools.json`](contract/tools.json); both servers derive from it, and `tests/test_contract_parity.py` fails if they diverge. To add a tool `foo`:
+The tool surface is defined once in [`contract/tools.json`](contract/tools.json); both servers derive from it, and `tests/e2e/test_contract_parity.py` fails if they diverge. To add a tool `foo`:
 
-1. **Contract** (`contract/tools.json`): add an entry under `tools` with its `name`, `description`, `inputSchema` (JSON Schema), and `capability` (`null`, or `"history"`/`"aggregate"` if it depends on a server capability).
+1. **Contract** (`contract/tools.json`): add an entry under `tools` with its `name`, `description` (its first sentence is the tool's one-line summary in the generated tables), `inputSchema` (JSON Schema), `accessClass`, `annotations`, `retryPolicy`, and `capabilities` (`[]`, or the entries of `capabilities` it depends on — any one of them is enough). A `control` or `alarm-action` tool also needs a `guard`, or the policy denies it.
    If the tool returns structured data rather than free text, give it a `resultShape` naming an entry under `resultShapes` — reuse an existing shape where one fits. Both servers must then emit that shape byte-comparably; a client that has learned one server's output has to be able to read the other's, and `tests/e2e/test_contract_parity.py` checks the real output against the shape.
 2. **Node** (`packages/server-node/src/tools.ts`): add a `case "foo"` to the `callTool` switch and implement the handler method. You do **not** edit `listTools` — it is generated from the contract. Run `npm run build` (this also stages the contract and version into `build/`).
-3. **Python** (`packages/server-python/src/opcua_mcp_server/server.py`): add a function decorated with `@mcp.tool(description=_DESC["foo"])`, with typed args (`MCPServer` derives the input schema from them — keep it matching the contract) and `ctx: Context`. For a capability-gated tool, register it conditionally like `read_history_opcua_node`.
+3. **Python** (`packages/server-python/src/opcua_mcp_server/server.py`): add a function `foo` with typed args (`MCPServer` derives the input schema from them — keep it matching the contract) and `ctx: Context`, and add its name to `TOOL_NAMES`, which `create_server` registers with the contract's description. Gating on a capability the contract already declares needs no code of its own: `list_tools` hides a tool whose `capabilities` the connected server does not advertise. A new capability also needs a probe on both runtimes.
 4. **Test**: add an end-to-end test in `tests/e2e/test_mcp_e2e.py` (it runs against both servers). The contract-parity test will automatically check that both servers advertise the new tool with the contract's description and parameters; if the tool declares a `resultShape`, assert the returned records against it with `assert_matches_result_shape`.
-5. **Document it** in `docs/examples.md` (the central per-tool reference).
+5. **Document it** in `docs/examples.md` (the central per-tool reference) under a heading naming it in code (`` ### `foo` ``), then run `npm run config:generate` in `packages/server-node` to add it to the generated tool tables and counts.
 
 Adding a **resource** follows the same path through the `resources` key: a `uri`,
 `name`, `description` and `mimeType`, plus a `body` naming the `resultShape` its
@@ -156,9 +181,12 @@ gated on the full suite plus the artifact smoke tests. Two workflows run off the
 tag: `publish.yml` ships to npm and PyPI, and `release.yml` builds the `.mcpb`
 bundle and the per-platform executables and attaches them to the GitHub release.
 
-Version lives in the package manifests and, for the bundle, in
-`packages/server-node/mcpb/manifest.json`;
-`tests/unit/test_version_manifests.py` fails if they drift apart.
+The version has one source, `packages/server-node/package.json`. Set it there
+and run `npm run config:generate` in `packages/server-node`: that stamps it into
+`mcpb/manifest.json`, both `version` fields of `server.json`, both
+`pyproject.toml`s, `package-lock.json`, `uv.lock` and the roadmap.
+`npm run config:check` and `tests/unit/test_version_manifests.py` fail if any
+copy drifts.
 
 ## Security note
 
@@ -166,10 +194,11 @@ The servers **default** to `SecurityPolicy.None` / `MessageSecurityMode.None`
 for local development against the mock. Do **not** use that default against
 production OPC UA systems — configure `OPCUA_SECURITY_POLICY`,
 `OPCUA_CLIENT_CERT`/`OPCUA_CLIENT_KEY` and credentials
-([Configuration](README.md#configuration)), and note the gaps listed in
-[SECURITY.md](SECURITY.md) (notably that the server certificate is not pinned,
-and that node IDs and written values are not validated beyond what the OPC UA
-server enforces).
+([Configuration](README.md#configuration)), pin the server with
+`OPCUA_SERVER_CERT`, and note the gaps listed in [SECURITY.md](SECURITY.md)
+(notably that there is no CA trust list for the server certificate, only
+pinning, and that a written value is bounded only where the node publishes an
+`EURange` or the policy file sets a bound).
 
 Both runtimes parse those variables in one place — `src/security.ts` and
 `src/opcua_mcp_server/security.py` — with the same defaults and the same error

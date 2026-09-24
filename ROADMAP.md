@@ -3,13 +3,15 @@
 What exists, what is being worked on next, and what is only an idea. This is an
 order of work, not a schedule: nothing here carries a release date.
 
-The manifests are at **0.4.1**. [CHANGELOG.md](CHANGELOG.md) records what has
-actually shipped — including entries under `[Unreleased]`, which are merged but
-not yet published to npm or PyPI. The
-[v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is the phased plan currently
-being worked; the [v0.2.0 plan](docs/ROADMAP-0.2.0.md) is finished work, kept
-for context; and [#19](https://github.com/IndustriAgents/OPCUA-MCP/issues/19) is
-the feature epic this page summarises.
+The manifests are at <!-- BEGIN GENERATED: version -->**0.5.1**<!-- END GENERATED: version -->.
+[CHANGELOG.md](CHANGELOG.md) records what has actually shipped — including
+entries under `[Unreleased]`, which are merged but not yet published to npm or
+PyPI. The work in progress is the production-hardening epic
+[#151](https://github.com/IndustriAgents/OPCUA-MCP/issues/151). The
+[v0.4.0](docs/ROADMAP-0.4.0.md) and [v0.2.0](docs/ROADMAP-0.2.0.md) engineering
+plans are finished work, kept for context, as is
+[#19](https://github.com/IndustriAgents/OPCUA-MCP/issues/19), the feature epic
+the list below grew out of.
 
 ## In the codebase today
 
@@ -17,14 +19,21 @@ the feature epic this page summarises.
   ([`contract/tools.json`](contract/tools.json)), kept in step by parity tests —
   every tool declares a result shape, each runtime's actual output is checked
   against it, and a differential suite then diffs the two runtimes against each
-  other.
-- Thirteen tools. Reads, writes, browsing, path resolution, name search, method
-  calls and address-space inventory, each with fully qualified records: a value
-  arrives with its data type, OPC UA status and timestamps.
+  other. Both runtimes are first-class
+  ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md)).
+- The tools listed in the [README](README.md#tools): reads, writes, browsing,
+  path resolution, name search, method calls and address-space inventory, each
+  with fully qualified records — a value arrives with its data type, OPC UA
+  status, timestamps and, where the node publishes them, its engineering unit
+  and range.
 - History and server-side aggregates in one tool, offered when the connected
-  server advertises either capability.
-- Data-change subscriptions with buffered records, plus event collection and
-  Alarms & Conditions listing and acknowledgement.
+  server advertises either capability, and stored events in another.
+- Data-change subscriptions with buffered records and optional deadbands, plus
+  event collection and the Alarms & Conditions operator workflow: listing,
+  acknowledging, confirming, commenting and shelving.
+- Writes bounded by the value, not only the node: the `EURange` the equipment
+  publishes, and per-node `min`, `max`, `enum` and `max_change` in the policy
+  file.
 - Configurable OPC UA channel security: policy, mode, client certificate and
   key, username or X.509 user identity, and a pinned server certificate, all
   validated at startup.
@@ -47,36 +56,32 @@ the feature epic this page summarises.
 
 ## Next
 
-The [v0.4.0 engineering plan](docs/ROADMAP-0.4.0.md) is **complete** — all eight
-phases shipped, closing #7, #8, #9, #10, #11, #45, #75 and #76. What remains
-needs no code:
+A critical review of 0.5.1 opened the production-hardening epic
+[#151](https://github.com/IndustriAgents/OPCUA-MCP/issues/151), which is the
+order of work now: an authenticated OPC UA server identity before control is
+offered, an MCP transport that starts whatever the endpoint is doing, bounded and
+machine-readable partial results, audit durability, release signing and
+provenance, and the two runtimes' remaining divergences. The epic lists the
+issues and the order they depend on each other in.
+
+Two items need no code:
 
 | # | Work | Done when |
 |---|---|---|
-| 1 | [MCP Registry listing](docs/mcp-registry.md) | A published package carries `mcpName`, and the entry resolves in the registry |
-| 2 | Results from third-party OPC UA servers ([#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
+| 1 | [MCP Registry listing](docs/mcp-registry.md) | The published package already carries `mcpName`; done when the entry resolves in the registry |
+| 2 | Results from third-party OPC UA servers ([#147](https://github.com/IndustriAgents/OPCUA-MCP/issues/147)) | [docs/compatibility.md](docs/compatibility.md) records dated, versioned results for at least two non-mock servers |
 
-Both need a release and reports from people with real equipment rather than
-changes to this repository.
+The second needs people with real equipment rather than changes to this
+repository, and it is the one input this repository cannot generate for itself.
+It is also what decides the one question the earlier reviews left open rather
+than answered — whether this should serve a plant or a workstation (see below).
 
 ## Later, not started
 
-Nothing is queued. Everything that was here at 0.3.0 — node search and
-browse-path resolution, typed method arguments, full node attribute reads, X.509
-user authentication — shipped in 0.4.0, and the architecture review that opened
-#81–#90 is closed out too: the contract is now the advertised surface on both
-runtimes and the thing enforcing arguments, failures are worded from it, the
-catalogue no longer waits on the plant, the requests that had no bounds have them,
-chunk reassembly is bounded against CVE-2022-25304, and CI runs on Windows and
-macOS.
-
-The next thing worth doing is decided by what
-[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) turns up: a result
-from a real vendor server is the one input this repository cannot generate for
-itself, and it is more likely to set priorities usefully than anything that could
-be written down now. It is also what decides the one question the review left
-open rather than answered — whether this should serve a plant or a workstation
-(see below).
+Everything that was here at 0.3.0 — node search and browse-path resolution,
+typed method arguments, full node attribute reads, X.509 user authentication —
+shipped in 0.4.0, and the architecture review that opened #81–#90 is closed out
+too. What is not in #151 is not queued.
 
 ## Considered and set aside
 
@@ -153,12 +158,13 @@ about which arguments matter. Reads are never audited; a trail that recorded
 every read would bury the lines anyone is looking for. Neither credentials nor
 written values appear, and a test asserts it.
 
-**What it is not** is durable. stderr is what an MCP client shows the user and
-what a log collector picks up, and nothing here writes a file, rotates one, or
-survives the process. For a deployment that needs a retained record, collect the
-server's stderr — the format is stable and line-oriented for exactly that. A
-built-in persistent sink still has no plan, and needs one that holds for both
-runtimes before any code is written.
+**A retained record is opt-in.** stderr is what an MCP client shows the user and
+what a log collector picks up, and it does not survive the process. Set
+`OPCUA_AUDIT_FILE` and both runtimes also append every line to that file; a file
+that cannot be opened stops the server rather than silently auditing to stderr
+alone. Nothing rotates the file. Its durability and the identity it records are
+being hardened under
+[#146](https://github.com/IndustriAgents/OPCUA-MCP/issues/146).
 
 Per-client approval semantics for control tools are the stated prerequisite for
 [#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14) and are tracked there.

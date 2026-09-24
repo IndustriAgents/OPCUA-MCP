@@ -24,25 +24,36 @@ Each package's README ships *inside* its artifact — `files: [..., "README.md"]
 for npm, `readme = "README.md"` for the wheel — and registry pages are frozen per
 version. So edits to `packages/server-node/README.md` or
 `packages/server-python/README.md` appear on GitHub immediately but do not reach
-npmjs.com or pypi.org until the next publish. Worth checking those two files
-before cutting a release.
+npmjs.com or pypi.org until the next publish, and a published version can never
+be corrected. Their tool and configuration tables are generated (step 1 below),
+so those at least cannot ship stale; the prose around them still needs reading
+before a release.
+
+## Security-doc review
+
+A release whose changes touch authentication, authorisation, the audit trail or
+a default — anything in `contract/config.json` with `securityRelevant: true`,
+the policy layer, or a `guard` in `contract/tools.json` — gets one more item in
+its release PR: re-read [SECURITY.md](../SECURITY.md), the Security sections of
+the README and both package READMEs, the security notes in
+[CONTRIBUTING.md](../CONTRIBUTING.md) and the `long_description` in
+`mcpb/manifest.json`, and say in the PR that they still describe what ships.
+Stale security documentation gives users the wrong threat model, and none of it
+is generated.
 
 ## Cutting a release
 
 ```bash
-# 1. Bump all four manifests together — they release as a unit and a test
-#    enforces that they match.
-#    packages/server-node/package.json
-#    packages/server-python/pyproject.toml
-#    packages/mock-server/pyproject.toml
-#    packages/server-node/mcpb/manifest.json
-#
-#    Then refresh the npm lockfile, which records the root version twice and
-#    will not be updated by editing package.json alone:
-#      cd packages/server-node && npm install --package-lock-only
+# 1. Set the version in its one source, packages/server-node/package.json, and
+#    stamp it everywhere else. The generator writes it into mcpb/manifest.json,
+#    both version fields of server.json, both pyproject.toml files,
+#    package-lock.json, uv.lock and ROADMAP.md, and regenerates the reference
+#    docs; `npm run config:check` in CI fails if any copy is left behind.
+cd packages/server-node && npm run config:generate && cd ../..
 
 # 2. Move CHANGELOG entries from [Unreleased] into the new version, and add the
-#    comparison link at the bottom.
+#    comparison link at the bottom. Commit the generated diff with the bump, so
+#    the release PR shows exactly what the published READMEs will say.
 
 # 3. Verify locally exactly as CI will. The smoke tier builds the .mcpb bundle
 #    and both single-file executables, so it needs the packaging group.
@@ -106,9 +117,9 @@ first two have already shipped broken releases here.
 ## The registry manifest
 
 The root [`server.json`](../server.json) carries the version twice — its own
-`version` and `packages[0].version` — and both have to match the npm package, so
-they belong in step 1 of the bump above. A unit test fails if they drift, and so
-does the `name` / `mcpName` pair that ties the registry entry to the published
+`version` and `packages[0].version` — and both have to match the npm package,
+which is why step 1 stamps them. A unit test fails if they drift, and so does
+the `name` / `mcpName` pair that ties the registry entry to the published
 package.
 
 `server.json` is not published by any workflow here. Submitting it to the MCP

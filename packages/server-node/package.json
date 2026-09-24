@@ -47,7 +47,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "node-opcua-client": "^2.184.8",
-    "node-opcua-crypto": "^5.11.0"
+    "node-opcua-crypto": "^6.0.0"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",

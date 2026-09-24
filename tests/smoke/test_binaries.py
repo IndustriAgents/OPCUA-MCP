@@ -25,9 +25,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 
 import pytest
 from conftest import ROOT
@@ -185,33 +187,51 @@ def _exchange(binary, env: dict, cwd, messages: list[dict]) -> tuple[dict[int, d
     SDK's stdio client terminates the server on exit, which would hide the one
     thing checked here that nothing else is — that the executable shuts itself
     down cleanly when its client goes away.
+
+    Every wait is bounded. stderr goes to a file, never an unread pipe: a
+    server that logs more than the pipe holds (a few KB on Windows) blocks on
+    the write, stops answering, and a bare ``readline`` then waits forever —
+    which is how the first version of this hung a Windows job for two hours.
     """
-    proc = subprocess.Popen(
-        [str(binary)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        cwd=str(cwd),
-        text=True,
-        encoding="utf-8",
-    )
+    log = cwd / "server-stderr.log"
+    with open(log, "w", encoding="utf-8") as stderr:
+        proc = subprocess.Popen(
+            [str(binary)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            env=env,
+            cwd=str(cwd),
+        )
+    lines: queue.Queue[bytes] = queue.Queue()
+    threading.Thread(
+        target=lambda: [lines.put(line) for line in iter(proc.stdout.readline, b"")],
+        daemon=True,
+    ).start()
+
+    def diagnostics() -> str:
+        return log.read_text(encoding="utf-8", errors="replace")[-4000:]
+
     responses: dict[int, dict] = {}
     try:
         for message in messages:
-            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
             proc.stdin.flush()
             if "id" not in message:
                 continue
             while True:
-                line = proc.stdout.readline()
-                assert line, f"server exited before answering {message['method']}"
-                reply = json.loads(line)
+                try:
+                    reply = json.loads(lines.get(timeout=90))
+                except queue.Empty:
+                    pytest.fail(f"no answer to {message['method']} in 90s:\n{diagnostics()}")
                 if reply.get("id") == message["id"]:
                     responses[message["id"]] = reply
                     break
         proc.stdin.close()
-        returncode = proc.wait(timeout=60)
+        try:
+            returncode = proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{binary.name} still running 60s after stdin closed:\n{diagnostics()}")
     finally:
         if proc.poll() is None:
             proc.kill()

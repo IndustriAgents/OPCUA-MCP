@@ -122,6 +122,7 @@ jobs:
     # new name, then update the ruleset to require it.
     name: Downloadable artifacts (npm, wheel, .mcpb, executables)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -174,6 +175,9 @@ jobs:
   cross-platform:
     name: Unit & artifacts — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Minutes when healthy; the bound turns a hung subprocess into a failure
+    # instead of GitHub's six-hour default holding a runner and the PR.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

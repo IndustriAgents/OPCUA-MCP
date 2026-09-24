@@ -47,9 +47,9 @@ Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action
 | [`write_opcua_nodes`](#write_opcua_nodes) | control | destructive, idempotent | Write a value to one or more OPC UA nodes. |
 | [`call_opcua_method`](#call_opcua_method) | control | destructive | Call a method on an OPC UA object. |
 
-**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool annotations each tool advertises.
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are the MCP tool annotations each tool advertises.
 
-† **Capability-gated**: listed only when the connected server advertises what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
+† **Needs a server feature**: always listed, and refused at call time with `capability_not_supported` or `capability_unknown` when the connected server does not advertise what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
 
 <!-- END GENERATED: tool-index -->
 

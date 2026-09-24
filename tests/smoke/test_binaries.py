@@ -25,9 +25,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 
 import pytest
 from conftest import ROOT
@@ -176,3 +178,124 @@ async def test_binary_lists_tools(binary, opcua_server, tmp_path):
         cwd=str(tmp_path),
     )
     assert await _list_tools(params) >= CORE_TOOLS
+
+
+def _exchange(binary, env: dict, cwd, messages: list[dict]) -> tuple[dict[int, dict], int]:
+    """Speak raw MCP to ``binary`` over stdio, then close stdin and wait for it.
+
+    Raw JSON-RPC rather than the SDK client so the test owns the process: the
+    SDK's stdio client terminates the server on exit, which would hide the one
+    thing checked here that nothing else is — that the executable shuts itself
+    down cleanly when its client goes away.
+
+    Every wait is bounded. stderr goes to a file, never an unread pipe: a
+    server that logs more than the pipe holds (a few KB on Windows) blocks on
+    the write, stops answering, and a bare ``readline`` then waits forever —
+    which is how the first version of this hung a Windows job for two hours.
+    """
+    log = cwd / "server-stderr.log"
+    with open(log, "w", encoding="utf-8") as stderr:
+        proc = subprocess.Popen(
+            [str(binary)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            env=env,
+            cwd=str(cwd),
+        )
+    lines: queue.Queue[bytes] = queue.Queue()
+    threading.Thread(
+        target=lambda: [lines.put(line) for line in iter(proc.stdout.readline, b"")],
+        daemon=True,
+    ).start()
+
+    def diagnostics() -> str:
+        return log.read_text(encoding="utf-8", errors="replace")[-4000:]
+
+    responses: dict[int, dict] = {}
+    try:
+        for message in messages:
+            proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            if "id" not in message:
+                continue
+            while True:
+                try:
+                    reply = json.loads(lines.get(timeout=90))
+                except queue.Empty:
+                    pytest.fail(f"no answer to {message['method']} in 90s:\n{diagnostics()}")
+                if reply.get("id") == message["id"]:
+                    responses[message["id"]] = reply
+                    break
+        proc.stdin.close()
+        try:
+            returncode = proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{binary.name} still running 60s after stdin closed:\n{diagnostics()}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return responses, returncode
+
+
+async def test_binary_reads_refuses_control_and_exits_cleanly(binary, opcua_server, tmp_path):
+    """A release candidate must do real work, keep its safety default, and stop.
+
+    `--version` and a tool list prove the executable starts; they do not prove
+    it can reach a plant, that freezing kept the read-only default that hides
+    control tools, or that it exits when the client does rather than lingering
+    as an orphan holding an OPC UA session open.
+    """
+    env = {**os.environ, "OPCUA_SERVER_URL": opcua_server}
+    for name in ("OPCUA_PROFILE", "OPCUA_ALLOW_INSECURE_CONTROL"):
+        env.pop(name, None)
+
+    responses, returncode = _exchange(
+        binary,
+        env,
+        tmp_path,
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "binary-smoke", "version": "0"},
+                },
+            },
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "read_opcua_nodes", "arguments": {"node_ids": ["ns=2;i=3"]}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "write_opcua_nodes",
+                    "arguments": {"nodes": [{"node_id": "ns=2;i=13", "value": 80}]},
+                },
+            },
+        ],
+    )
+
+    tools = {t["name"] for t in responses[2]["result"]["tools"]}
+    assert "read_opcua_nodes" in tools
+    assert "write_opcua_nodes" not in tools, "the default profile must not expose control"
+
+    read = responses[3]["result"]
+    assert not read.get("isError"), read
+    assert "ns=2;i=3" in json.dumps(read)
+
+    # Refused either as a protocol error or as a tool error; never performed.
+    write = responses[4]
+    assert "error" in write or write["result"].get("isError"), write
+
+    assert returncode == 0, f"{binary.name} exited {returncode} after its client closed stdin"

@@ -96,38 +96,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      # The same steps publish.yml and release.yml gate a release on, so a
+      # green PR and a green release have proved the same thing (#142).
+      - name: Conformance suite
+        uses: ./.github/actions/conformance
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-          cache-dependency-path: packages/server-node/package-lock.json
-
-      - name: Build Node server
-        working-directory: packages/server-node
-        run: |
-          npm ci
-          npm run build
-
-      - name: Install aggregate mock OPC UA server
-        working-directory: packages/mock-server-aggregate
-        run: npm ci
-
-      - name: Install alarms mock OPC UA server
-        working-directory: packages/mock-server-alarms
-        run: npm ci
-
-      - name: Sync workspace (all packages)
-        run: uv sync --all-packages --python ${{ matrix.python-version }}
-
-      - name: Run end-to-end tests
-        working-directory: tests
-        run: uv run --no-sync pytest -v e2e/ unit/
 
   # Builds every artifact a user can actually download — npm tarball, Python
   # wheel, the `.mcpb` bundle and both single-file executables — installs them
@@ -147,6 +122,7 @@ jobs:
     # new name, then update the ruleset to require it.
     name: Downloadable artifacts (npm, wheel, .mcpb, executables)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -174,6 +150,8 @@ jobs:
 
       - name: Run artifact smoke tests
         working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1" # a missing toolchain fails, not skips (#142)
         run: uv run --no-sync pytest -v -m smoke smoke/
 
   # Windows and macOS, which nothing else in CI touches. The platform branches
@@ -197,6 +175,9 @@ jobs:
   cross-platform:
     name: Unit & artifacts — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Minutes when healthy; the bound turns a hung subprocess into a failure
+    # instead of GitHub's six-hour default holding a runner and the PR.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -236,4 +217,6 @@ jobs:
 
       - name: Run artifact smoke tests
         working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1" # a missing toolchain fails, not skips (#142)
         run: uv run --no-sync pytest -v -m smoke smoke/

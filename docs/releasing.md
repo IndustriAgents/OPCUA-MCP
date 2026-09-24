@@ -49,14 +49,19 @@ before cutting a release.
 cd packages/server-node && npm ci && npm run build && npm test && cd ../..
 uv sync --all-packages --group packaging
 uv run ruff check . && uv run ruff format --check .
-cd tests && uv run --no-sync pytest && uv run --no-sync pytest -m smoke smoke/
+cd tests && OPCUA_TESTS_REQUIRED=1 uv run --no-sync pytest e2e/ unit/ \
+  && OPCUA_TESTS_REQUIRED=1 uv run --no-sync pytest -m smoke smoke/
 
 # 4. Commit, then tag. The tag must match the manifests; the workflow checks.
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
 The `publish.yml` workflow then runs the full suite plus the artifact smoke
-tests, and only publishes if they pass.
+tests, and only publishes if they pass; `release.yml` builds and attaches nothing
+until the same suite has passed on the tag. Both run it in required mode
+(`OPCUA_TESTS_REQUIRED=1`), so a missing mock or toolchain fails the release
+instead of quietly skipping a subsystem — see
+[../tests/README.md](../tests/README.md#required-mode).
 
 ## The downloadable artifacts
 

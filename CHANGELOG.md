@@ -24,6 +24,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime too.** It was read as an endpoint of `""`, where the Node runtime and
   every other setting treat blank as unset — as an MCP client sends an optional
   field nobody filled in.
+- **Every release skipped the Alarms & Conditions tests, and stayed green**
+  (#142). `publish.yml` installed the aggregate mock but not the alarms mock, and
+  the alarm fixture skips when its mock is missing — so the gate every published
+  package passed through never ran an alarm test. The E2E setup is now one
+  composite action (`.github/actions/conformance`) shared by CI, `publish.yml`
+  and `release.yml`, so a PR and a release prove the same thing.
+- **A skip can no longer hide a subsystem from a gate.** With
+  `OPCUA_TESTS_REQUIRED=1` — set by CI, publish and release — any skip fails the
+  run unless explicitly allowlisted, and every test group (each runtime, security,
+  history, aggregates, events, alarms, resilience, parity, each executable) must
+  execute at least one passing test. Every run prints a per-group summary.
+- **Release executables are driven over MCP on every platform before they are
+  attached.** `release.yml` checked `--version` and an install dry run; it now
+  runs the binary smoke tests on Linux, macOS and Windows, which add a real read,
+  a refused write under the default profile, and a clean exit when the client
+  closes stdin. `release.yml` also builds nothing until the full suite has passed
+  on the tag.
+- **The Node server outlived its MCP client whenever an OPC UA session was
+  open.** The SDK's stdio transport listens for data on stdin but not for its
+  end, so closing the client never reached the shutdown path, and node-opcua's
+  keep-alive timers held the process — and its OPC UA session — open as an
+  orphan. It now shuts down (subscriptions, then session, bounded at 5 s) and
+  exits when stdin closes. Found by the new binary smoke test; the Python
+  runtime already exited.
+- `uv.lock` recorded the workspace packages at 0.5.0 after the 0.5.1 release.
 
 ### Added
 - **`contract/config.json`, one machine-readable definition of the configuration

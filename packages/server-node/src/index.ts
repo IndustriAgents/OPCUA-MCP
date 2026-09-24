@@ -28,11 +28,15 @@ import { OpcuaTools } from "./tools.js";
 // stdout, which this remap would otherwise divert.
 console.log = (...args: any[]) => console.error(...args);
 
+/** How long an exiting server waits for the OPC UA side to close cleanly. */
+const SHUTDOWN_GRACE_MS = 5_000;
+
 /** Wires the MCP protocol surface to the OPC UA tools. */
 class OPCUAMCPServer {
   private server: Server;
   private conn: OpcuaConnection;
   private tools: OpcuaTools;
+  private closing: Promise<void> | undefined;
 
   constructor(audit: AuditSink = new AuditSink()) {
     // One policy object, wired into both halves rather than fetched twice.
@@ -72,28 +76,32 @@ class OPCUAMCPServer {
 
   private setupLifecycle() {
     // Handle shutdown gracefully
-    process.on("SIGINT", async () => {
-      await this.shutdown();
-      process.exit(0);
-    });
+    process.on("SIGINT", () => void this.exitAfterShutdown());
+    process.on("SIGTERM", () => void this.exitAfterShutdown());
 
-    process.on("SIGTERM", async () => {
-      await this.shutdown();
-      process.exit(0);
-    });
-
-    // The usual end of an MCP session is not a signal at all: the client closes
-    // stdin and the transport goes with it. Without this, every subscription
-    // would be left for the OPC UA server to expire on its own.
+    // Without this, every subscription would be left for the OPC UA server to
+    // expire on its own when the transport closes.
     this.server.onclose = () => {
       void this.shutdown();
     };
   }
 
-  /** Drop the OPC UA subscriptions, then the session. In that order. */
-  private async shutdown() {
-    await this.tools.shutdown();
-    await this.conn.disconnect();
+  /** Drop the OPC UA subscriptions, then the session. In that order. Once. */
+  private shutdown(): Promise<void> {
+    this.closing ??= (async () => {
+      await this.tools.shutdown();
+      await this.conn.disconnect();
+    })();
+    return this.closing;
+  }
+
+  /** Shut down, then exit — even if the OPC UA side never answers. */
+  private async exitAfterShutdown(): Promise<never> {
+    // Bounded: disconnecting from a server that has gone quiet can wait on a
+    // request timeout, and a client that has left is not waiting for us.
+    const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
+    await Promise.race([this.shutdown().catch(() => undefined), deadline]);
+    process.exit(0);
   }
 
   private setupToolHandlers() {
@@ -130,6 +138,13 @@ class OPCUAMCPServer {
     await this.tools.warmUp();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    // The usual end of an MCP session is not a signal at all: the client closes
+    // stdin. The SDK's stdio transport listens for data and errors on stdin but
+    // not for its end, so `onclose` never fires — and with an OPC UA session
+    // open, its keep-alive timers held the event loop and the process outlived
+    // its client as an orphan holding that session. The binary smoke test's
+    // clean-exit check found it (#142); the Python runtime already exits here.
+    process.stdin.once("end", () => void this.exitAfterShutdown());
     console.error("OPC UA MCP Server running on stdio");
   }
 }

@@ -54,11 +54,23 @@ jobs:
             exit 1
           fi
 
+  # The suite CI's E2E jobs and publish.yml run, in required mode: nothing is
+  # built or attached for a tag the full suite has not passed on (#142).
+  conformance:
+    name: Conformance suite
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Conformance suite
+        uses: ./.github/actions/conformance
+
   # Platform-independent: the bundle contains no compiled code, only the server
   # and its dependencies as one JavaScript file. Claude Desktop supplies Node.
   mcpb:
     name: MCP bundle (.mcpb)
-    needs: verify-tag
+    needs: [verify-tag, conformance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -82,6 +94,8 @@ jobs:
       # server, so nothing gets uploaded that has not actually served a tool call.
       - name: Build and verify the bundle
         working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1"
         run: uv run --no-sync pytest -v -m smoke smoke/test_artifacts.py -k mcpb
 
       - uses: actions/upload-artifact@v7
@@ -92,7 +106,7 @@ jobs:
 
   binaries:
     name: Executables — ${{ matrix.os }}
-    needs: verify-tag
+    needs: [verify-tag, conformance]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -119,22 +133,20 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages --group packaging
 
-      - name: Build the Node executable
-        working-directory: packages/server-node
-        run: npm run build:sea
+      # Builds both executables and drives each over MCP against the mock OPC UA
+      # server: version, `--install` entry, tool list, a real read, a refused
+      # write under the default profile, and a clean exit when the client closes
+      # stdin. `--version` alone proved a binary starts, not that it works — and
+      # this is the only place the macOS and Windows builds are exercised before
+      # they are attached to a release. Required mode turns a missing PyInstaller
+      # or an unbuilt server into a failure rather than a skipped runtime.
+      - name: Build and verify every executable
+        working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1"
+        run: uv run --no-sync pytest -v -m smoke smoke/test_binaries.py
 
-      - name: Build the Python executable
-        run: >
-          uv run --group packaging pyinstaller --noconfirm
-          --distpath packages/server-python/dist
-          --workpath packages/server-python/build-pyinstaller
-          packages/server-python/packaging/opcua-mcp-server.spec
-
-      # Nothing here needs an OPC UA server, which is what makes it safe to run
-      # on all three platforms: it is the frozen-app failure mode that matters —
-      # a binary that cannot find its embedded contract, or reports no version,
-      # or writes a config entry naming arguments it cannot itself accept.
-      - name: Verify every executable runs
+      - name: Every executable reports the tag's version
         shell: bash
         run: |
           set -euo pipefail
@@ -143,15 +155,10 @@ jobs:
           for binary in packages/*/dist/opcua-mcp-server-*; do
             case "$binary" in *.mcpb) continue ;; esac
             found=$((found + 1))
-            echo "--- $binary"
             version=$("$binary" --version)
             test "$version" = "$expected" || {
               echo "::error::$binary reports $version, expected $expected"; exit 1;
             }
-            HOME="$RUNNER_TEMP/scratch-home" \
-            USERPROFILE="$RUNNER_TEMP/scratch-home" \
-            APPDATA="$RUNNER_TEMP/scratch-home/AppData/Roaming" \
-              "$binary" --install claude-desktop --dry-run
           done
           test "$found" -eq 2 || { echo "::error::expected 2 executables, found $found"; exit 1; }
 

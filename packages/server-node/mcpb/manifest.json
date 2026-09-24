@@ -4,7 +4,7 @@
   "display_name": "OPC UA",
   "version": "0.5.1",
   "description": "Read industrial sensors and control equipment on any OPC UA server.",
-  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools.\n\nSet the endpoint below to your OPC UA server's URL. The default **observe** profile can read, browse and monitor but cannot write, call methods or acknowledge alarms. Use **operator** with explicit target allowlists for production control; **full** is intended for a tightly scoped OPC UA account.\n\n**Security:** the connection defaults to unencrypted and anonymous for local simulation. Control tools remain blocked on an insecure channel unless the lab-only override is enabled. Against real equipment, set Basic256Sha256, a client certificate and key, and credentials scoped to exactly the nodes and methods required.",
+  "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools.\n\nSet the endpoint below to your OPC UA server's URL. The default **observe** profile can read, browse and monitor but cannot write, call methods or acknowledge alarms. Use **operator** with explicit target allowlists for production control; **full** is intended for a tightly scoped OPC UA account.\n\n**Security:** the connection defaults to unencrypted and anonymous for local simulation. Control tools need the OPC UA server's certificate pinned, not only an encrypted channel: encryption says nobody can read the traffic, the pin says who is on the other end. Against real equipment, set Basic256Sha256, a client certificate and key, the server's certificate, and credentials scoped to exactly the nodes and methods required.",
   "author": {
     "name": "Midhun Xavier",
     "url": "https://github.com/midhunxavier"
@@ -43,6 +43,7 @@
         "OPCUA_ALLOWED_METHODS": "${user_config.opcua_allowed_methods}",
         "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS": "${user_config.opcua_allow_acknowledge_alarms}",
         "OPCUA_ALLOW_INSECURE_CONTROL": "${user_config.opcua_allow_insecure_control}",
+        "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "${user_config.opcua_allow_unverified_server_control}",
         "OPCUA_ALLOW_OUT_OF_RANGE_WRITES": "${user_config.opcua_allow_out_of_range_writes}",
         "OPCUA_AUDIT_FILE": "${user_config.opcua_audit_file}",
         "OPCUA_OPERATOR_ID": "${user_config.opcua_operator_id}",
@@ -95,7 +96,7 @@
     "opcua_server_cert": {
       "type": "file",
       "title": "Pinned server certificate",
-      "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint. Set without a security policy, it stops the server at startup rather than pinning nothing.",
+      "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect.",
       "required": false
     },
     "opcua_username": {
@@ -165,7 +166,14 @@
     "opcua_allow_insecure_control": {
       "type": "boolean",
       "title": "Allow insecure control (lab only)",
-      "description": "Permit control tools on an OPC UA channel with no security policy. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Never enable it against production equipment.",
+      "description": "Permit control tools on an OPC UA channel with no security policy (None). Does not cover a secured channel to an unverified server; that is OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Reported as control=INSECURE-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment.",
+      "default": false,
+      "required": false
+    },
+    "opcua_allow_unverified_server_control": {
+      "type": "boolean",
+      "title": "Allow control of an unverified server (lab only)",
+      "description": "Permit control tools on a secured OPC UA channel whose server certificate is not pinned with OPCUA_SERVER_CERT. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment.",
       "default": false,
       "required": false
     },

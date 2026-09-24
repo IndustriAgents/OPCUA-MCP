@@ -21,6 +21,7 @@ POLICY_ENV = {
     "OPCUA_ALLOWED_METHODS",
     "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
     "OPCUA_ALLOW_INSECURE_CONTROL",
+    "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL",
 }
 
 REQUIRED_OBSERVE_TOOLS = {
@@ -226,6 +227,9 @@ async def test_the_audit_trail_records_what_a_control_call_targeted(impl, opcua_
         [record] = by_decision[decision]
         assert record["tool"] == "write_opcua_nodes", record
         assert record["profile"] == "operator", record
+        # Which condition let control through: here the lab override, never
+        # mistakable for a verified server (#134).
+        assert record["control"] == "INSECURE-OVERRIDE", record
         assert record["node_ids"] == ["ns=2;i=13"], f"{impl}: targets missing from {record}"
 
     [refusal] = by_decision["denied"]

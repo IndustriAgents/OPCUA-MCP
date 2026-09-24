@@ -160,7 +160,7 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
 | `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
 | `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
-| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint. Requires a policy other than `None` |
+| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint, and **control tools are refused**. Requires a policy other than `None`; an expired pin refuses to connect |
 | `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
 | `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
 | `OPCUA_USER_CERT` | — | Certificate identifying the **user**, for X.509 authentication. A different key pair from `OPCUA_CLIENT_CERT`, which secures the channel. Cannot be combined with `OPCUA_USERNAME` |
@@ -171,7 +171,8 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated node IDs writable by the `operator` profile. `ns=2;i=5` or, preferably, `nsu=<namespace-uri>;i=5` |
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id\|method_node_id` pairs callable by `operator` |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to act on alarms — `acknowledge_alarm` and every `act_on_alarm` action |
-| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
+| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools over a channel with **no** security (`SecurityPolicy=None`). Does not cover an unverified server on a secured one |
+| `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Lab-only override permitting control tools over a secured channel whose server certificate is **not pinned** — encrypted, but to whoever answered |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node |
 | `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. A file that cannot be opened stops the server rather than falling back |
 | `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
@@ -217,8 +218,14 @@ Three profiles, and the default is the restrictive one:
 `operator` is the one worth understanding. A write to a node outside
 `OPCUA_ALLOWED_WRITE_NODES` is refused before anything reaches OPC UA, and one
 forbidden target rejects an entire batch rather than letting part of it through.
-Both `operator` and `full` also require a secured OPC UA channel unless
-`OPCUA_ALLOW_INSECURE_CONTROL=true` says otherwise in as many words.
+Both `operator` and `full` also require a **verified server**: a security
+policy _and_ the server's certificate pinned with `OPCUA_SERVER_CERT`. Encrypted
+is not enough — without the pin the channel is encrypted to whoever answered.
+Two lab-only overrides say otherwise in as many words, one per missing property:
+`OPCUA_ALLOW_INSECURE_CONTROL=true` for a channel with no security, and
+`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` for a secured one to an unpinned
+server. A refused control call names the variable to set, and
+`get_server_status` → `server_identity` says which of the three is in force.
 
 The policy is enforced again on **every call**, not only when tools are listed —
 an MCP client may hold a stale catalogue, and a hidden tool is a usability
@@ -361,8 +368,11 @@ Result: Found 5 variables:
 The connection defaults to no security (`SecurityPolicy.None`) and the tool
 profile defaults to **observe-only**. For anything beyond local development,
 configure both channel security and an `operator` allowlist, and pin the endpoint
-with `OPCUA_SERVER_CERT`. Control tools are blocked on an insecure channel unless
-the explicit lab override is set.
+with `OPCUA_SERVER_CERT`. Control tools need that pin, not only an encrypted
+channel: encryption says nobody can read the traffic, the pin says who is on the
+other end. Each can be waived for a lab by its own explicit override
+(`OPCUA_ALLOW_INSECURE_CONTROL`, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL`), and
+never by the other's.
 
 The MCP policy is defense in depth, not a replacement for OPC UA authorization.
 Scope the OPC UA account to the same nodes and methods; use a separate read-only

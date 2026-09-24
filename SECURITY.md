@@ -29,6 +29,13 @@ on stderr when it is unset, on an otherwise fully secured connection, because
 `policy=Basic256Sha256 mode=SignAndEncrypt` reads like the connection is safe and
 the one thing it does not establish is who is on the other end.
 
+Encrypted and authenticated are two properties, and **control needs both**.
+Reading over an encrypted but unverified channel works; writes, method calls and
+alarm actions are offered only once the server is pinned — see
+[Control needs a verified server](#control-needs-a-verified-server). A pinned
+certificate outside its validity window refuses to connect rather than carrying
+on unverified.
+
 For X.509 *user* authentication, set `OPCUA_USER_CERT` and `OPCUA_USER_KEY`
 instead of `OPCUA_USERNAME`/`OPCUA_PASSWORD`. That is a **different key pair**
 from `OPCUA_CLIENT_CERT`: the client certificate is the application's identity
@@ -52,9 +59,11 @@ What this does **not** do, and you should still plan for:
 - **Trust-list validation of the server certificate.** `OPCUA_SERVER_CERT` pins
   one expected certificate, which is the strongest option here and the one to
   use; what is *not* implemented is a CA trust store with revocation checking,
-  so a deployment rotating server certificates has to update the pinned file.
-  Leaving `OPCUA_SERVER_CERT` unset falls back to the old behaviour — the
-  certificate is taken from the endpoint description and not verified at all.
+  so a deployment rotating server certificates has to update the pinned file
+  (python-opcua has no server-certificate validation to build a trust store on,
+  and both runtimes keep one behaviour). A pin is an exact match, so revoking a
+  certificate means replacing the pin. Leaving `OPCUA_SERVER_CERT` unset leaves
+  the certificate unverified — reads still work, control does not.
   The other direction is checked by the server: it decides whether to trust the
   client certificate you configure.
 - **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
@@ -174,10 +183,35 @@ Three properties worth knowing:
   authorisation check is the boundary.
 - **A batch is all-or-nothing.** One forbidden target rejects the whole write
   before any of it is sent, so a batch can never end up partially applied.
-- **Control needs a secured channel.** `operator` and `full` refuse to offer
-  control tools over an unencrypted connection unless
-  `OPCUA_ALLOW_INSECURE_CONTROL=true` is set explicitly, and the startup line
-  then reads `control=INSECURE-OVERRIDE` rather than blending in.
+- **Control needs a verified server.** See below.
+
+### Control needs a verified server
+
+`operator` and `full` offer control tools — writes, method calls, alarm actions —
+only over a channel whose far end is known: a security policy other than `None`
+(mode `Sign` or `SignAndEncrypt`) **and** the server's certificate pinned with
+`OPCUA_SERVER_CERT`. An encrypted channel alone is not enough, because both
+client libraries encrypt happily to whatever certificate the endpoint presents,
+and an attacker able to answer for the endpoint would otherwise have been handed
+the control tools along with the encryption. (Up to 0.5.1 it was enough; #134.)
+
+Two lab-only overrides, each covering exactly one missing property:
+
+| Channel | Server certificate | Control | Override that opens it |
+|---|---|---|---|
+| `SecurityPolicy=None` | — | refused | `OPCUA_ALLOW_INSECURE_CONTROL=true` → `control=INSECURE-OVERRIDE` |
+| `Sign` / `SignAndEncrypt` | not pinned | refused | `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` → `control=UNVERIFIED-OVERRIDE` |
+| `Sign` / `SignAndEncrypt` | pinned | offered | — (`control=secured`) |
+
+Neither override stands in for the other: encryption and peer authentication are
+independent, and consenting to the lack of one for a lab is not consenting to the
+lack of the other. A refused call names the variable that would open it. Which
+condition is in force is reported three times — in the startup line
+(`Tool policy: profile=operator control=blocked server-identity=unverified`), in
+`get_server_status` → `server_identity`, and as `control` in every audit record —
+so a write a lab override let through cannot pass for one a verified server did.
+The profile and allowlists apply on top of all of it. The rule, every combination,
+is `tests/fixtures/control-gate.json`, and both runtimes are tested against it.
 
 ### What is audited
 
@@ -186,8 +220,13 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**:
 ```json
 {"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
  "attempt":1,"endpoint":"opc.tcp://plc:4840","session":"3b91e0c4a77d2f10","operator":"line-a-hmi",
- "profile":"operator","tool":"write_opcua_nodes","decision":"allowed","node_ids":["ns=2;i=13"]}
+ "profile":"operator","control":"secured","tool":"write_opcua_nodes","decision":"allowed",
+ "node_ids":["ns=2;i=13"]}
 ```
+
+`control` is what let the call through the channel gate: `secured` for a pinned
+server, or the lab override that was in force (`INSECURE-OVERRIDE`,
+`UNVERIFIED-OVERRIDE`) — `blocked` on a refusal the gate made.
 
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
 as the verdict, because a call that was permitted and a call that reached the

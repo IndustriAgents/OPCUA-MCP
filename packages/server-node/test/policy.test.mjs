@@ -38,6 +38,7 @@ describe("tool policy", () => {
     const subject = policy({
       OPCUA_PROFILE: "operator",
       OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_SERVER_CERT: "/pki/server.pem",
       OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=13",
       OPCUA_ALLOWED_METHODS: "ns=2;i=27|ns=2;i=28",
     });
@@ -61,7 +62,11 @@ describe("tool policy", () => {
   });
 
   it("hides operator control families that have no configured targets", () => {
-    const base = { OPCUA_PROFILE: "operator", OPCUA_SECURITY_POLICY: "Basic256Sha256" };
+    const base = {
+      OPCUA_PROFILE: "operator",
+      OPCUA_SECURITY_POLICY: "Basic256Sha256",
+      OPCUA_SERVER_CERT: "/pki/server.pem",
+    };
     const writeOnly = visible(policy({ ...base, OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=13" }));
     assert.equal(writeOnly.has("write_opcua_nodes"), true);
     assert.equal(writeOnly.has("call_opcua_method"), false);
@@ -97,6 +102,7 @@ function operator(extra = {}) {
   return policy({
     OPCUA_PROFILE: "operator",
     OPCUA_SECURITY_POLICY: "Basic256Sha256",
+    OPCUA_SERVER_CERT: "/pki/server.pem",
     OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=13",
     OPCUA_ALLOWED_METHODS: "ns=2;i=1|ns=2;i=2",
     ...extra,
@@ -261,13 +267,19 @@ describe("the startup summary", () => {
     // It used to print `insecure-control=enabled` for both, which is the
     // opposite of conspicuous: the one line an operator might scan said the
     // same thing whether control was properly secured or deliberately unlocked.
-    const secured = describePolicy(policy({ OPCUA_SECURITY_POLICY: "Basic256Sha256" }));
+    // Every state of the gate is covered by tests/fixtures/control-gate.json.
+    const secured = describePolicy(
+      policy({ OPCUA_SECURITY_POLICY: "Basic256Sha256", OPCUA_SERVER_CERT: "/pki/server.pem" })
+    );
     const override = describePolicy(policy({ OPCUA_ALLOW_INSECURE_CONTROL: "true" }));
     const blocked = describePolicy(policy({}));
+    const unverified = describePolicy(policy({ OPCUA_SECURITY_POLICY: "Basic256Sha256" }));
 
     assert.match(secured, /control=secured/);
     assert.match(override, /control=INSECURE-OVERRIDE/);
     assert.match(blocked, /control=blocked/);
-    assert.equal(new Set([secured, override, blocked]).size, 3);
+    // Encrypted is not verified, and the line says which one it is.
+    assert.match(unverified, /control=blocked server-identity=unverified/);
+    assert.equal(new Set([secured, override, blocked, unverified]).size, 4);
   });
 });

@@ -272,6 +272,11 @@ PROBES = {
     "OPCUA_ALLOW_INSECURE_CONTROL": lambda v: (
         parse_policy_config({"OPCUA_ALLOW_INSECURE_CONTROL": v}).allow_insecure_control
     ),
+    "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": lambda v: (
+        parse_policy_config(
+            {"OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": v}
+        ).allow_unverified_server_control
+    ),
     "OPCUA_ALLOW_OUT_OF_RANGE_WRITES": lambda v: (
         parse_policy_config({"OPCUA_ALLOW_OUT_OF_RANGE_WRITES": v}).allow_out_of_range_writes
     ),

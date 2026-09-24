@@ -90,6 +90,7 @@ async function auditing(run) {
 const OPERATOR = {
   OPCUA_PROFILE: "operator",
   OPCUA_SECURITY_POLICY: "Basic256Sha256",
+  OPCUA_SERVER_CERT: "/pki/server.pem",
   OPCUA_ALLOWED_WRITE_NODES: "ns=2;i=5",
 };
 

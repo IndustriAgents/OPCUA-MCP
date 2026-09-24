@@ -354,6 +354,18 @@
           "type": "string",
           "description": "The connection security in force, as 'policy=<SecurityPolicy> mode=<MessageSecurityMode> user=<username|anonymous>'. Example: 'policy=Basic256Sha256 mode=SignAndEncrypt user=\"operator\"'."
         },
+        "server_identity": {
+          "type": "object",
+          "description": "Whether this MCP server knows WHO it is talking to, which is a different question from whether the channel is encrypted, and what that means for control. From configuration, so it is reported even while disconnected. Never carries certificate material.",
+          "properties": {
+            "channel_secured": { "type": "boolean", "description": "True when a SecurityPolicy other than None is configured (mode Sign or SignAndEncrypt). Protects the traffic; says nothing about who is on the other end." },
+            "server_authenticated": { "type": "boolean", "description": "True when the OPC UA server's certificate is verified — pinned with OPCUA_SERVER_CERT, so a connection to anything else cannot complete. False on a secured channel means encrypted to whichever server answered." },
+            "authentication_method": { "type": "string", "enum": ["pin", "none"], "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT) or 'none'." },
+            "control": { "type": "string", "enum": ["secured", "INSECURE-OVERRIDE", "UNVERIFIED-OVERRIDE", "blocked"], "description": "Whether control tools (writes, method calls, alarm actions) may be offered over this connection, and which condition allows it: 'secured' (verified server), 'INSECURE-OVERRIDE' (OPCUA_ALLOW_INSECURE_CONTROL on an unsecured channel), 'UNVERIFIED-OVERRIDE' (OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL on an unverified one) or 'blocked'. The profile and allowlists still apply on top." }
+          },
+          "required": ["channel_secured", "server_authenticated", "authentication_method", "control"],
+          "additionalProperties": false
+        },
         "server_state": {
           "type": ["string", "null"],
           "description": "The OPC UA server's own ServerStatus.State, named as OPC UA names it: 'Running', 'Failed', 'NoConfiguration', 'Suspended', 'Shutdown', 'Test', 'CommunicationFault' or 'Unknown'. A reachable server that is not 'Running' is the answer to 'is it healthy?'."
@@ -416,6 +428,7 @@
         "connected",
         "endpoint_url",
         "security",
+        "server_identity",
         "server_state",
         "current_time",
         "start_time",
@@ -725,6 +738,8 @@
     "belowMinimum": "{tool} argument {argument} must be at least {minimum}, got {value}",
     "unknownTool": "Unknown tool: {tool}",
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
+    "controlNeedsSecureChannel": "Tool \"{tool}\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",
+    "controlNeedsVerifiedServer": "Tool \"{tool}\" is disabled because the OPC UA server's identity is not verified: the channel is secured, but to whichever server answered. Set OPCUA_SERVER_CERT to the server's certificate to pin it, or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true on a lab network only.",
     "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
     "tooManyNodes": "{tool} accepts at most {limit} nodes in one call, got {count}. Split the request.",
     "tooManySubscriptions": "This server already holds {active} of at most {limit} subscriptions; subscribing to {wanted} more would exceed it. Cancel some with unsubscribe_opcua_nodes.",

@@ -7,6 +7,12 @@ import { message } from "./errors.js";
 
 export type ToolProfile = "observe" | "operator" | "full";
 
+/** What the control gate can say, and the one word every surface uses for it:
+ * the startup line, `get_server_status` and every audit record. Named apart
+ * because "control is on" is not one fact — a verified server and a lab override
+ * both turn it on, and a reviewer has to be able to tell which did. */
+export type ControlGate = "secured" | "INSECURE-OVERRIDE" | "UNVERIFIED-OVERRIDE" | "blocked";
+
 /** One `writable_nodes` entry when it carries a bound rather than only a node. */
 interface WritableNodeEntry {
   node: string;
@@ -21,6 +27,7 @@ interface PolicyFile {
   profile?: string;
   allowed_tools?: string[];
   allow_insecure_control?: boolean;
+  allow_unverified_server_control?: boolean;
   allow_out_of_range_writes?: boolean;
   control?: {
     writable_nodes?: Array<string | WritableNodeEntry>;
@@ -120,6 +127,49 @@ function valueBound(entry: string | WritableNodeEntry): [string, ValueBound] {
   return [entry.node, bound];
 }
 
+/** What this process can prove about the other end of the channel (#134).
+ *
+ * Two properties that used to be one boolean. *Secured* means the traffic is
+ * signed (and, under SignAndEncrypt, encrypted): nobody can read or forge it in
+ * transit. *Authenticated* means the peer has been shown to be the intended
+ * server. The control gate used to check the first while its safety meaning
+ * needs the second — both client libraries encrypt happily to whatever
+ * certificate the endpoint presents, so an attacker who can answer for the
+ * endpoint gets an encrypted channel, and with it the control tools.
+ *
+ * Derived from configuration alone, and that is sound rather than optimistic: a
+ * pinned certificate (`OPCUA_SERVER_CERT`) is the key the client encrypts the
+ * handshake to, so a server without the matching private key cannot complete
+ * it, and a pin outside its validity window refuses to connect at all (see
+ * `pinnedCertificateProblem` in security.ts). Whenever there is a session, a pin
+ * means the peer is the pinned server.
+ *
+ * `server_identity` in `policy.py` is the other half, and
+ * `tests/fixtures/control-gate.json` holds both to the same answers.
+ */
+export interface ServerIdentity {
+  /** A SecurityPolicy other than None: mode Sign or SignAndEncrypt. */
+  channelSecured: boolean;
+  serverAuthenticated: boolean;
+  /** A trust-store method would be a third value; neither client library offers
+   *  one both runtimes can use, so there is none yet. */
+  authenticationMethod: "pin" | "none";
+}
+
+/** The channel's identity guarantees, from the security variables. */
+export function serverIdentity(env: NodeJS.ProcessEnv): ServerIdentity {
+  const secured = (value(env, "OPCUA_SECURITY_POLICY") ?? "None").toLowerCase() !== "none";
+  // `secured &&`: a pin on an unsecured channel is refused at startup by
+  // security.ts, but this must not read it as authentication if it ever gets
+  // here — with no channel security the server presents no certificate at all.
+  const pinned = secured && value(env, "OPCUA_SERVER_CERT") !== undefined;
+  return {
+    channelSecured: secured,
+    serverAuthenticated: pinned,
+    authenticationMethod: pinned ? "pin" : "none",
+  };
+}
+
 export interface PolicyConfig {
   profile: ToolProfile;
   allowedTools: Set<string> | null;
@@ -130,8 +180,14 @@ export interface PolicyConfig {
   valueBounds: Map<string, ValueBound>;
   callableMethods: Set<string>;
   acknowledgeAlarms: boolean;
+  /** Control over a channel with no security at all (SecurityPolicy None). */
   allowInsecureControl: boolean;
-  secureChannel: boolean;
+  /** Control over a secured channel to a server whose identity is unverified.
+   *  Deliberately not folded into `allowInsecureControl`: encryption and peer
+   *  authentication are independent properties, and an operator who accepted
+   *  the one for a lab has not thereby accepted the other. */
+  allowUnverifiedServerControl: boolean;
+  serverIdentity: ServerIdentity;
   /** Whether a write outside the range the OPC UA server itself published
    *  (`EURange`) is allowed through. Refused by default: a bound the equipment
    *  declares is worth more than one a human retyped, and it is the only value
@@ -244,13 +300,16 @@ export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
     "OPCUA_ALLOW_INSECURE_CONTROL",
     file.allow_insecure_control ?? false
   );
+  const allowUnverifiedServerControl = parseBoolean(
+    value(env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL"),
+    "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL",
+    file.allow_unverified_server_control ?? false
+  );
   const allowOutOfRangeWrites = parseBoolean(
     value(env, "OPCUA_ALLOW_OUT_OF_RANGE_WRITES"),
     "OPCUA_ALLOW_OUT_OF_RANGE_WRITES",
     file.allow_out_of_range_writes ?? false
   );
-  const policy = value(env, "OPCUA_SECURITY_POLICY") ?? "None";
-
   return {
     profile,
     allowedTools,
@@ -259,8 +318,58 @@ export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
     callableMethods,
     acknowledgeAlarms,
     allowInsecureControl,
-    secureChannel: policy.toLowerCase() !== "none",
+    allowUnverifiedServerControl,
+    serverIdentity: serverIdentity(env),
     allowOutOfRangeWrites,
+  };
+}
+
+/** Whether control may be offered over this connection, and why.
+ *
+ * The profile and allowlists apply on top of this; it only answers whether the
+ * channel is one control may travel over at all. Each override covers exactly
+ * one missing property, so neither can stand in for the other — and a secured
+ * channel is judged on the server's identity even when
+ * `OPCUA_ALLOW_INSECURE_CONTROL` is set, because that override was never about
+ * identity.
+ */
+export function controlGate(config: PolicyConfig): ControlGate {
+  const identity = config.serverIdentity;
+  if (!identity.channelSecured) {
+    return config.allowInsecureControl ? "INSECURE-OVERRIDE" : "blocked";
+  }
+  if (identity.serverAuthenticated) return "secured";
+  return config.allowUnverifiedServerControl ? "UNVERIFIED-OVERRIDE" : "blocked";
+}
+
+/** The contract error a blocked gate refuses control with, or null if open.
+ *
+ * Two messages rather than one, because the fix differs: an unsecured channel
+ * needs a security policy, an unverified server needs its certificate pinned.
+ * Each names the variables that would open it.
+ */
+export function controlRefusal(config: PolicyConfig): string | null {
+  if (controlGate(config) !== "blocked") return null;
+  return config.serverIdentity.channelSecured
+    ? "controlNeedsVerifiedServer"
+    : "controlNeedsSecureChannel";
+}
+
+/** `serverStatus.server_identity`: the identity, and what it means for control. */
+export interface ServerIdentityRecord {
+  channel_secured: boolean;
+  server_authenticated: boolean;
+  authentication_method: "pin" | "none";
+  control: ControlGate;
+}
+
+export function serverIdentityRecord(config: PolicyConfig): ServerIdentityRecord {
+  const identity = config.serverIdentity;
+  return {
+    channel_secured: identity.channelSecured,
+    server_authenticated: identity.serverAuthenticated,
+    authentication_method: identity.authenticationMethod,
+    control: controlGate(config),
   };
 }
 
@@ -303,7 +412,7 @@ function classVisible(config: PolicyConfig, tool: ToolSpec): boolean {
   const guard = tool.guard;
   if (!guard) return false;
 
-  if (!config.secureChannel && !config.allowInsecureControl) return false;
+  if (controlGate(config) === "blocked") return false;
   if (config.profile === "full") return true;
   if (config.profile !== "operator") return false;
 
@@ -474,9 +583,7 @@ export class ToolPolicy {
   authorize(name: string, args: Record<string, unknown> = {}): void {
     const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
     if (!tool) throw new Error(message("unknownTool", { tool: name }));
-    if (!this.isVisible(tool)) {
-      throw new Error(message("toolDisabled", { tool: name, profile: this.config.profile }));
-    }
+    if (!this.isVisible(tool)) throw new Error(this.refusal(tool));
     if (this.config.profile !== "operator") return;
 
     // `isVisible` has already refused a guardless control tool; this is the
@@ -491,6 +598,28 @@ export class ToolPolicy {
     this.authorizeNodes(name, guard, args);
     this.authorizeValues(guard, args);
     this.authorizeMethods(name, guard, args);
+  }
+
+  /** Why a hidden tool is hidden, worded so the reader knows what to change.
+   *
+   * The channel gate is named only where it is the reason: a control tool the
+   * profile would otherwise offer and the allowlist does not exclude. Telling an
+   * `observe` deployment to pin a certificate would be advice that changes
+   * nothing.
+   */
+  private refusal(tool: ToolSpec): string {
+    const { allowedTools, profile } = this.config;
+    const refusal = controlRefusal(this.config);
+    if (
+      refusal !== null &&
+      (tool.accessClass === "control" || tool.accessClass === "alarm-action") &&
+      tool.guard &&
+      (profile === "operator" || profile === "full") &&
+      (allowedTools === null || allowedTools.has(tool.name))
+    ) {
+      return message(refusal, { tool: tool.name });
+    }
+    return message("toolDisabled", { tool: tool.name, profile });
   }
 
   /** Check every write in a call against the operator's bound for its target.
@@ -667,17 +796,19 @@ export function toolPolicy(): ToolPolicy {
 
 /** One-line summary for the startup log.
  *
- * The three states are named apart. The old version printed
- * `insecure-control=enabled` both for a properly secured deployment and for an
- * active lab override, which made the override the opposite of conspicuous —
- * the one line an operator might scan for it said the same thing either way.
+ * Every state is named apart. The old version printed `insecure-control=enabled`
+ * both for a properly secured deployment and for an active lab override, which
+ * made the override the opposite of conspicuous — the one line an operator might
+ * scan for it said the same thing either way. `server-identity` is here for the
+ * same reason: `control=blocked` on a secured channel is otherwise a puzzle.
  */
 export function describePolicy(policy: ToolPolicy): string {
   const { config } = policy;
-  const control = config.secureChannel
-    ? "secured"
-    : config.allowInsecureControl
-      ? "INSECURE-OVERRIDE"
-      : "blocked";
-  return `profile=${config.profile} control=${control}`;
+  const identity = config.serverIdentity;
+  const who = identity.serverAuthenticated
+    ? identity.authenticationMethod
+    : identity.channelSecured
+      ? "unverified"
+      : "none";
+  return `profile=${config.profile} control=${controlGate(config)} server-identity=${who}`;
 }

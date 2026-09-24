@@ -42,6 +42,7 @@ def test_operator_only_exposes_configured_control_targets():
         {
             "OPCUA_PROFILE": "operator",
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_SERVER_CERT": "/pki/server.pem",
             "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=13",
             "OPCUA_ALLOWED_METHODS": "ns=2;i=27|ns=2;i=28",
             "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS": "true",
@@ -63,7 +64,11 @@ def test_operator_only_exposes_configured_control_targets():
 
 
 def test_operator_catalog_hides_control_families_without_targets():
-    base = {"OPCUA_PROFILE": "operator", "OPCUA_SECURITY_POLICY": "Basic256Sha256"}
+    base = {
+        "OPCUA_PROFILE": "operator",
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_SERVER_CERT": "/pki/server.pem",
+    }
     write_only = policy({**base, "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=13"})
     assert visible(write_only) & CONTROL == {
         "write_opcua_nodes",
@@ -77,6 +82,7 @@ def test_batch_write_is_rejected_before_any_item_can_run():
         {
             "OPCUA_PROFILE": "operator",
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_SERVER_CERT": "/pki/server.pem",
             "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=13",
         }
     )
@@ -129,6 +135,7 @@ def test_json_policy_file_and_environment_precedence(tmp_path):
             "OPCUA_POLICY_FILE": str(path),
             "OPCUA_PROFILE": "observe",
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_SERVER_CERT": "/pki/server.pem",
         }
     )
     assert parsed.profile == "observe"
@@ -150,6 +157,7 @@ def operator(**extra: str) -> ToolPolicy:
         {
             "OPCUA_PROFILE": "operator",
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_SERVER_CERT": "/pki/server.pem",
             "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=13",
             "OPCUA_ALLOWED_METHODS": "ns=2;i=1|ns=2;i=2",
             **extra,
@@ -322,12 +330,18 @@ def test_binding_namespaces_warns_about_an_entry_that_can_never_match(capsys):
 def test_the_startup_summary_distinguishes_a_lab_override_from_a_secured_channel():
     """It used to print `insecure-control=enabled` for both, which is the opposite
     of conspicuous: the one line an operator might scan said the same thing
-    whether control was properly secured or deliberately unlocked."""
-    secured = describe_policy(policy({"OPCUA_SECURITY_POLICY": "Basic256Sha256"}))
+    whether control was properly secured or deliberately unlocked. Every state
+    of the gate is covered by tests/fixtures/control-gate.json."""
+    secured = describe_policy(
+        policy({"OPCUA_SECURITY_POLICY": "Basic256Sha256", "OPCUA_SERVER_CERT": "/pki/server.pem"})
+    )
     override = describe_policy(policy({"OPCUA_ALLOW_INSECURE_CONTROL": "true"}))
     blocked = describe_policy(policy({}))
+    unverified = describe_policy(policy({"OPCUA_SECURITY_POLICY": "Basic256Sha256"}))
 
     assert "control=secured" in secured
     assert "control=INSECURE-OVERRIDE" in override
     assert "control=blocked" in blocked
-    assert len({secured, override, blocked}) == 3
+    # Encrypted is not verified, and the line says which one it is.
+    assert "control=blocked server-identity=unverified" in unverified
+    assert len({secured, override, blocked, unverified}) == 4

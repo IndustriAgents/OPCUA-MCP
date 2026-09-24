@@ -48,6 +48,8 @@ CASES = [
     ReconnectConfig(initial_delay_ms=250, max_delay_ms=1000, max_retry=8),
     ReconnectConfig(initial_delay_ms=500, max_delay_ms=500, max_retry=0),
     ReconnectConfig(initial_delay_ms=1000, max_delay_ms=10000, max_retry=-1),
+    # Large enough that `:g` wrote "1e+06ms" where Node writes "1000000ms" (#157).
+    ReconnectConfig(initial_delay_ms=2500, max_delay_ms=1_000_000, session_timeout_ms=3_600_000),
 ]
 
 

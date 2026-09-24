@@ -119,10 +119,10 @@
       "id": "reconnect-mechanism",
       "area": "connection",
       "summary": "A dropped connection is repaired in the background on Node and on the next call on Python.",
-      "python": "python-opcua has no reconnection. The connection layer builds a fresh client and a new session when a tool call next needs one, and re-creates the data-change subscriptions on it; the audit record's session id changes across the outage.",
+      "python": "python-opcua has no reconnection. The connection layer builds a fresh client and a new session when a tool call next needs one, and re-creates the data-change and event subscriptions on it; the audit record's session id changes across the outage.",
       "node": "node-opcua repairs the channel itself, in the background and without waiting for a call, and re-activates the same session with its subscriptions; the audit record's session id is unchanged by such a repair. Only when the library gives up does the connection layer rebuild, as Python does.",
       "observable": true,
-      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* — a timeout counted as a dead session on Python only, event subscriptions not re-attached after a rebuild — that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
+      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* — a timeout counted as a dead session on Python only — that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
       "tracking": ["#144"],
       "evidence": [
         "packages/server-python/src/opcua_mcp_server/connection.py",

@@ -6,7 +6,7 @@ resolves the path, merges an entry into whatever is already there, and writes it
 back atomically with a backup.
 
 The Node runtime ships the same subcommand with the same flags and produces the
-same config entry; ``tests/e2e/test_install_parity.py`` holds the two to it.
+same config entry; ``tests/unit/test_install_parity.py`` holds the two to it.
 """
 
 from __future__ import annotations

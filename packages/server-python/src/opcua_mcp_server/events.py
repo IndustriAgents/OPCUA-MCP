@@ -42,12 +42,27 @@ DEFAULT_NOTIFIER: str = EVENTS["defaultNotifierNodeId"]
 #: The defaults the contract's tool descriptions promise, shared with Node.
 DEFAULTS: dict = EVENTS["defaults"]
 
-#: One event per publishing cycle is not enough. A ConditionRefresh answers with
-#: the RefreshStart event, every retained condition and the RefreshEnd event in
-#: one go; with python-opcua's default queue size the server discards all but the
-#: last, and a refresh looks like it found no alarms at all.
-_QUEUE_SIZE = 1000
-_PUBLISHING_INTERVAL_MS = 200
+#: The CreateSubscription parameters for every event subscription, from the
+#: contract, which says why each is what it is — above all ``queueSize``: a
+#: ConditionRefresh answers with RefreshStart, every retained condition and
+#: RefreshEnd in one go, and a queue of 1 keeps only the last. Everything but the
+#: queue and the interval used to be python-opcua's defaults (keep-alive 3000,
+#: lifetime 10000), which the Node runtime never sent (#157).
+_REQUEST = EVENTS["subscriptionRequest"]
+_QUEUE_SIZE = _REQUEST["queueSize"]
+
+
+def subscription_parameters() -> ua.CreateSubscriptionParameters:
+    """What an event subscription asks the server for; ``subscriptionRequest()`` in Node."""
+    params = ua.CreateSubscriptionParameters()
+    params.RequestedPublishingInterval = _REQUEST["publishingIntervalMs"]
+    params.RequestedLifetimeCount = _REQUEST["lifetimeCount"]
+    params.RequestedMaxKeepAliveCount = _REQUEST["maxKeepAliveCount"]
+    params.MaxNotificationsPerPublish = _REQUEST["maxNotificationsPerPublish"]
+    params.PublishingEnabled = True
+    params.Priority = _REQUEST["priority"]
+    return params
+
 
 #: BaseEventType. Part 4 §7.4.4.5: a browse path in a SimpleAttributeOperand that
 #: names BaseEventType is evaluated without regard to the event's own type, which
@@ -134,6 +149,9 @@ class _BufferingHandler:
         self.severity_min = severity_min
         self.records: deque = deque(maxlen=size)
         self.dropped = 0
+        #: Re-created on a new session since the last read, so there is a gap
+        #: to report. Reported once, like ``dropped``.
+        self.resubscribed = False
         self.lock = threading.Lock()
 
     def event_notification(self, event) -> None:
@@ -201,32 +219,62 @@ class EventSubscriptions:
         """
         replaced = self.drop(node_id)
         handler = _BufferingHandler(severity_min, buffer_size)
-        subscription = client.create_subscription(_PUBLISHING_INTERVAL_MS, handler)
-        # Never leave the OPC UA server holding a subscription this process has
-        # forgotten about: it would keep publishing until its lifetime expires,
-        # and a handful of failed `subscribe_events` calls would eat the
-        # server's subscription quota. Same guard as `subscriptions.py` uses.
-        try:
-            subscription.subscribe_events(
-                client.get_node(node_id).nodeid, evfilter=event_filter(), queuesize=_QUEUE_SIZE
-            )
-        except Exception:
-            with contextlib.suppress(Exception):
-                subscription.delete()
-            raise
+        subscription = _attach(client, node_id, handler)
         with self._lock:
             self._subscriptions[node_id] = (subscription, handler)
         return replaced
 
-    def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int, int] | None:
-        """Take up to ``limit`` buffered events, or None when not subscribed."""
+    def reattach(self, client) -> None:
+        """Re-create every event subscription on ``client``, after the old one died.
+
+        The promise ``SubscriptionManager.reattach`` makes for data changes, kept
+        for events too: the subscription the agent set up keeps working, and what
+        was buffered before the outage is still there to read — the handler, and
+        so the buffer, carries over. Without this, ``read_events`` drained a
+        buffer nothing would fill again and answered ``[]`` for as long as anyone
+        asked, where the Node runtime answered "not subscribed" (#157). The gap is
+        not hidden: the next ``read_events`` says it happened.
+
+        Best-effort per notifier. One the new session will not take back is
+        dropped, so ``read_events`` says "not subscribed" rather than "nothing
+        happened".
+        """
+        with self._lock:
+            entries = list(self._subscriptions.items())
+        for node_id, (_old, handler) in entries:
+            try:
+                subscription = _attach(client, node_id, handler)
+            except Exception as error:
+                with self._lock:
+                    self._subscriptions.pop(node_id, None)
+                print(
+                    f"Could not re-establish the event subscription on node {node_id}: {error}",
+                    file=sys.stderr,
+                )
+                continue
+            with handler.lock:
+                handler.resubscribed = True
+            with self._lock:
+                self._subscriptions[node_id] = (subscription, handler)
+            print(f"Re-established the event subscription on node {node_id}", file=sys.stderr)
+
+    def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int, int, bool] | None:
+        """Take up to ``limit`` buffered events, or None when not subscribed.
+
+        The last element says whether the subscription was re-created on a new
+        session since the previous read, which is reported once, like the
+        overflow count.
+        """
         with self._lock:
             entry = self._subscriptions.get(node_id)
         if entry is None:
             return None
-        records, remaining, dropped = entry[1].drain(limit)
+        handler = entry[1]
+        records, remaining, dropped = handler.drain(limit)
+        with handler.lock:
+            resubscribed, handler.resubscribed = handler.resubscribed, False
         self.remember(records)
-        return records, remaining, dropped, entry[1].size
+        return records, remaining, dropped, handler.size, resubscribed
 
     def close_all(self) -> None:
         """Tear every event subscription down — the shutdown path.
@@ -258,6 +306,28 @@ class EventSubscriptions:
                 file=sys.stderr,
             )
         return True
+
+
+def _attach(client, node_id: str, handler: _BufferingHandler) -> Any:
+    """Create the OPC UA subscription and monitored item behind one buffer.
+
+    Shared by ``subscribe`` and ``reattach``, so a re-created subscription asks
+    the server for exactly what the first one did.
+    """
+    subscription = client.create_subscription(subscription_parameters(), handler)
+    # Never leave the OPC UA server holding a subscription this process has
+    # forgotten about: it would keep publishing until its lifetime expires, and a
+    # handful of failed `subscribe_events` calls would eat the server's
+    # subscription quota. Same guard as `subscriptions.py` uses.
+    try:
+        subscription.subscribe_events(
+            client.get_node(node_id).nodeid, evfilter=event_filter(), queuesize=_QUEUE_SIZE
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            subscription.delete()
+        raise
+    return subscription
 
 
 class _RefreshHandler:
@@ -381,7 +451,7 @@ def list_active_alarms(client, node_id: str, timeout_seconds: float) -> list[dic
     ``subscribe_events`` may or may not have running.
     """
     handler = _RefreshHandler()
-    subscription = client.create_subscription(_PUBLISHING_INTERVAL_MS, handler)
+    subscription = client.create_subscription(subscription_parameters(), handler)
     try:
         subscription.subscribe_events(
             client.get_node(node_id).nodeid, evfilter=event_filter(), queuesize=_QUEUE_SIZE

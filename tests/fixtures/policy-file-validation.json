@@ -1,0 +1,240 @@
+{
+  "$comment": "One table of OPCUA_POLICY_FILE contents and the verdict each must get, driven through BOTH runtimes: tests/unit/test_policy_file_validation.py and packages/server-node/test/policy-file-validation.test.mjs write each case to a file, parse it with the environment given, and assert the same verdict and the same sentence (#157). A case gives the file as `file` (a JSON value) or as `text` (raw, for what JSON cannot hold: NaN, Infinity, 1e400, a syntax error). `error` is the exact message, with `{path}` standing for the file's path; `errorPrefix` is used only where the rest is the JSON parser's own wording, which neither runtime chooses; `error: null` means the file is accepted, and `expect` then names settings it must produce. The rules: every field is checked whether or not an environment variable overrides it, in one fixed order (version, profile, allowed_tools, the three top-level flags, control, control.writable_nodes, control.callable_methods, control.acknowledge_alarms), so a file with two faults reports the same one on both; a wrong type is refused rather than coerced; and null means \"not set\" everywhere, as it already did for min and max.",
+  "cases": [
+    {
+      "name": "an empty object is the default policy",
+      "file": {},
+      "error": null,
+      "expect": {
+        "profile": "observe",
+        "allowed_tools": null,
+        "writable_nodes": [],
+        "callable_methods": [],
+        "acknowledge_alarms": false,
+        "allow_insecure_control": false,
+        "allow_out_of_range_writes": false
+      }
+    },
+    {
+      "name": "null means not set, at the top level",
+      "file": {
+        "version": null,
+        "profile": null,
+        "allowed_tools": null,
+        "allow_insecure_control": null,
+        "allow_out_of_range_writes": null,
+        "control": null
+      },
+      "error": null,
+      "expect": { "profile": "observe", "allowed_tools": null, "allow_insecure_control": false }
+    },
+    {
+      "name": "null means not set, inside control",
+      "file": {
+        "control": { "writable_nodes": null, "callable_methods": null, "acknowledge_alarms": null }
+      },
+      "error": null,
+      "expect": { "writable_nodes": [], "callable_methods": [], "acknowledge_alarms": false }
+    },
+    {
+      "$comment": "Node refused an enum of null while Python read it as no enum. Now both read it as no enum, as both already read a min of null as no minimum.",
+      "name": "an enum of null is no enum, as a min of null is no minimum",
+      "file": {
+        "control": { "writable_nodes": [{ "node": "ns=2;i=5", "enum": null, "min": null }] }
+      },
+      "error": null,
+      "expect": { "writable_nodes": ["ns=2;i=5"] }
+    },
+    {
+      "name": "version 1.0 is version 1",
+      "text": "{\"version\": 1.0}",
+      "error": null
+    },
+    {
+      "name": "a complete, well-formed operator policy",
+      "file": {
+        "version": 1,
+        "profile": "operator",
+        "allowed_tools": ["read_opcua_nodes", "write_opcua_nodes", "call_opcua_method"],
+        "allow_insecure_control": true,
+        "allow_out_of_range_writes": false,
+        "control": {
+          "writable_nodes": ["ns=2;i=13", { "node": "ns=2;i=14", "min": 0, "max": 100 }],
+          "callable_methods": [{ "object_id": "ns=2;i=1", "method_id": "ns=2;i=31" }],
+          "acknowledge_alarms": true
+        }
+      },
+      "error": null,
+      "expect": {
+        "profile": "operator",
+        "allowed_tools": ["call_opcua_method", "read_opcua_nodes", "write_opcua_nodes"],
+        "writable_nodes": ["ns=2;i=13", "ns=2;i=14"],
+        "callable_methods": ["ns=2;i=1|ns=2;i=31"],
+        "acknowledge_alarms": true,
+        "allow_insecure_control": true,
+        "allow_out_of_range_writes": false
+      }
+    },
+    {
+      "name": "a file that is not a JSON object",
+      "text": "[]",
+      "error": "OPCUA_POLICY_FILE {path} must contain a JSON object"
+    },
+    {
+      "name": "a file that is not JSON at all",
+      "text": "profile: operator",
+      "errorPrefix": "Cannot read OPCUA_POLICY_FILE {path}: "
+    },
+    {
+      "$comment": "Python's parser accepts NaN and Infinity, JavaScript's does not. They are not JSON, so both refuse them.",
+      "name": "a NaN literal is not JSON",
+      "text": "{\"control\": {\"writable_nodes\": [{\"node\": \"ns=2;i=1\", \"max\": NaN}]}}",
+      "errorPrefix": "Cannot read OPCUA_POLICY_FILE {path}: "
+    },
+    {
+      "name": "an Infinity literal is not JSON",
+      "text": "{\"control\": {\"writable_nodes\": [{\"node\": \"ns=2;i=1\", \"max\": Infinity}]}}",
+      "errorPrefix": "Cannot read OPCUA_POLICY_FILE {path}: "
+    },
+    {
+      "name": "a -Infinity literal is not JSON",
+      "text": "{\"control\": {\"writable_nodes\": [{\"node\": \"ns=2;i=1\", \"min\": -Infinity}]}}",
+      "errorPrefix": "Cannot read OPCUA_POLICY_FILE {path}: "
+    },
+    {
+      "name": "a number too large to be finite is not a bound",
+      "text": "{\"control\": {\"writable_nodes\": [{\"node\": \"ns=2;i=1\", \"max\": 1e400}]}}",
+      "error": "writable_nodes entry \"ns=2;i=1\" has a non-numeric max"
+    },
+    {
+      "$comment": "Python accepted this, because True == 1.",
+      "name": "version true is not version 1",
+      "file": { "version": true },
+      "error": "Unsupported OPC UA policy version true; expected 1"
+    },
+    {
+      "name": "version \"1\" is not version 1",
+      "file": { "version": "1" },
+      "error": "Unsupported OPC UA policy version \"1\"; expected 1"
+    },
+    {
+      "name": "a version this server does not know",
+      "file": { "version": 2 },
+      "error": "Unsupported OPC UA policy version 2; expected 1"
+    },
+    {
+      "$comment": "A traceback on Python (AttributeError on .lower()), a raw JavaScript TypeError on Node.",
+      "name": "a profile that is not a string",
+      "file": { "profile": 5 },
+      "error": "OPCUA_POLICY_FILE profile must be a string"
+    },
+    {
+      "$comment": "Iterated character by character on both runtimes, so this used to be refused as an unknown tool named after one letter.",
+      "name": "allowed_tools given as one string",
+      "file": { "allowed_tools": "read_opcua_nodes" },
+      "error": "OPCUA_POLICY_FILE allowed_tools must be a list of tool names"
+    },
+    {
+      "name": "allowed_tools holding something other than names",
+      "file": { "allowed_tools": ["read_opcua_nodes", 1] },
+      "error": "OPCUA_POLICY_FILE allowed_tools must be a list of tool names"
+    },
+    {
+      "$comment": "Python named the alphabetically first unknown tool and Node the first listed. Both name the first listed.",
+      "name": "the first unknown tool as listed is the one named",
+      "file": { "allowed_tools": ["read_opcua_nodes", "zz_not_a_tool", "aa_not_a_tool"] },
+      "error": "Unknown tool in allowed_tools: zz_not_a_tool"
+    },
+    {
+      "$comment": "The worst of the old behaviours: the string \"false\" is truthy, so on both runtimes this ENABLED insecure control.",
+      "name": "a flag given as the string \"false\"",
+      "file": { "allow_insecure_control": "false" },
+      "error": "OPCUA_POLICY_FILE allow_insecure_control must be true or false"
+    },
+    {
+      "name": "a flag given as a number",
+      "file": { "allow_insecure_control": 1 },
+      "error": "OPCUA_POLICY_FILE allow_insecure_control must be true or false"
+    },
+    {
+      "name": "the unverified-server flag given as a string",
+      "file": { "allow_unverified_server_control": "false" },
+      "error": "OPCUA_POLICY_FILE allow_unverified_server_control must be true or false"
+    },
+    {
+      "name": "the out-of-range flag given as a string",
+      "file": { "allow_out_of_range_writes": "yes" },
+      "error": "OPCUA_POLICY_FILE allow_out_of_range_writes must be true or false"
+    },
+    {
+      "$comment": "Refused on Python, silently ignored on Node.",
+      "name": "control given as a string",
+      "file": { "control": "operator" },
+      "error": "OPCUA_POLICY_FILE control must be an object"
+    },
+    {
+      "$comment": "Python read an empty list as falsy and so as no control section at all.",
+      "name": "control given as a list",
+      "file": { "control": [] },
+      "error": "OPCUA_POLICY_FILE control must be an object"
+    },
+    {
+      "name": "control given as false",
+      "file": { "control": false },
+      "error": "OPCUA_POLICY_FILE control must be an object"
+    },
+    {
+      "name": "writable_nodes given as one string",
+      "file": { "control": { "writable_nodes": "ns=2;i=13" } },
+      "error": "OPCUA_POLICY_FILE control.writable_nodes must be a list"
+    },
+    {
+      "$comment": "Python appended \", got int\", a type name Node cannot give.",
+      "name": "a writable_nodes entry that is neither a node id nor an object",
+      "file": { "control": { "writable_nodes": [13] } },
+      "error": "writable_nodes entry must be a node id or an object"
+    },
+    {
+      "name": "callable_methods given as an object",
+      "file": { "control": { "callable_methods": { "object_id": "ns=2;i=1", "method_id": "ns=2;i=31" } } },
+      "error": "OPCUA_POLICY_FILE control.callable_methods must be a list"
+    },
+    {
+      "$comment": "A KeyError traceback on Python; the allowlist entry \"ns=2;i=1|undefined\" on Node.",
+      "name": "a callable_methods entry missing its method_id",
+      "file": { "control": { "callable_methods": [{ "object_id": "ns=2;i=1" }] } },
+      "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+    },
+    {
+      "name": "a callable_methods entry written in the environment variable's form",
+      "file": { "control": { "callable_methods": ["ns=2;i=1|ns=2;i=31"] } },
+      "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+    },
+    {
+      "name": "a callable_methods entry with an empty id",
+      "file": { "control": { "callable_methods": [{ "object_id": "", "method_id": "ns=2;i=31" }] } },
+      "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+    },
+    {
+      "name": "acknowledge_alarms given as a string",
+      "file": { "control": { "acknowledge_alarms": "true" } },
+      "error": "OPCUA_POLICY_FILE control.acknowledge_alarms must be true or false"
+    },
+    {
+      "name": "two faults: the version is checked before control",
+      "file": { "control": "x", "version": 2 },
+      "error": "Unsupported OPC UA policy version 2; expected 1"
+    },
+    {
+      "name": "two faults: the profile is checked before the flags",
+      "file": { "allow_insecure_control": "no", "profile": 3 },
+      "error": "OPCUA_POLICY_FILE profile must be a string"
+    },
+    {
+      "name": "a broken field is refused even when the environment overrides it",
+      "file": { "control": { "callable_methods": [{ "object_id": "ns=2;i=1" }] } },
+      "env": { "OPCUA_ALLOWED_METHODS": "ns=2;i=1|ns=2;i=31" },
+      "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+    }
+  ]
+}

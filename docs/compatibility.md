@@ -96,9 +96,10 @@ being fixed in both runtimes:
   writing ADR 0001. The group that reached the plant is fixed: dates, write
   conversion, method-argument types, Good-subcode statuses and the policy's
   number parsing now follow one rule on both runtimes (see
-  [Runtimes and clients](#runtimes-and-clients)). Still open: result and error
-  formatting, subscription parameters, policy-file parsing, signal handling and
-  `--install` details.
+  [Runtimes and clients](#runtimes-and-clients)). So are subscription
+  parameters, event subscriptions after a reconnect, policy-file validation,
+  the startup check order, auditing of refused control calls and signal
+  handling. Still open: result and error formatting and `--install` details.
 - [#136](https://github.com/IndustriAgents/OPCUA-MCP/issues/136) — with
   `OPCUA_RECONNECT_MAX_RETRY=-1` and an unreachable endpoint, the Node server may
   never open its MCP transport, and the numeric reconnect settings accept

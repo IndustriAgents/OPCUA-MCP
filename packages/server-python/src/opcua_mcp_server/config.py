@@ -176,9 +176,18 @@ def reconnect_config() -> ReconnectConfig:
 
 def describe_reconnect(config: ReconnectConfig) -> str:
     """One-line, secret-free summary for the startup log."""
-    retry = "unlimited" if config.max_retry < 0 else f"{config.max_retry:g}"
+    retry = "unlimited" if config.max_retry < 0 else _number(config.max_retry)
     return (
         f"retries={retry} "
-        f"backoff={config.initial_delay_ms:g}..{config.max_delay_ms:g}ms "
-        f"session-timeout={config.session_timeout_ms:g}ms"
+        f"backoff={_number(config.initial_delay_ms)}..{_number(config.max_delay_ms)}ms "
+        f"session-timeout={_number(config.session_timeout_ms)}ms"
     )
+
+
+def _number(value: float) -> str:
+    """A setting as ``String(number)`` writes it in ``config.ts``.
+
+    Not ``:g``, which switches to exponent notation at a million — a one-hour
+    session timeout read ``3.6e+06ms`` here and ``3600000ms`` there (#157).
+    """
+    return str(int(value)) if float(value).is_integer() else repr(float(value))

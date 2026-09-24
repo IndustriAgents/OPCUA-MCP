@@ -41,6 +41,28 @@ DEFAULT_BUFFER_SIZE = _LIMITS["defaultBufferSize"]
 MIN_BUFFER_SIZE = _LIMITS["minBufferSize"]
 MAX_BUFFER_SIZE = _LIMITS["maxBufferSize"]
 
+
+def subscription_parameters(publishing_interval: float) -> ua.CreateSubscriptionParameters:
+    """The CreateSubscription request behind one data-change subscription.
+
+    Everything but the publishing interval comes from the contract, and is what
+    ``subscriptionRequest`` in ``subscriptions.ts`` sends. Passing a bare interval
+    to ``create_subscription`` — as this did — takes python-opcua's defaults
+    instead: keep-alive 3000 and lifetime 10000 publishing intervals, so a
+    subscription this process never got to delete outlived it by about 2.7 hours
+    at the default interval, against a minute on the Node runtime (#157).
+    """
+    request = _LIMITS["request"]
+    params = ua.CreateSubscriptionParameters()
+    params.RequestedPublishingInterval = publishing_interval
+    params.RequestedLifetimeCount = request["lifetimeCount"]
+    params.RequestedMaxKeepAliveCount = request["maxKeepAliveCount"]
+    params.MaxNotificationsPerPublish = request["maxNotificationsPerPublish"]
+    params.PublishingEnabled = True
+    params.Priority = request["priority"]
+    return params
+
+
 #: The deadband kinds the contract names, mapped onto python-opcua's enum. The
 #: names are the contract's, the numbers are the library's, and the numbering is
 #: fixed by OPC UA Part 4 §7.22 — so the Node half maps the same names onto its
@@ -385,7 +407,9 @@ class SubscriptionManager:
         # monitored item: the OPC UA server sends the node's current value the
         # moment the item exists, and that first notification is a change the
         # agent should see.
-        subscription = client.create_subscription(publishing, _DataChangeHandler(entry))
+        subscription = client.create_subscription(
+            subscription_parameters(publishing), _DataChangeHandler(entry)
+        )
 
         try:
             monitoring_filter = _monitoring_filter(entry.data_filter)

@@ -225,7 +225,9 @@ The connection is re-established by itself: a dropped or refused session is
 retried with exponential backoff, and the read and write paths rebuild a dead
 session rather than failing until the process is restarted. Data-change
 subscriptions are re-created on the new session — the IDs keep working and the
-values already buffered are still there to be read. Tune it with
+values already buffered are still there to be read. Event
+subscriptions are re-created too, and the next `read_events` notes that events
+raised while the connection was down were not received. Tune it with
 `OPCUA_RECONNECT_INITIAL_DELAY_MS`, `OPCUA_RECONNECT_MAX_DELAY_MS`,
 `OPCUA_RECONNECT_MAX_RETRY` and `OPCUA_SESSION_TIMEOUT_MS` above.
 

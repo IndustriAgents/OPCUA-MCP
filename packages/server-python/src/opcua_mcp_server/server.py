@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
+import os
 import secrets
+import signal
 import sys
+import threading
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -332,6 +336,10 @@ def _bind(state: ServerState, context: dict, client) -> None:
     """
     context["opcua_client"] = client
     state.subscriptions.reattach(client)
+    # Event subscriptions belong to a session just the same. Not re-attaching
+    # them left `read_events` draining a buffer nothing would ever fill again,
+    # and answering `[]` — "nothing happened" — for as long as anyone asked.
+    state.events.reattach(client)
     # A new session may be a restarted server, whose nodes are not necessarily
     # the nodes the old ids named. What each one said about its unit and its
     # range was true of the session that said it.
@@ -452,16 +460,74 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
         connection.close()
         await asyncio.wait({warm_up})
         state.warm_up = None
-        # Drop the subscriptions before the session that carries them —
-        # the event ones as much as the data-change ones. Disconnecting first
-        # would leave the OPC UA server publishing to nobody until each
-        # subscription's lifetime expired.
-        await asyncio.to_thread(state.subscriptions.close_all)
-        await asyncio.to_thread(state.events.close_all)
-        # Disconnect from OPC UA server on shutdown
-        await asyncio.to_thread(connection.disconnect)
+        await asyncio.to_thread(_release_opcua, state)
         state.forget_capabilities()
         state.connection = None
+
+
+#: How long a server stopped by a signal waits for the OPC UA side to close
+#: cleanly: `SHUTDOWN_GRACE_MS` in the Node runtime's `index.ts`.
+SHUTDOWN_GRACE_SECONDS = 5.0
+
+
+def _release_opcua(state: ServerState) -> None:
+    """Drop the subscriptions, then the session. In that order.
+
+    The event subscriptions as much as the data-change ones. Disconnecting first
+    would leave the OPC UA server publishing to nobody until each subscription's
+    lifetime expired. Shared by the lifespan, which runs when the client closes
+    stdin, and by the signal handler, which runs when it does not.
+    """
+    state.subscriptions.close_all()
+    state.events.close_all()
+    if state.connection is not None:
+        state.connection.disconnect()
+
+
+def _exit_on_signal(state: ServerState) -> None:
+    """Make SIGTERM and SIGINT release the OPC UA side, then exit 0.
+
+    This runtime had no handler at all (#157). SIGTERM — what a supervisor or a
+    container runtime sends — killed the process where it stood: no subscription
+    deleted, no session closed, so the OPC UA server kept publishing into the void
+    for each subscription's whole lifetime. The Node runtime has always cleaned up
+    on both signals.
+
+    The release runs on a thread of its own and the handler waits for it, but
+    only for :data:`SHUTDOWN_GRACE_SECONDS`: disconnecting from a server that has
+    gone quiet can wait on a request timeout, and the main thread may be the one
+    holding whatever the release needs. ``os._exit`` then, because an orderly
+    interpreter exit would wait for exactly the threads that are stuck.
+    """
+    stopping = threading.Event()
+
+    def release() -> None:
+        try:
+            connection = state.connection
+            if connection is not None:
+                # What the lifespan does before it releases, for the same reason:
+                # end the warm-up's backoff, and let an attempt already on the
+                # wire land before disconnecting, so a round that completes
+                # afterwards cannot leave a session open behind us (#136).
+                connection.close()
+                connection.settle()
+            _release_opcua(state)
+        except Exception as error:
+            print(f"Error closing the OPC UA session: {describe_error(error)}", file=sys.stderr)
+
+    def handle(_signum, _frame) -> None:
+        if stopping.is_set():
+            return
+        stopping.set()
+        worker = threading.Thread(target=release, name="opcua-shutdown", daemon=True)
+        worker.start()
+        worker.join(SHUTDOWN_GRACE_SECONDS)
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        os._exit(0)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, handle)
 
 
 def _advertised_schema(state: ServerState, spec: dict) -> dict:
@@ -2116,17 +2182,22 @@ def read_events(
     drained = _state(ctx).events.drain(node_id, limit)
     if drained is None:
         raise ToolError(error_message("notSubscribedToEvents", node_id=node_id))
-    records, remaining, dropped, size = drained
+    records, remaining, dropped, size, resubscribed = drained
     # In the response, not only on stderr: an agent that cannot tell a complete
     # event stream from one that lost alarms reads the gap as quiet. As a field
     # since issue #137, and as a sentence still for a reader of the text alone.
-    return _records_result(
+    result = _records_result(
         records,
         drain_completeness(
             returned=len(records), limit=limit, remaining=remaining, dropped=dropped
         ),
         events.dropped_events_message(dropped, size) if dropped else None,
     )
+    if resubscribed:
+        # The same reasoning for the gap a reconnect leaves: nothing was dropped
+        # from the buffer, the events simply never arrived (#157).
+        result.content.append(TextContent(type="text", text=notice("eventsResubscribed")))
+    return result
 
 
 def list_active_alarms(
@@ -2320,6 +2391,14 @@ def main() -> None:
     # Fail fast and readably on a bad security configuration: an MCP client only
     # ever shows the server's stderr, so letting it surface from a best-effort
     # capability probe (which swallows it) would leave nothing to go on.
+    #
+    # Security, then policy, then reconnection, then the audit file — the same
+    # order as `index.ts`, so one bad setting is the same first error on both.
+    # The audit file goes last because opening it creates it.
+    #
+    # Any exception, not only ValueError: a policy file of an unexpected shape
+    # used to escape as a KeyError or TypeError traceback, where the Node runtime
+    # printed one "Configuration error:" line (#157).
     try:
         security_config()
         policy = mcp.state.policy
@@ -2330,7 +2409,7 @@ def main() -> None:
         # to write (a symlink, another account's file) or whose chain key cannot
         # be read.
         audit = AuditSink.from_config(parse_audit_config())
-    except ValueError as error:
+    except Exception as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
     mcp.state.audit = audit
@@ -2339,4 +2418,5 @@ def main() -> None:
     print(f"Control audit: {describe_audit(audit)}", file=sys.stderr)
     print(f"Connection resilience: {describe_reconnect(reconnect)}", file=sys.stderr)
 
+    _exit_on_signal(mcp.state)
     mcp.run(transport="stdio")

@@ -206,17 +206,24 @@ export function runMain(opts: { scriptPath: string | null }): void {
     // refusing to print the help until the certificate is valid would be
     // backwards, and `--install` is often how the endpoint gets configured in
     // the first place.
+    //
+    // Security, then policy, then reconnection, then the audit file — the order
+    // the Python runtime checks them in, so one bad setting is the same first
+    // error on both. The audit file goes last because opening it creates it: a
+    // bad policy file used to leave a fresh, empty audit file behind (#157).
     try {
       securityConfig();
+      const policy = toolPolicy();
+      const reconnect = reconnectConfig();
       // Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
       // cannot be given one has to be told now, not at the first control call
       // they were relying on it to record. So does one whose target is unsafe
       // to write (a symlink, another account's file) or whose chain key cannot
       // be read.
       audit = AuditSink.fromConfig(parseAuditConfig());
-      console.error(`Tool policy: ${describePolicy(toolPolicy())}`);
+      console.error(`Tool policy: ${describePolicy(policy)}`);
       console.error(`Control audit: ${describeAudit(audit)}`);
-      console.error(`Connection resilience: ${describeReconnect(reconnectConfig())}`);
+      console.error(`Connection resilience: ${describeReconnect(reconnect)}`);
     } catch (error) {
       console.error(`Configuration error: ${(error as Error).message}`);
       process.exit(1);

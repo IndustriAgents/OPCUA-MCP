@@ -19,22 +19,23 @@ interface WritableNodeEntry {
   node: string;
   min?: number;
   max?: number;
-  enum?: unknown[];
+  enum?: unknown[] | null;
   max_change?: number;
 }
 
+/** A policy file once `checkPolicyFile` has passed it. `null` is "not set". */
 interface PolicyFile {
-  version?: number;
-  profile?: string;
-  allowed_tools?: string[];
-  allow_insecure_control?: boolean;
-  allow_unverified_server_control?: boolean;
-  allow_out_of_range_writes?: boolean;
+  version?: number | null;
+  profile?: string | null;
+  allowed_tools?: string[] | null;
+  allow_insecure_control?: boolean | null;
+  allow_unverified_server_control?: boolean | null;
+  allow_out_of_range_writes?: boolean | null;
   control?: {
-    writable_nodes?: Array<string | WritableNodeEntry>;
-    callable_methods?: Array<{ object_id: string; method_id: string }>;
-    acknowledge_alarms?: boolean;
-  };
+    writable_nodes?: Array<string | WritableNodeEntry> | null;
+    callable_methods?: Array<{ object_id: string; method_id: string }> | null;
+    acknowledge_alarms?: boolean | null;
+  } | null;
 }
 
 /** What an allowlisted node may be written, beyond being the right node.
@@ -110,13 +111,16 @@ function valueBound(entry: string | WritableNodeEntry): [string, ValueBound] {
   if (typeof entry.node !== "string" || entry.node.trim() === "") {
     throw new Error("A writable_nodes entry must name a node");
   }
-  if (entry.enum !== undefined && (!Array.isArray(entry.enum) || entry.enum.length === 0)) {
+  // `null` is "no enum", as it is "no bound" for min and max. This refused it
+  // while Python accepted it (#157).
+  const values = entry.enum ?? null;
+  if (values !== null && (!Array.isArray(values) || values.length === 0)) {
     throw new Error(`writable_nodes entry "${entry.node}" has an empty or non-list enum`);
   }
   const bound: ValueBound = {
     minimum: boundNumber(entry, "min"),
     maximum: boundNumber(entry, "max"),
-    allowed: entry.enum ?? null,
+    allowed: values,
     maxChange: boundNumber(entry, "max_change"),
   };
   if (bound.minimum !== null && bound.maximum !== null && bound.minimum > bound.maximum) {
@@ -237,18 +241,89 @@ function loadPolicyFile(path: string | undefined): PolicyFile {
       `Cannot read OPCUA_POLICY_FILE ${path}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isObject(parsed)) {
     throw new Error(`OPCUA_POLICY_FILE ${path} must contain a JSON object`);
   }
-  const file = parsed as PolicyFile;
-  if (file.version !== undefined && file.version !== 1) {
-    throw new Error(`Unsupported OPC UA policy version ${file.version}; expected 1`);
-  }
-  return file;
+  checkPolicyFile(parsed);
+  return parsed as PolicyFile;
 }
 
-function validateToolNames(names: string[] | undefined): Set<string> | null {
-  if (names === undefined) return null;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Refuse a policy file whose fields are the wrong shape, before any is used.
+ *
+ * Every field, whether or not an environment variable overrides it: a broken
+ * file must not start working-looking the day the override is removed. The
+ * checks run in one fixed order so a file with two faults reports the same one
+ * on both runtimes, and `null` means "not set" throughout — as it already did
+ * for `min` and `max`.
+ *
+ * This used to be whatever each runtime's code happened to do with a surprise.
+ * A string where a flag belonged was truthy on both, so `"allow_insecure_control":
+ * "false"` *enabled* insecure control; a callable_methods entry missing its ids
+ * became the allowlist entry `undefined|undefined` here and a traceback in
+ * Python; `"control": "x"` was ignored here and refused there (#157).
+ * `tests/fixtures/policy-file-validation.json` pins every rule for both.
+ */
+function checkPolicyFile(file: Record<string, unknown>): void {
+  const version = file.version ?? null;
+  if (version !== null && version !== 1) {
+    throw new Error(`Unsupported OPC UA policy version ${JSON.stringify(version)}; expected 1`);
+  }
+  if ((file.profile ?? null) !== null && typeof file.profile !== "string") {
+    throw new Error("OPCUA_POLICY_FILE profile must be a string");
+  }
+  const tools = file.allowed_tools ?? null;
+  if (tools !== null && !(Array.isArray(tools) && tools.every((n) => typeof n === "string"))) {
+    throw new Error("OPCUA_POLICY_FILE allowed_tools must be a list of tool names");
+  }
+  requireFlag(file, "allow_insecure_control", "allow_insecure_control");
+  requireFlag(file, "allow_unverified_server_control", "allow_unverified_server_control");
+  requireFlag(file, "allow_out_of_range_writes", "allow_out_of_range_writes");
+
+  const control = file.control ?? null;
+  if (control === null) return;
+  if (!isObject(control)) {
+    throw new Error("OPCUA_POLICY_FILE control must be an object");
+  }
+  const writable = control.writable_nodes ?? null;
+  if (writable !== null) {
+    if (!Array.isArray(writable)) {
+      throw new Error("OPCUA_POLICY_FILE control.writable_nodes must be a list");
+    }
+    writable.forEach((entry) => valueBound(entry as string | WritableNodeEntry));
+  }
+  const methods = control.callable_methods ?? null;
+  if (methods !== null) {
+    if (!Array.isArray(methods)) {
+      throw new Error("OPCUA_POLICY_FILE control.callable_methods must be a list");
+    }
+    for (const entry of methods) {
+      if (!isObject(entry) || !nonEmpty(entry.object_id) || !nonEmpty(entry.method_id)) {
+        throw new Error(
+          "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+        );
+      }
+    }
+  }
+  requireFlag(control, "acknowledge_alarms", "control.acknowledge_alarms");
+}
+
+function requireFlag(section: Record<string, unknown>, key: string, name: string): void {
+  const value = section[key] ?? null;
+  if (value !== null && typeof value !== "boolean") {
+    throw new Error(`OPCUA_POLICY_FILE ${name} must be true or false`);
+  }
+}
+
+function nonEmpty(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function validateToolNames(names: string[] | null | undefined): Set<string> | null {
+  if (names === undefined || names === null) return null;
   const known = new Set(CONTRACT.tools.map((tool) => tool.name));
   for (const name of names) {
     if (!known.has(name)) {
@@ -261,8 +336,8 @@ function validateToolNames(names: string[] | undefined): Set<string> | null {
 /** Parse the deployment policy. Environment variables override the optional JSON file. */
 export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
   const file = loadPolicyFile(value(env, "OPCUA_POLICY_FILE"));
-  const control = file.control || {};
-  const profile = parseProfile(value(env, "OPCUA_PROFILE") ?? file.profile);
+  const control = file.control ?? {};
+  const profile = parseProfile(value(env, "OPCUA_PROFILE") ?? file.profile ?? undefined);
   const allowedTools = validateToolNames(
     parseCsv(value(env, "OPCUA_ALLOWED_TOOLS")) ?? file.allowed_tools
   );

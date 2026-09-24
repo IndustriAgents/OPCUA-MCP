@@ -241,3 +241,94 @@ def test_the_defaults_are_the_ones_the_contract_promises():
     assert DEFAULTS["bufferSize"] == 100
     assert DEFAULTS["readLimit"] == 50
     assert DEFAULTS["refreshTimeoutSeconds"] == 5
+
+
+# --- what an event subscription asks for, and what survives a new session --------
+
+
+class _FakeEventSubscription:
+    def __init__(self, params, handler, refuse: bool):
+        self.params = params
+        self.handler = handler
+        self.refuse = refuse
+        self.queuesize = None
+        self.deleted = False
+
+    def subscribe_events(self, node_id, evfilter=None, queuesize=0):
+        if self.refuse:
+            raise RuntimeError("BadNodeIdUnknown")
+        self.queuesize = queuesize
+        return 1
+
+    def delete(self):
+        self.deleted = True
+
+
+class _FakeEventClient:
+    """Just enough of python-opcua's Client for `EventSubscriptions`."""
+
+    def __init__(self, refuse: bool = False):
+        self.refuse = refuse
+        self.subscriptions: list[_FakeEventSubscription] = []
+
+    def get_node(self, node_id):
+        return type("FakeNode", (), {"nodeid": node_id})()
+
+    def create_subscription(self, params, handler):
+        subscription = _FakeEventSubscription(params, handler, self.refuse)
+        self.subscriptions.append(subscription)
+        return subscription
+
+
+def test_an_event_subscription_asks_for_what_the_contract_names():
+    """Not python-opcua's defaults, which the Node runtime never sent (#157)."""
+    client = _FakeEventClient()
+    EventSubscriptions().subscribe(client, "ns=0;i=2253", 0, 10)
+    [subscription] = client.subscriptions
+    request = EVENTS["subscriptionRequest"]
+    params = subscription.params
+    assert isinstance(params, ua.CreateSubscriptionParameters)
+    assert (
+        params.RequestedPublishingInterval,
+        params.RequestedLifetimeCount,
+        params.RequestedMaxKeepAliveCount,
+        params.MaxNotificationsPerPublish,
+        params.Priority,
+        subscription.queuesize,
+    ) == (
+        request["publishingIntervalMs"],
+        request["lifetimeCount"],
+        request["maxKeepAliveCount"],
+        request["maxNotificationsPerPublish"],
+        request["priority"],
+        request["queueSize"],
+    )
+
+
+def test_a_new_session_re_creates_the_subscription_and_keeps_the_buffer():
+    """What was buffered before the outage is still there, and the gap is reported.
+
+    This used to drain `[]` forever from a subscription on a dead session (#157).
+    """
+    subscriptions = EventSubscriptions()
+    old = _FakeEventClient()
+    subscriptions.subscribe(old, "ns=0;i=2253", 0, 10)
+    old.subscriptions[0].handler.event_notification(alarm_event())
+
+    new = _FakeEventClient()
+    subscriptions.reattach(new)
+
+    [recreated] = new.subscriptions
+    assert recreated.handler is old.subscriptions[0].handler, "the buffer must carry over"
+    records, _remaining, _dropped, _size, resubscribed = subscriptions.drain("ns=0;i=2253", 10)
+    assert len(records) == 1
+    assert resubscribed is True
+    assert subscriptions.drain("ns=0;i=2253", 10)[4] is False, "the gap is reported once"
+
+
+def test_a_subscription_the_new_session_refuses_is_dropped():
+    """So `read_events` says "not subscribed" rather than "nothing happened"."""
+    subscriptions = EventSubscriptions()
+    subscriptions.subscribe(_FakeEventClient(), "ns=0;i=2253", 0, 10)
+    subscriptions.reattach(_FakeEventClient(refuse=True))
+    assert subscriptions.drain("ns=0;i=2253", 10) is None

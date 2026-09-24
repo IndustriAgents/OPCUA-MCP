@@ -217,6 +217,32 @@
       "error": "get_server_status has no argument verbose. It accepts: no arguments."
     },
     {
+      "$comment": "#157. Node checked `name in properties`, which walks the prototype, so every name an Object inherits passed additionalProperties: false as though the schema declared it. Python's dict lookup never did.",
+      "name": "an argument named constructor",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=1"], "constructor": 1 },
+      "error": "read_opcua_nodes has no argument constructor. It accepts: node_ids."
+    },
+    {
+      "name": "an argument named toString",
+      "tool": "get_server_status",
+      "arguments": { "toString": "x" },
+      "error": "get_server_status has no argument toString. It accepts: no arguments."
+    },
+    {
+      "$comment": "JSON.parse makes `__proto__` an own property, as a JSON-RPC request's arguments would be, so this reaches the check exactly as a client would send it.",
+      "name": "an argument named __proto__",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=1"], "__proto__": { "polluted": true } },
+      "error": "read_opcua_nodes has no argument __proto__. It accepts: node_ids."
+    },
+    {
+      "name": "an inherited name inside a write entry",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=1", "value": 1, "hasOwnProperty": 0 }] },
+      "error": "write_opcua_nodes has no argument nodes[0].hasOwnProperty. It accepts: node_id, value, data_type."
+    },
+    {
       "name": "a tool that takes no arguments, given none",
       "tool": "get_server_status",
       "arguments": {},

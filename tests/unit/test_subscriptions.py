@@ -122,6 +122,33 @@ def test_falls_back_on_a_non_number_which_mcp_arguments_can_always_be():
 # --- the manager --------------------------------------------------------------
 
 
+def test_subscribe_asks_for_what_the_contract_names():
+    """Not python-opcua's defaults — keep-alive 3000, lifetime 10000 — which left
+    an orphaned subscription alive for hours where Node's lived a minute (#157).
+    """
+    from opcua import ua
+    from opcua_mcp_server.contract import CONTRACT
+
+    client = FakeClient([])
+    manager_with(client).subscribe("ns=2;i=3", 200, 0, 5)
+    params = client.subscriptions[0].period
+    request = CONTRACT["subscriptions"]["request"]
+    assert isinstance(params, ua.CreateSubscriptionParameters)
+    assert (
+        params.RequestedPublishingInterval,
+        params.RequestedLifetimeCount,
+        params.RequestedMaxKeepAliveCount,
+        params.MaxNotificationsPerPublish,
+        params.Priority,
+    ) == (
+        200,
+        request["lifetimeCount"],
+        request["maxKeepAliveCount"],
+        request["maxNotificationsPerPublish"],
+        request["priority"],
+    )
+
+
 def test_subscribe_returns_the_contract_record():
     manager = manager_with(FakeClient([]))
     record = manager.subscribe("ns=2;i=3", 200, 0, 5)

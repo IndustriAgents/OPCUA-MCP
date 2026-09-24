@@ -15,11 +15,16 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import signal
+import sys
 import tempfile
 
 import pytest
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
+from test_contract_parity import CONTRACT
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, text_of
 
 # Retry settings for these tests: the defaults are tuned for a plant (seconds of
@@ -192,6 +197,53 @@ async def test_subscriptions_are_re_established_after_a_restart(impl, restartabl
             f"{impl}: subscription {subscription_id} stopped delivering after the restart "
             f"({before['change_count']} -> {after.get('change_count')})"
         )
+
+
+async def test_event_subscriptions_are_re_established_after_a_restart(
+    impl, restartable_opcua_server
+):
+    """The promise data-change subscriptions make, kept for events too (#157).
+
+    The runtimes used to break it in two different ways. Node dropped the buffer
+    and answered "not subscribed"; Python kept draining a buffer bound to the dead
+    session and answered `[]` — "nothing happened" — for as long as anyone asked,
+    which for an alarm stream is the worst available answer. Both now re-create
+    the subscription on the new session, keep what was buffered, and say that
+    events raised while it was down were not received.
+    """
+    from test_events_e2e import ALARM_SEVERITY, _trigger_alarm
+
+    server = restartable_opcua_server
+    async with connect(params_for(impl, server.url)) as session:
+        subscribed = await session.call_tool("subscribe_events", {})
+        assert not subscribed.is_error, text_of(subscribed)
+
+        server.restart()
+        for _ in range(10):
+            status = await session.call_tool("get_server_status", {})
+            if '"connected": true' in text_of(status):
+                break
+            await asyncio.sleep(1.0)
+
+        await _trigger_alarm(session)
+        texts, records = [], []
+        for _ in range(10):
+            result = await session.call_tool("read_events", {})
+            assert not result.is_error, f"{impl}: {text_of(result)}"
+            texts.append(text_of(result))
+            # Structured, not text: the text carries the notice beside the records.
+            records += result.structured_content["result"]
+            if any(record["severity"] == ALARM_SEVERITY for record in records):
+                break
+            await asyncio.sleep(1.0)
+
+    assert any(record["severity"] == ALARM_SEVERITY for record in records), (
+        f"{impl}: the event subscription stopped delivering after the restart: {texts}"
+    )
+    gap = CONTRACT["notices"]["eventsResubscribed"]
+    assert sum(gap in text for text in texts) == 1, (
+        f"{impl}: the gap was not reported once: {texts}"
+    )
 
 
 async def test_a_bad_retry_setting_is_rejected_at_startup(impl):
@@ -442,3 +494,108 @@ async def test_a_call_that_dies_mid_request_is_recognised_and_recovered(
         f"{impl}: nothing in the server's log says it noticed the connection had "
         f"gone, so whatever recovered did not do it on the outage's account:\n{log[-4000:]}"
     )
+
+
+# --- stopped by a signal ------------------------------------------------------------
+#
+# What a supervisor, a container runtime or a Ctrl-C sends. The Python runtime had
+# no handler at all (#157): SIGTERM killed it where it stood, leaving every
+# subscription on the OPC UA server to publish into the void for its whole
+# lifetime. Both now drop the subscriptions, close the session and exit 0 within
+# a bounded grace period.
+#
+# POSIX only, and by definition rather than by skip: Windows has no SIGTERM to
+# deliver to a child, and its console-control events are a different mechanism
+# that neither runtime claims to handle.
+
+#: The runtimes' own bound (`SHUTDOWN_GRACE_MS` / `SHUTDOWN_GRACE_SECONDS`) plus
+#: room for the process to start answering and to be reaped.
+SIGNAL_EXIT_BUDGET_SECONDS = 15
+
+
+def _serving_argv(impl: str) -> list[str]:
+    """The server as its own process, not behind `uv run`, so the signal reaches it."""
+    if impl == "python":
+        return [sys.executable, "-m", "opcua_mcp_server"]
+    return ["node", str(NODE_BUILD)]
+
+
+async def _send(proc, message: dict) -> None:
+    proc.stdin.write((json.dumps(message) + "\n").encode())
+    await proc.stdin.drain()
+
+
+async def _answer(proc, request_id: int) -> dict:
+    """The JSON-RPC response to `request_id`, skipping anything else on stdout."""
+    while True:
+        line = await asyncio.wait_for(proc.stdout.readline(), timeout=60)
+        assert line, "the server closed stdout before answering"
+        message = json.loads(line)
+        if message.get("id") == request_id:
+            return message
+
+
+if os.name == "posix":
+
+    @pytest.mark.parametrize("signame", ["SIGTERM", "SIGINT"])
+    async def test_a_signal_drops_the_subscriptions_and_exits_cleanly(
+        impl, signame, opcua_server, tmp_path
+    ):
+        """Exit 0, promptly, with an active subscription and stdin still open.
+
+        stdin stays open on purpose: closing it is the other way a session ends,
+        and a test that closed it could pass on that path alone.
+        """
+        stderr_path = tmp_path / "stderr.log"
+        with stderr_path.open("w") as stderr:
+            proc = await asyncio.create_subprocess_exec(
+                *_serving_argv(impl),
+                env=params_for(impl, opcua_server).env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=stderr,
+            )
+            try:
+                await _send(
+                    proc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "signal-test", "version": "0"},
+                        },
+                    },
+                )
+                await _answer(proc, 1)
+                await _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+                await _send(
+                    proc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "subscribe_opcua_nodes",
+                            "arguments": {"node_ids": [NODE["Temperature"]]},
+                        },
+                    },
+                )
+                subscribed = await _answer(proc, 2)
+                assert not subscribed["result"].get("isError"), f"{impl}: {subscribed}"
+
+                proc.send_signal(getattr(signal, signame))
+                started = asyncio.get_running_loop().time()
+                code = await asyncio.wait_for(proc.wait(), timeout=SIGNAL_EXIT_BUDGET_SECONDS)
+                elapsed = asyncio.get_running_loop().time() - started
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+
+        log = stderr_path.read_text(errors="replace")
+        assert code == 0, f"{impl}: {signame} exited {code}:\n{log[-4000:]}"
+        assert "Traceback" not in log, f"{impl}: {signame}:\n{log[-4000:]}"
+        assert elapsed < SIGNAL_EXIT_BUDGET_SECONDS, f"{impl}: took {elapsed:.1f}s"

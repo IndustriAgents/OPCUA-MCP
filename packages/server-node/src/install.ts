@@ -7,7 +7,7 @@
 // writes it back atomically with a backup.
 //
 // The Python runtime ships the same subcommand with the same flags and produces
-// the same config entry; tests/e2e/test_install_parity.py holds the two to it.
+// the same config entry; tests/unit/test_install_parity.py holds the two to it.
 
 import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";

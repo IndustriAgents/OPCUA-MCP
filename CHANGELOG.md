@@ -321,6 +321,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A runtime divergence has somewhere to go.** The bug template gains a *both
   runtimes, behaving differently* option, and CONTRIBUTING states the rule: a
   behaviour change lands in both runtimes in the same PR, or is declared.
+- **The single-runtime bugs among the undeclared Node/Python divergences
+  (#157).** Each one is now the same on both runtimes and pinned by a test on
+  both — a shared fixture table where it is a rule, an end-to-end test where it
+  is behaviour.
+  - **Event subscriptions survive a reconnect on both runtimes.** Python did not
+    re-attach them, so after a session rebuild `read_events` drained a buffer
+    bound to the dead session and answered `[]` for as long as anyone asked;
+    Node dropped the buffer and answered "not subscribed". Both now re-create the
+    subscription on the new session like the data-change ones, keep what was
+    buffered, and the first `read_events` afterwards carries a new contract
+    notice, `eventsResubscribed`, saying events raised during the outage were
+    not received.
+  - **Python handles `SIGTERM` and `SIGINT`.** It had no handler at all, so a
+    `SIGTERM` killed it without deleting a subscription or closing the session.
+    It now stops any connection round in flight (`close()`, as the lifespan
+    does), drops both and exits 0, bounded by the same five-second grace period
+    the Node runtime uses.
+  - **Python subscriptions ask for what Node's do.** It passed a bare publishing
+    interval and got python-opcua's defaults — keep-alive 3000, lifetime 10000,
+    priority 0 — so a subscription orphaned by a dead process lived about 2.7
+    hours instead of a minute. The CreateSubscription parameters for data and
+    event subscriptions now come from the contract
+    (`subscriptions.request`, `events.subscriptionRequest`) on both.
+  - **A malformed policy file is refused cleanly, and identically.** Python let
+    `KeyError`/`TypeError` escape as a traceback; Node silently accepted a
+    `callable_methods` entry without its ids as `undefined|undefined`. On both,
+    `"allow_insecure_control": "false"` was truthy and *enabled* insecure
+    control. Every field is now type-checked strictly, in one fixed order,
+    whether or not an environment variable overrides it: wrong types are refused
+    rather than coerced, `null` means "not set" everywhere (so `enum: null` is no
+    enum on Node too), `version: true` and the `NaN`/`Infinity` literals are
+    refused on Python too, and an unknown tool in `allowed_tools` is named in the
+    order written. Pinned by `tests/fixtures/policy-file-validation.json`.
+  - **Startup checks run in the same order on both** — security, policy,
+    reconnection, then the audit file — so the same bad setting is the same first
+    error, and a bad policy no longer leaves a freshly created audit file behind
+    on Node. Python's startup line wrote a large timeout as `1e+06ms`; it now
+    writes `1000000ms` as Node does.
+  - **A malformed or oversized control call is audited on Node too.** Node ran
+    the size (#139) and schema checks outside its audited block, so a control
+    call refused by either left no `denied` line, where Python always recorded
+    one. Both now record it.
+  - **Node refuses `constructor`, `toString` and `__proto__` as arguments.** Its
+    validator used `in`, which walks the prototype, so every inherited name
+    passed `additionalProperties: false`. Added to the shared
+    `argument-validation.json`.
+  - **Node no longer says "Failed to subscribe to node X" twice** in one
+    `subscribe_opcua_nodes` error.
+  - Two source comments pointed at `tests/e2e/test_install_parity.py`, which
+    lives in `tests/unit/`.
 
 ### Not done (tracked on #134)
 - A CA trust store with revocation checking. python-opcua has no server

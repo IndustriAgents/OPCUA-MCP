@@ -579,6 +579,15 @@
       "readLimit": 50,
       "refreshTimeoutSeconds": 5
     },
+    "subscriptionRequest": {
+      "$comment": "The CreateSubscription parameters both servers send for an event subscription (subscribe_events, and the short-lived one list_active_alarms opens for a ConditionRefresh). Here rather than in each runtime because Python sent python-opcua's own defaults — keep-alive 3000 and lifetime 10000 publishing intervals — so a subscription the process never deleted outlived it by far longer on one runtime than on the other. The counts are in publishing intervals: 200ms x 1000 is a subscription the server drops about 200s after its client goes quiet. `queueSize` is the load-bearing one: a ConditionRefresh answers with RefreshStart, every retained condition and RefreshEnd in one publishing cycle, and a queue of 1 keeps only the last.",
+      "publishingIntervalMs": 200,
+      "queueSize": 1000,
+      "maxKeepAliveCount": 20,
+      "lifetimeCount": 1000,
+      "maxNotificationsPerPublish": 10000,
+      "priority": 1
+    },
     "fields": [
       { "key": "event_id", "path": "EventId" },
       { "key": "event_type", "path": "EventType" },
@@ -613,7 +622,14 @@
       "statusValue": "When the status or the value changes. The default here.",
       "statusValueTimestamp": "When the status, the value or the source timestamp changes."
     },
-    "defaultDataChangeTrigger": "statusValue"
+    "defaultDataChangeTrigger": "statusValue",
+    "request": {
+      "$comment": "The CreateSubscription parameters both servers send for a data-change subscription, beside the publishing interval the caller chose. Python used to send python-opcua's defaults (keep-alive 3000, lifetime 10000, 10000 notifications, priority 0) and Node these, so a subscription orphaned by a process that died without deleting it lived about 60 publishing intervals on one runtime and about 2.7 hours at the default interval on the other. Keep-alive and lifetime are counts of publishing intervals, not durations, which is what keeps a fast subscription from expiring between two quiet publishes.",
+      "maxKeepAliveCount": 10,
+      "lifetimeCount": 60,
+      "maxNotificationsPerPublish": 100,
+      "priority": 10
+    }
   },
   "transport": {
     "$comment": "Bounds on what the OPC UA server on the other end may send us, advertised in the OPC UA Hello and enforced on receipt. CVE-2022-25304 is a missing limit on the number of chunks one message may be split into: python-opcua appends every intermediate chunk to a list with nothing counting them, so a hostile or compromised server can stream chunks until the client runs out of memory. The advisory has no fixed version and will not get one — python-opcua is unmaintained, and the same advisory names asyncua. Both runtimes therefore advertise these bounds and, because advertising only binds a server that chooses to obey, enforce them on what actually arrives. maxChunkCount * maxChunkSize is the largest message either runtime will assemble: 1024 * 64KiB = 64MiB, which is far above any real OPC UA response and far below a memory-exhaustion attack. See SECURITY.md.",
@@ -863,7 +879,8 @@
     "droppedEvents": "Note: {dropped} older event(s) were dropped before this read — the buffer of {buffer_size} filled up. Raise buffer_size or read more often.",
     "historyTruncated": "Note: {count} readings is the per-call maximum, so the range may hold more — narrow start_time/end_time, or summarise the whole of it with aggregate_function.",
     "eventHistoryTruncated": "Note: {count} events is the per-call maximum, so the range may hold more — narrow start_time/end_time, or raise severity_min.",
-    "serverTruncated": "Note: the OPC UA server stopped after {count} record(s) and holds more in this range — narrow start_time/end_time to see the rest."
+    "serverTruncated": "Note: the OPC UA server stopped after {count} record(s) and holds more in this range — narrow start_time/end_time to see the rest.",
+    "eventsResubscribed": "Note: the connection to the OPC UA server was re-established and this event subscription was re-created on the new session, so events raised while it was down were not received. read_event_history can recover them from a server that stores its events."
   },
   "resources": [
     {

@@ -24,7 +24,7 @@
 
 ## Overview
 
-Thirteen MCP tools over plain OPC UA: read and write nodes, browse the address
+Fifteen MCP tools over plain OPC UA: read and write nodes, browse the address
 space, call methods, read history and server-side aggregates, and subscribe to
 data changes, events and alarms. It connects to any server that speaks OPC UA —
 PLC, SCADA gateway or historian.
@@ -34,10 +34,18 @@ server advertises it can do, what the OPC UA account is permitted to do, and
 which [tool profile](#deciding-what-the-agent-may-do) you configured. The default
 profile is read-only.
 
-There are **two interchangeable implementations**, Python and TypeScript/Node,
-held to one shared contract by the test suite — same tools, same arguments, same
-responses. Install whichever your machine already has; nothing below depends on
-the choice.
+There are **two first-class implementations**, Python and TypeScript/Node, held
+to one shared contract, one test suite and one release gate — same tools, same
+arguments, same responses, same version, released together. Install whichever
+your machine already has. Where the two genuinely differ — two extra security
+policies on Node, the Claude Desktop bundle being Node, the MCP protocol
+generation each SDK speaks, how a dropped connection is repaired — the
+difference is declared and listed in
+**[docs/compatibility.md](docs/compatibility.md#runtime-differences)**; anything
+else that differs is a bug. Some such bugs are known and being fixed — the same
+page lists them, with the input habits that avoid them (zone-qualified
+timestamps, numbers sent as numbers). Why both, and what each is promised:
+[ADR 0001](docs/adr/0001-two-first-class-runtimes.md).
 
 Which servers and operations the test suite exercises, and which are only
 reported by users, is set out in
@@ -96,9 +104,11 @@ permanent install, `npx` and `uvx` fetch the package on demand.
 <details>
 <summary>Python instead of Node, or Claude Code in one line</summary>
 
-The two runtimes are interchangeable — same tools, same arguments, same
-responses — so this is a question of what is already on the machine, not of
-capability. For the Python package, swap the command:
+The two runtimes are held to the same contract and the same tests — same tools,
+same arguments, same responses — so this is mostly a question of what is already
+on the machine. The exceptions are declared in the
+[runtime differences](docs/compatibility.md#runtime-differences) list. For the
+Python package, swap the command:
 
 ```json
 { "command": "uvx", "args": ["opcua-mcp-server"] }
@@ -265,11 +275,17 @@ connection is retried with exponential backoff on the four
 `OPCUA_RECONNECT_*` / `OPCUA_SESSION_TIMEOUT_MS` settings above, the read and
 write paths transparently re-establish a dead session, and the data-change
 subscriptions an agent is holding are re-created on the new session — the IDs
-keep working and the values already buffered are still there to be read.
+keep working and the values already buffered are still there to be read. The
+two runtimes get there differently: node-opcua repairs a dropped channel in the
+background and keeps the same session, while the Python runtime rebuilds a fresh
+session when the next call needs one. The settings mean the same on both; see
+[runtime differences](docs/compatibility.md#runtime-differences).
 
 Reconnection is driven by tool calls rather than by a timer: if the endpoint is
 unreachable when the MCP client starts, the server still starts, and the first
-call that needs a session connects. `get_server_status` is the one tool that
+call that needs a session connects. One known exception: the Node runtime with
+`OPCUA_RECONNECT_MAX_RETRY=-1` can keep retrying before it opens the MCP
+transport at all ([#136](https://github.com/IndustriAgents/OPCUA-MCP/issues/136)). `get_server_status` is the one tool that
 answers either way — it reports `connected: false` and the reason instead of
 failing, and every other tool's error points at it.
 

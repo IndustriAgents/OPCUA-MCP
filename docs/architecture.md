@@ -14,10 +14,14 @@ flowchart LR
 ## Two runtimes, one tool surface
 
 The repo ships the same MCP server twice — once in Python, once in
-TypeScript/Node. They are interchangeable: same tool names, same descriptions,
-same parameters, same error wording. Users pick whichever runtime their stack
-already has, or no runtime at all via the bundle and executable routes in
-docs/install.md.
+TypeScript/Node. Both are first-class — the support promise, and what it costs,
+is [ADR 0001](adr/0001-two-first-class-runtimes.md): same tool names, same
+descriptions, same parameters, same error wording, one test suite and one release
+gate for both. What the two do *not* share is declared in
+`contract/runtime-differences.json` and listed in
+[compatibility.md](compatibility.md#runtime-differences); anything else that
+differs is a bug. Users pick whichever runtime their stack already has, or no
+runtime at all via the bundle and executable routes in docs/install.md.
 
 **Why twice**, though — because "pick your stack" is less and less of an answer,
 as #122 noted when it added that last clause. Two of the four install routes need
@@ -620,6 +624,8 @@ contract/tools.json          single source of truth for the tool + resource surf
 contract/config.json         single source of truth for the configuration surface:
                              every OPCUA_* variable, generating the .mcpb form
                              and server.json's environment variables
+contract/runtime-differences.json
+                             what the two runtimes do not share, declared (ADR 0001)
 packages/server-python/      mcp MCPServer + opcua (FreeOpcUa)
   src/opcua_mcp_server/      config · security · contract · datetimes
                              · capabilities · aggregates · records

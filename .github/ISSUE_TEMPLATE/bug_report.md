@@ -9,6 +9,14 @@ assignees: ""
 **Which implementation?**
 - [ ] Python (`opcua-mcp-server`)
 - [ ] Node / TypeScript (`opcua-mcp-server`)
+- [ ] Both, and they behave **differently** — a runtime divergence. Please paste
+      what each runtime returned for the same call. Differences the project has
+      declared are listed in
+      [docs/compatibility.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/compatibility.md#runtime-differences);
+      anything else is a bug, and blocks the next release of both packages
+      ([ADR 0001](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/adr/0001-two-first-class-runtimes.md)).
+      If one runtime is *less safe* than the other, report it privately
+      instead — see SECURITY.md.
 
 **Describe the bug**
 A clear and concise description of what the bug is.

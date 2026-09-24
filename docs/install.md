@@ -57,10 +57,15 @@ opcua-mcp-server-node-<platform>-<arch>       # ~110 MB
 opcua-mcp-server-python-<platform>-<arch>     # ~30 MB
 ```
 
-The two are interchangeable — same tools, same behaviour, same version — and are
-built from the two runtimes this repo maintains. Take the Python one unless you
-have a reason not to; it is a quarter of the size. `<platform>` is `linux`,
-`darwin` (macOS) or `win32`, and `<arch>` is `x64` or `arm64`.
+They are built from the two runtimes this repo maintains, from the same tag, and
+behave the same — same tools, same responses, same version — apart from the
+[declared runtime differences](compatibility.md#runtime-differences). The Python
+one is a quarter of the size. The Node one runs on the maintained OPC UA client
+library and offers the two AES security policies, which makes it the one to take
+for a network you do not fully trust (see
+[SECURITY.md](../SECURITY.md#cve-2022-25304--unbounded-chunk-reassembly-in-python-opcua)).
+`<platform>` is `linux`, `darwin` (macOS) or `win32`, and `<arch>` is `x64` or
+`arm64`.
 
 Then make it executable and register it:
 
@@ -146,9 +151,13 @@ is exactly what `--install` does, and why.
 
 ## Which runtime am I installing?
 
-Either. They are interchangeable — the same tools with the same arguments and
-the same responses, held to one shared contract by the test suite — so this is a
-question of what the machine already has, not of capability.
+Either. Both are first-class ([ADR 0001](adr/0001-two-first-class-runtimes.md)):
+one shared contract, one test suite run against both, one release gate, one
+version number — the same tools with the same arguments and the same responses.
+So this is mostly a question of what the machine already has. Where the two do
+differ by design, the difference is declared, and the full list is in
+[compatibility.md](compatibility.md#runtime-differences) — along with the known
+divergences that are bugs still being fixed.
 
 | | Python | Node |
 |---|---|---|
@@ -165,11 +174,15 @@ Exact dependency versions live in the manifests
 [`package.json`](../packages/server-node/package.json)) rather than being
 restated here, where they would drift.
 
-Two differences that are not cosmetic. The Node runtime implements two extra
-security policies (`Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`) that
-`python-opcua` does not, and it sniffs certificate files by content where the
-Python runtime goes by extension — so a PEM key must be named `*.pem` there. Both
-are covered in [certificates.md](certificates.md).
+The declared differences most likely to matter when choosing. The Node runtime
+implements two extra security policies (`Aes128_Sha256_RsaOaep`,
+`Aes256_Sha256_RsaPss`) that `python-opcua` does not, and it sniffs certificate
+files by content where the Python runtime goes by extension — so a PEM key must be
+named `*.pem` there; both are covered in [certificates.md](certificates.md). The
+`.mcpb` bundle and the MCP Registry listing are Node only. And the Python
+runtime's OPC UA library is unmaintained — this project patches it
+(CVE-2022-25304) and is moving it to `asyncua`
+([#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144)).
 
 ## Building the artifacts yourself
 

@@ -41,6 +41,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded by `load_config_schema()`), so the installers (#135) and generated
   reference docs (#149) can consume it rather than keep another list.
 
+### Documentation
+- **Both runtimes are first-class, and that is now a written promise rather
+  than a habit** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md), #143).
+  The Python and Node packages meet the same conformance suite, security
+  baseline, artifact checks and release gate, and ship together at one version;
+  a divergence between them blocks the release of *both*, not only the runtime
+  at fault. The ADR records why this model won over a primary-plus-compatibility
+  tier and over retiring one runtime, what exactly is guaranteed to match (names,
+  schemas, behaviour, errors, configuration, security, bounds, release timing)
+  and what is not (speed, log wording, a client library's own error reason), the
+  runtime floors and end-of-life policy, the tests required before either
+  package ships, how a divergence is reported, and how the model itself would
+  be changed. It also settles the shared strategy for #138, #141 and #144. The
+  first ADR, so `docs/adr/` gains an index and a template.
+- **What the two runtimes do not share by design is declared, in one
+  machine-readable place.** `contract/runtime-differences.json` lists thirteen
+  deliberate differences — among them the two Node-only AES security policies,
+  the Python runtime's extension-based PEM/DER rule, the MCP protocol generation
+  each SDK speaks, the Node-only `.mcpb` bundle and registry listing, how each
+  repairs a dropped connection, and node-opcua's on-disk PKI folder — each with
+  the rationale that makes it allowed. Accidental divergences are deliberately
+  *not* in that file: the ones known today are bugs, tracked in #157 (about
+  thirty, found while writing the ADR — the most serious can make the two
+  runtimes write a different value or read a different time window for the same
+  call) and #136, and `docs/compatibility.md` now lists them with the input
+  habits that avoid them until they are fixed.
+  `tests/unit/test_runtime_differences.py` checks the file's shape and every
+  claim the repository can answer for itself — the policy lists, the runtime
+  floors in the manifests and the ADR, the SDK majors, the bundle, the registry
+  file, the installed commands, and the runtime-specific settings
+  `contract/config.json` records (today the AES entries of `runtimeChoices`) —
+  and that
+  [docs/compatibility.md](docs/compatibility.md#runtime-differences) lists
+  every entry.
+- **The docs no longer promise more interchangeability than CI enforces, or
+  less.** "Interchangeable, nothing depends on the choice" is now "first-class,
+  apart from the declared differences" in the README, `docs/install.md`,
+  `docs/architecture.md` and both package READMEs. The Python README no longer
+  implies the `.mcpb` bundle is Python. `docs/install.md` stops recommending the
+  Python executable unconditionally when SECURITY.md recommends Node for
+  untrusted networks. SECURITY.md's supported versions named only the npm
+  release; security fixes ship in both. And `docs/compatibility.md` and
+  `docs/certificates.md` still said the server certificate could not be pinned —
+  `OPCUA_SERVER_CERT` pins it, and the end-to-end suite checks that on both
+  runtimes. The README's overview also said thirteen tools; there are fifteen.
+- **A runtime divergence has somewhere to go.** The bug template gains a *both
+  runtimes, behaving differently* option, and CONTRIBUTING states the rule: a
+  behaviour change lands in both runtimes in the same PR, or is declared.
+
 ## [0.5.1] — 2026-09-22
 
 0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for

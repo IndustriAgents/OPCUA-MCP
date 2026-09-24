@@ -293,8 +293,13 @@ and is the better choice where that matters.
 
 ## Supported versions
 
-This project is pre-1.0. Security fixes land on `main` and the latest published
-npm release of `opcua-mcp-server`.
+This project is pre-1.0. Security fixes land on `main` and in the next release of
+`opcua-mcp-server`, which ships on npm and PyPI together, at one version, with the
+`.mcpb` bundle and both single-file executables. Both runtimes are supported to
+the same standard ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md)), so a
+fix for one ships in both. A difference in *safety* between the two runtimes —
+a refusal one makes and the other does not — is itself a vulnerability: report
+it as below, not as a public issue.
 
 ## Reporting a vulnerability
 

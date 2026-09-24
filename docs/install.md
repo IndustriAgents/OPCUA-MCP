@@ -161,6 +161,13 @@ The setting flags are generated from
 because the client starts the server from a directory nobody chose). A boolean
 setting flag takes no value: its presence means `true`.
 
+Two settings have no flag, and naming one is refused with a pointer here:
+`OPCUA_PASSWORD` (see [Passwords](#passwords)) and `OPCUA_AUDIT_CHAIN_KEY_FILE`,
+the HMAC key for `--audit-chain hmac-sha256`, which the schema keeps off command
+lines as it does a secret. For an HMAC chain, install with `--audit-chain sha256`
+(or none) and set both variables in the client config by hand, or use the
+`.mcpb` bundle.
+
 | Flag | Variable |
 |---|---|
 | `--server-url` (or `--url`) | `OPCUA_SERVER_URL`. Defaults to `$OPCUA_SERVER_URL`, else `opc.tcp://localhost:4840` |
@@ -170,8 +177,8 @@ setting flag takes no value: its presence means `true`.
 | `--username`, `--user-cert`, `--user-key` | `OPCUA_USERNAME`, `OPCUA_USER_CERT`, `OPCUA_USER_KEY` (for the password, see [Passwords](#passwords)) |
 | `--profile` | `OPCUA_PROFILE`: `observe` (also `read-only`; the default), `operator`, `full` |
 | `--policy-file`, `--allowed-tools`, `--allowed-write-nodes`, `--allowed-methods` | `OPCUA_POLICY_FILE`, `OPCUA_ALLOWED_TOOLS`, `OPCUA_ALLOWED_WRITE_NODES`, `OPCUA_ALLOWED_METHODS` |
-| `--allow-acknowledge-alarms`, `--allow-insecure-control`, `--allow-out-of-range-writes` | the matching `OPCUA_ALLOW_*` overrides |
-| `--audit-file`, `--operator-id` | `OPCUA_AUDIT_FILE`, `OPCUA_OPERATOR_ID` |
+| `--allow-acknowledge-alarms`, `--allow-insecure-control`, `--allow-unverified-server-control`, `--allow-out-of-range-writes` | the matching `OPCUA_ALLOW_*` overrides |
+| `--audit-file`, `--audit-fsync`, `--audit-chain`, `--operator-id` | `OPCUA_AUDIT_FILE`, `OPCUA_AUDIT_FSYNC`, `OPCUA_AUDIT_CHAIN`, `OPCUA_OPERATOR_ID` |
 | `--reconnect-initial-delay-ms`, `--reconnect-max-delay-ms`, `--reconnect-max-retry`, `--session-timeout-ms` | the reconnection settings |
 
 And the installer's own:
@@ -199,26 +206,33 @@ Refused outright (exit 1, nothing written):
 - **A configuration the server would refuse at startup**: a mode without a
   policy, a policy without a client certificate, a pinned server certificate or
   a user certificate with no channel security, a username with no password, an
-  unreadable policy file, an unknown tool name. The installer runs the server's
-  own parsers on what it is about to write.
+  unreadable policy file, an unknown tool name, a hash chain with no audit file.
+  The installer runs the server's own parsers on what it is about to write.
 - **A file that does not exist**, or an audit file in a directory that does not.
 - **`--profile operator` or `full` for a remote endpoint without
   `--server-cert`**, unless `--allow-unverified-remote-control` is given. An
   encrypted channel to an unpinned server is encrypted to whoever answers at that
   address. "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an
-  address the installer cannot parse counts as remote.
+  address the installer cannot parse counts as remote. The server's own lab
+  override, `--allow-unverified-server-control`, does not stand in for this one:
+  it is written into the config and opens control at runtime, while
+  `--allow-unverified-remote-control` is only the acknowledgement that doing so
+  against a remote host is intended.
 
 Refused as usage errors (exit 2): an unknown flag or choice, a number below the
 schema's minimum, a blank value, key material pasted into a path flag, and any
-secret as a flag (`--password`).
+secret as a flag (`--password`), or a setting kept off the installer
+(`--audit-chain-key-file`).
 
 Written, with a `WARNING [code]` on stderr: a remote endpoint with no channel
 security (`no-channel-security`) or with an unpinned server (`server-not-pinned`);
 a password on an unencrypted channel; a password stored in the file; the
-`OPCUA_ALLOW_INSECURE_CONTROL` or `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` overrides; the
-`full` profile; a control profile with no audit file, or with no allowlist that
-lets it do anything; and a policy file whose `profile` the explicit `observe`
-default overrides.
+`OPCUA_ALLOW_INSECURE_CONTROL`, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` or
+`OPCUA_ALLOW_OUT_OF_RANGE_WRITES` overrides; the `full` profile; a control profile
+with no audit file, or one the server would offer no control tool (the warning
+gives the server's own reason: no allowlist, no security policy, or no pinned
+certificate); and a policy file whose `profile` the explicit `observe` default
+overrides.
 
 ### Passwords
 

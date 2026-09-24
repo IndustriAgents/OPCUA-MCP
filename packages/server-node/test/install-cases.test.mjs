@@ -34,9 +34,13 @@ function makePki() {
   return root;
 }
 
+// The whole path, not just the join: the installer makes a path absolute with
+// the platform's own normalisation, so `{pki}/audit/x` is `...\audit\x` on
+// Windows. Only values that *start* with `{pki}` are paths; URLs are left alone.
 function substitute(value, pki) {
-  if (typeof value === "string")
-    return value.replaceAll("{pki}/", pki + sep).replaceAll("{pki}", pki);
+  if (typeof value === "string") {
+    return value.startsWith("{pki}") ? pki + value.slice(5).replaceAll("/", sep) : value;
+  }
   if (Array.isArray(value)) return value.map((v) => substitute(v, pki));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, substitute(v, pki)]));

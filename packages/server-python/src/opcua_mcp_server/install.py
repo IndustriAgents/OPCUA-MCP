@@ -434,9 +434,10 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
     """
     # Late: these pull in python-opcua and cryptography, which `--help` and
     # `--version` have no use for.
+    from .audit import parse_audit_config
     from .config import parse_reconnect_config
     from .contract import CONTRACT
-    from .policy import ToolPolicy, parse_policy_config
+    from .policy import ToolPolicy, control_refusal, parse_policy_config
     from .security import parse_security_config
 
     settings = load_config_schema()["settings"]
@@ -492,6 +493,7 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
         security = parse_security_config(probe)
         policy = ToolPolicy(parse_policy_config(probe))
         parse_reconnect_config(probe)
+        parse_audit_config(probe)
         if "OPCUA_POLICY_FILE" in config_env and "profile" not in options.settings:
             file_profile = parse_policy_config({**probe, "OPCUA_PROFILE": ""}).profile
     except Exception as error:
@@ -556,6 +558,13 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
             "the password is written in plain text into the client config file, readable by "
             "anything that can read that file",
         )
+    if config.allow_unverified_server_control:
+        warn(
+            "unverified-server-control-override",
+            "control tools are allowed on a channel whose server certificate is not pinned "
+            "(OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL). Never use this against production "
+            "equipment",
+        )
     if config.allow_insecure_control:
         warn(
             "insecure-control-override",
@@ -581,11 +590,26 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
             "--audit-file",
         )
     if control and not control_tools:
+        # The server's own reason, so this names the fix the server would name.
+        refusal = control_refusal(config)
+        if refusal == "controlNeedsVerifiedServer":
+            why = (
+                "the server's certificate is not pinned. Set --server-cert, or "
+                "--allow-unverified-server-control on a lab network"
+            )
+        elif refusal == "controlNeedsSecureChannel":
+            why = (
+                "the channel has no security policy. Set --security-policy, or "
+                "--allow-insecure-control on a lab network"
+            )
+        else:
+            why = (
+                "no allowlist lets it do anything. Set --allowed-write-nodes, "
+                "--allowed-methods, --allow-acknowledge-alarms or a --policy-file"
+            )
         warn(
             "no-control-tools",
-            f"profile={config.profile} offers no control tool with these settings: set an "
-            f"allowlist (--allowed-write-nodes, --allowed-methods, --allow-acknowledge-alarms "
-            f"or a --policy-file) and a secured channel",
+            f"profile={config.profile} offers no control tool with these settings: {why}",
         )
     if file_profile is not None and file_profile != config.profile:
         warn(
@@ -784,12 +808,22 @@ def run_install(
     return 0
 
 
-def _secret_flag_message(flag: str, env: str) -> str:
-    """Refusal for a secret passed as a flag. Never echoes the value."""
+def _refused_flag_message(flag: str, setting: dict[str, Any]) -> str:
+    """Refusal for a setting the schema keeps off the installer. Never echoes the value.
+
+    Named rather than left as "unrecognized arguments", because the user guessed
+    the flag correctly from the variable's name; the answer is where it goes
+    instead.
+    """
+    if setting["secret"]:
+        return (
+            f"{flag} is not accepted: anything on a command line is visible to every local "
+            f"user and lands in shell history. Leave the password out and see "
+            f"docs/install.md, or export {setting['env']} and pass --store-password-in-config"
+        )
     return (
-        f"{flag} is not accepted: anything on a command line is visible to every local user "
-        f"and lands in shell history. Leave the password out and see docs/install.md, or "
-        f"export {env} and pass --store-password-in-config"
+        f"{flag} is not accepted: {setting['env']} is kept off command lines. Set it in the "
+        f"client config by hand after installing; see docs/install.md"
     )
 
 
@@ -867,9 +901,9 @@ def _build_parser() -> argparse.ArgumentParser:
             )
 
     for setting in schema["settings"]:
-        if not setting["secret"]:
+        if not setting["secret"] and "installer" in setting["surfaces"]:
             continue
-        message = _secret_flag_message(flag_for(setting), setting["env"])
+        message = _refused_flag_message(flag_for(setting), setting)
 
         class _Refuse(argparse.Action):
             def __call__(self, parser, namespace, values, option_string=None, _msg=message):

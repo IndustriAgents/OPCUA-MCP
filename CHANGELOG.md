@@ -396,13 +396,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unless `--allow-unverified-remote-control` is given. Insecure settings that are
   allowed — no channel security or an unpinned server on a remote endpoint, the
   insecure-control and out-of-range overrides, `full`, control without an audit
-  file — are written with a `WARNING [code]`. A password is never a flag and never
+  file, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` — are written with a
+  `WARNING [code]`; a control profile the server would offer no tool says why,
+  in the server's own terms. The `OPCUA_AUDIT_*` settings are flags too, and
+  go through the server's audit parser; `OPCUA_AUDIT_CHAIN_KEY_FILE` is not,
+  like the password. A password is never a flag and never
   printed: Codex gets `env_vars = ["OPCUA_PASSWORD"]` pass-through, and Claude
   Desktop, which has no such mechanism, is pointed at the `.mcpb` bundle's keychain
   storage or X.509 user login unless `--store-password-in-config` explicitly copies
   `$OPCUA_PASSWORD` into an owner-only file. Previews redact private-key paths and
   every `env`/`headers` value of the *other* servers in the file, which routinely
-  hold API tokens. One table, `tests/fixtures/install-cases.json` (43 cases),
+  hold API tokens. One table, `tests/fixtures/install-cases.json` (51 cases),
   drives both command lines (`tests/unit/test_install_cases.py`) and the Node
   planner (`test/install-cases.test.mjs`).
 

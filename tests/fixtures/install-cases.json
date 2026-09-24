@@ -292,6 +292,190 @@
       "byRuntime": { "python": { "exit": 1, "error": "invalid-config" } }
     },
     {
+      "name": "an unpinned server on this machine: control needs the server override, which is named",
+      "args": [
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--allow-unverified-server-control",
+        "--audit-file",
+        "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5",
+          "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "true",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": [
+          "unverified-server-control-override"
+        ]
+      }
+    },
+    {
+      "name": "without the server override, an unpinned server offers no control, and the warning says why",
+      "args": [
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--audit-file",
+        "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": [
+          "no-control-tools"
+        ]
+      }
+    },
+    {
+      "name": "remote lab control over an unpinned server needs the server override and the installer's",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--allow-unverified-server-control",
+        "--audit-file",
+        "audit/control.jsonl",
+        "--allow-unverified-remote-control"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5",
+          "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "true",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": [
+          "unverified-remote-control",
+          "server-not-pinned",
+          "unverified-server-control-override"
+        ]
+      }
+    },
+    {
+      "name": "the server override alone does not let a remote control config through",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--allow-unverified-server-control"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "unverified-remote-control"
+      }
+    },
+    {
+      "name": "audit durability and a hash chain",
+      "args": [
+        "--audit-file",
+        "audit/control.jsonl",
+        "--audit-fsync",
+        "NONE",
+        "--audit-chain",
+        "sha256"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_PROFILE": "observe",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl",
+          "OPCUA_AUDIT_FSYNC": "none",
+          "OPCUA_AUDIT_CHAIN": "sha256"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "the server's own audit parser refuses a hash chain with no audit file",
+      "args": [
+        "--audit-chain",
+        "sha256"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "invalid-config"
+      }
+    },
+    {
+      "name": "the HMAC chain needs a key file, which is never a flag, so it cannot be installed",
+      "args": [
+        "--audit-file",
+        "audit/control.jsonl",
+        "--audit-chain",
+        "hmac-sha256"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "invalid-config"
+      }
+    },
+    {
+      "name": "the audit chain key file is not an installer flag",
+      "args": [
+        "--audit-chain-key-file",
+        "server.pem"
+      ],
+      "expect": {
+        "exit": 2,
+        "error": null
+      }
+    },
+    {
       "name": "an unknown profile is a usage error",
       "args": ["--profile", "admin"],
       "expect": { "exit": 2, "error": "invalid-value" }

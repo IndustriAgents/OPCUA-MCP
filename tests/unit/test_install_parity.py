@@ -22,6 +22,11 @@ from pathlib import Path
 
 import pytest
 from conftest import ROOT
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: a test dependency there (tests/pyproject.toml)
+    import tomli as tomllib
 from opcua_mcp_server.contract import load_config_schema
 
 NODE_BUILD = ROOT / "packages" / "server-node" / "build" / "index.js"
@@ -273,13 +278,10 @@ def test_codex_install_writes_config_toml_under_home(impl, tmp_path):
     assert written.startswith(existing.rstrip("\n")), "other tables were rewritten"
     assert "[mcp_servers.opcua]" in written
     assert f'OPCUA_SERVER_URL = "{URL}"' in written
-    if sys.version_info >= (3, 11):
-        import tomllib
-
-        parsed = tomllib.loads(written)
-        assert parsed["model"] == "o3"
-        assert parsed["mcp_servers"]["other"] == {"command": "other"}
-        assert parsed["mcp_servers"]["opcua"]["env"]["OPCUA_PROFILE"] == "observe"
+    parsed = tomllib.loads(written)
+    assert parsed["model"] == "o3"
+    assert parsed["mcp_servers"]["other"] == {"command": "other"}
+    assert parsed["mcp_servers"]["opcua"]["env"]["OPCUA_PROFILE"] == "observe"
     assert list(tmp_path.glob(".codex/config.toml.bak-*")), "no backup was taken"
 
     again = _run(impl, ["--install", "codex"], tmp_path)

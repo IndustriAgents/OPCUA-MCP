@@ -29,8 +29,8 @@ from opcua_mcp_server.install import REDACTED, redact_env
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    tomllib = None
+except ModuleNotFoundError:  # Python 3.10: a test dependency there (tests/pyproject.toml)
+    import tomli as tomllib
 
 NODE_BUILD = ROOT / "packages" / "server-node" / "build" / "index.js"
 CASES = json.loads((ROOT / "tests" / "fixtures" / "install-cases.json").read_text("utf-8"))["cases"]
@@ -57,9 +57,16 @@ def make_pki(root: Path) -> Path:
 
 
 def substitute(value, pki: Path):
-    """`{pki}` replaced throughout a JSON value, in the platform's path spelling."""
+    """`{pki}` replaced throughout a JSON value, in the platform's path spelling.
+
+    The whole path, not just the join: the installers make a path absolute with
+    the platform's own normalisation, so `{pki}/audit/x` is `...\\audit\\x` on
+    Windows. Only values that *start* with `{pki}` are paths; URLs are left alone.
+    """
     if isinstance(value, str):
-        return value.replace("{pki}/", str(pki) + os.sep).replace("{pki}", str(pki))
+        if value.startswith("{pki}"):
+            return str(pki) + value[len("{pki}") :].replace("/", os.sep)
+        return value
     if isinstance(value, list):
         return [substitute(v, pki) for v in value]
     if isinstance(value, dict):
@@ -100,8 +107,6 @@ def previewed_entry(client: str, stdout: str) -> dict:
     """This server's entry, parsed out of a `--dry-run` preview."""
     body = stdout[stdout.index("\n") + 1 :]
     if client == "codex":
-        if tomllib is None:
-            pytest.skip("tomllib needs Python 3.11")
         return tomllib.loads(body)["mcp_servers"]["opcua"]
     return json.loads(body)["mcpServers"]["opcua"]
 

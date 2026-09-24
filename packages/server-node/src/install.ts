@@ -29,10 +29,10 @@ import {
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 
-import { runVerify } from "./audit.js";
+import { parseAuditConfig, runVerify } from "./audit.js";
 import { SERVER_URL, parseReconnectConfig } from "./config.js";
 import { CONTRACT, VERSION, configSchema, type ConfigSetting } from "./contract.js";
-import { ToolPolicy, parsePolicyConfig } from "./policy.js";
+import { ToolPolicy, controlRefusal, parsePolicyConfig } from "./policy.js";
 import { parseSecurityConfig } from "./security.js";
 
 /** How an MCP client is told to launch this server. */
@@ -385,12 +385,22 @@ export type Action =
   | { kind: "verify-audit"; argv: string[] }
   | { kind: "error"; message: string };
 
-/** Refusal for a secret passed as a flag. Never echoes the value. */
-function secretFlagMessage(flag: string, env: string): string {
+/** Refusal for a setting the schema keeps off the installer. Never echoes the value.
+ *
+ * Named rather than left as "unknown argument", because the user guessed the
+ * flag correctly from the variable's name; the answer is where it goes instead.
+ */
+function refusedFlagMessage(flag: string, setting: ConfigSetting): string {
+  if (setting.secret) {
+    return (
+      `${flag} is not accepted: anything on a command line is visible to every local user ` +
+      `and lands in shell history. Leave the password out and see docs/install.md, or ` +
+      `export ${setting.env} and pass --store-password-in-config`
+    );
+  }
   return (
-    `${flag} is not accepted: anything on a command line is visible to every local user ` +
-    `and lands in shell history. Leave the password out and see docs/install.md, or ` +
-    `export ${env} and pass --store-password-in-config`
+    `${flag} is not accepted: ${setting.env} is kept off command lines. Set it in the ` +
+    `client config by hand after installing; see docs/install.md`
   );
 }
 
@@ -416,9 +426,9 @@ export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Acti
   let allowUnverifiedRemoteControl = false;
 
   const byFlag = new Map(installerSettings().map((s) => [flagFor(s), s]));
-  const secretFlags = new Map(
+  const refusedFlags = new Map(
     configSchema()
-      .settings.filter((s) => s.secret)
+      .settings.filter((s) => s.secret || !s.surfaces.includes("installer"))
       .map((s) => [flagFor(s), s])
   );
 
@@ -495,8 +505,8 @@ export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Acti
       }
     }
 
-    const secret = secretFlags.get(arg);
-    if (secret) return { kind: "error", message: secretFlagMessage(arg, secret.env) };
+    const refused = refusedFlags.get(arg);
+    if (refused) return { kind: "error", message: refusedFlagMessage(arg, refused) };
 
     const setting = byFlag.get(arg);
     if (!setting) return { kind: "error", message: `unknown argument: ${arg}` };
@@ -732,6 +742,7 @@ export function planInstall(
     security = parseSecurityConfig(probe);
     policy = new ToolPolicy(parsePolicyConfig(probe));
     parseReconnectConfig(probe);
+    parseAuditConfig(probe);
     if (env.OPCUA_POLICY_FILE && options.settings.profile === undefined) {
       fileProfile = parsePolicyConfig({ ...probe, OPCUA_PROFILE: "" }).profile;
     }
@@ -802,6 +813,13 @@ export function planInstall(
         "anything that can read that file"
     );
   }
+  if (config.allowUnverifiedServerControl) {
+    warn(
+      "unverified-server-control-override",
+      "control tools are allowed on a channel whose server certificate is not pinned " +
+        "(OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL). Never use this against production equipment"
+    );
+  }
   if (config.allowInsecureControl) {
     warn(
       "insecure-control-override",
@@ -829,11 +847,19 @@ export function planInstall(
     );
   }
   if (control && controlTools.length === 0) {
+    // The server's own reason, so this names the fix the server would name.
+    const refusal = controlRefusal(config);
     warn(
       "no-control-tools",
-      `profile=${config.profile} offers no control tool with these settings: set an ` +
-        `allowlist (--allowed-write-nodes, --allowed-methods, --allow-acknowledge-alarms or ` +
-        `a --policy-file) and a secured channel`
+      `profile=${config.profile} offers no control tool with these settings: ` +
+        (refusal === "controlNeedsVerifiedServer"
+          ? "the server's certificate is not pinned. Set --server-cert, or " +
+            "--allow-unverified-server-control on a lab network"
+          : refusal === "controlNeedsSecureChannel"
+            ? "the channel has no security policy. Set --security-policy, or " +
+              "--allow-insecure-control on a lab network"
+            : "no allowlist lets it do anything. Set --allowed-write-nodes, " +
+              "--allowed-methods, --allow-acknowledge-alarms or a --policy-file")
     );
   }
   if (fileProfile !== null && fileProfile !== config.profile) {

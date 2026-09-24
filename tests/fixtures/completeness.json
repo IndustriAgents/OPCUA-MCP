@@ -1,0 +1,111 @@
+{
+  "$comment": "What `completeness` says for each way a result can come back short (issue #137), driven through BOTH runtimes: tests/unit/test_completeness.py and packages/server-node/test/completeness.test.mjs read this file and assert the builder produces `expected` exactly — every field, so the two runtimes cannot agree on `complete` while disagreeing about `remaining`. The shape is contract/tools.json -> completeness.schema, and each `expected` is checked against it too. \"max\" stands for the contract's cap: limits.maxHistoryValues in `history`, traversal.maxNodes in `traversal`. `history` covers raw values, stored events and aggregates, which differ only in what they pass: `fetched` is what the server sent before a severity filter, `wanted` is the count asked for (null for an aggregate), `next_start` is where a forward read would resume (null for a backward one).",
+  "history": [
+    {
+      "name": "fewer than asked for, and the server holds no more: complete",
+      "input": { "returned": 3, "fetched": 3, "wanted": 10, "continuation_point": false, "next_start": "2026-09-24T10:00:02Z" },
+      "expected": { "complete": true, "reasons": [], "returned": 3, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "the caller's num_values was reached and the server says there is more",
+      "input": { "returned": 10, "fetched": 10, "wanted": 10, "continuation_point": true, "next_start": "2026-09-24T10:00:09Z" },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 10, "truncated": true, "limit": 10, "dropped": 0, "remaining": true, "continuation": { "start_time": "2026-09-24T10:00:09Z" } }
+    },
+    {
+      "name": "num_values reached and the server said nothing: whether more exists is unknown, not no",
+      "input": { "returned": 10, "fetched": 10, "wanted": 10, "continuation_point": false, "next_start": "2026-09-24T10:00:09Z" },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 10, "truncated": true, "limit": 10, "dropped": 0, "remaining": null, "continuation": { "start_time": "2026-09-24T10:00:09Z" } }
+    },
+    {
+      "name": "this server's own cap was reached",
+      "input": { "returned": "max", "fetched": "max", "wanted": "max", "continuation_point": true, "next_start": "2026-09-24T11:23:19Z" },
+      "expected": { "complete": false, "reasons": ["contractLimit"], "returned": "max", "truncated": true, "limit": "max", "dropped": 0, "remaining": true, "continuation": { "start_time": "2026-09-24T11:23:19Z" } }
+    },
+    {
+      "name": "the server stopped short of the count, on a limit of its own",
+      "input": { "returned": 40, "fetched": 40, "wanted": 100, "continuation_point": true, "next_start": "2026-09-24T10:00:39Z" },
+      "expected": { "complete": false, "reasons": ["serverLimit"], "returned": 40, "truncated": true, "limit": null, "dropped": 0, "remaining": true, "continuation": { "start_time": "2026-09-24T10:00:39Z" } }
+    },
+    {
+      "name": "a backward read that was cut short cannot say where to resume",
+      "input": { "returned": 2, "fetched": 2, "wanted": 2, "continuation_point": true, "next_start": null },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 2, "truncated": true, "limit": 2, "dropped": 0, "remaining": true, "continuation": null }
+    },
+    {
+      "name": "event history reaches its count on what the server sent, not on what severity_min kept",
+      "input": { "returned": 2, "fetched": 10, "wanted": 10, "continuation_point": false, "next_start": "2026-09-24T10:00:09Z" },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 2, "truncated": true, "limit": 10, "dropped": 0, "remaining": null, "continuation": { "start_time": "2026-09-24T10:00:09Z" } }
+    },
+    {
+      "name": "an aggregate read asks for no count, so without a continuation point it is whole",
+      "input": { "returned": 6, "fetched": 6, "wanted": null, "continuation_point": false, "next_start": null },
+      "expected": { "complete": true, "reasons": [], "returned": 6, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "an aggregate read the server cut short",
+      "input": { "returned": 1000, "fetched": 1000, "wanted": null, "continuation_point": true, "next_start": null },
+      "expected": { "complete": false, "reasons": ["serverLimit"], "returned": 1000, "truncated": true, "limit": null, "dropped": 0, "remaining": true, "continuation": null }
+    }
+  ],
+  "drain": [
+    {
+      "name": "everything buffered was read, and nothing was lost",
+      "input": { "returned": 5, "limit": 50, "remaining": 0, "dropped": 0 },
+      "expected": { "complete": true, "reasons": [], "returned": 5, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "the read stopped at its limit with more still buffered",
+      "input": { "returned": 50, "limit": 50, "remaining": 7, "dropped": 0 },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 50, "truncated": true, "limit": 50, "dropped": 0, "remaining": true, "continuation": {} }
+    },
+    {
+      "name": "the buffer overflowed before the read: not truncated, and still not complete",
+      "input": { "returned": 1, "limit": 50, "remaining": 0, "dropped": 3 },
+      "expected": { "complete": false, "reasons": ["bufferOverflow"], "returned": 1, "truncated": false, "limit": null, "dropped": 3, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "both at once, truncation first",
+      "input": { "returned": 50, "limit": 50, "remaining": 20, "dropped": 30 },
+      "expected": { "complete": false, "reasons": ["requestLimit", "bufferOverflow"], "returned": 50, "truncated": true, "limit": 50, "dropped": 30, "remaining": true, "continuation": {} }
+    }
+  ],
+  "traversal": [
+    {
+      "name": "a walk that visited everything",
+      "input": { "returned": 22, "truncated": false, "max_nodes": 500, "unbrowsable": false },
+      "expected": { "complete": true, "reasons": [], "returned": 22, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "a walk that ran out of the budget the caller gave it",
+      "input": { "returned": 2, "truncated": true, "max_nodes": 2, "unbrowsable": false },
+      "expected": { "complete": false, "reasons": ["requestLimit"], "returned": 2, "truncated": true, "limit": 2, "dropped": 0, "remaining": true, "continuation": null }
+    },
+    {
+      "name": "a walk that ran out of this server's own cap",
+      "input": { "returned": "max", "truncated": true, "max_nodes": "max", "unbrowsable": false },
+      "expected": { "complete": false, "reasons": ["contractLimit"], "returned": "max", "truncated": true, "limit": "max", "dropped": 0, "remaining": true, "continuation": null }
+    },
+    {
+      "name": "a walk that finished with a subtree it could not list",
+      "input": { "returned": 18, "truncated": false, "max_nodes": 500, "unbrowsable": true },
+      "expected": { "complete": false, "reasons": ["unbrowsable"], "returned": 18, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    }
+  ],
+  "buffers": [
+    {
+      "name": "no subscriptions is a complete answer",
+      "input": { "dropped": [] },
+      "expected": { "complete": true, "reasons": [], "returned": 0, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "every buffer still holds everything it received",
+      "input": { "dropped": [0, 0] },
+      "expected": { "complete": true, "reasons": [], "returned": 2, "truncated": false, "limit": null, "dropped": 0, "remaining": false, "continuation": null }
+    },
+    {
+      "name": "one buffer overflowed: the total says so",
+      "input": { "dropped": [3, 0, 4] },
+      "expected": { "complete": false, "reasons": ["bufferOverflow"], "returned": 3, "truncated": false, "limit": null, "dropped": 7, "remaining": false, "continuation": null }
+    }
+  ]
+}

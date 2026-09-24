@@ -16,6 +16,8 @@ import {
   AggregateFunction,
   BrowseDirection,
   ClientSession,
+  ReadProcessedDetails,
+  ReadRawModifiedDetails,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
@@ -32,11 +34,30 @@ import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, operatorId } from "./audit.js";
 import { ContractRefusal, message } from "./errors.js";
 import {
-  MAX_NODES_PER_READ,
+  MAX_HISTORY_VALUES,
   MAX_SUBSCRIPTIONS,
+  aggregateIntervals,
+  checkRequestBounds,
+  chunked,
+  eventBufferSize,
   historyValues,
-  historyWasClipped,
 } from "./limits.js";
+import {
+  Completeness,
+  bufferCompleteness,
+  drainCompleteness,
+  historyCompleteness,
+  traversalCompleteness,
+} from "./completeness.js";
+import { continues, releaseContinuationPoint } from "./history.js";
+import {
+  ServerOperationLimits,
+  UNSTATED,
+  browseChunk,
+  readChunk,
+  readOperationLimits,
+  writeLimit,
+} from "./operation-limits.js";
 import { notice } from "./notices.js";
 import { validateArguments } from "./validation.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
@@ -292,44 +313,75 @@ function toNodeValueRecord(
   };
 }
 
-/** A history/aggregate response: one text block per canonical record.
+/** Where a truncated history read resumes, or null when its arguments cannot say.
  *
- * The framing is part of the contract (resultShapes.historyRecords), not an
- * implementation detail: FastMCP splits the Python server's returned list into
- * one block per element, so the Node server does the same rather than emitting a
- * single array — the two servers' responses are then read the same way.
+ * Only a forward read can be continued with `start_time`: a start was given and
+ * the range runs up from it. Without one, an OPC UA server reads backwards from
+ * the end, newest first (Part 11 §6.4.3.2), and the rest of the answer is then
+ * *older* records — which no start_time asks for. The last record's own
+ * timestamp is the resume point, inclusive, so a boundary record repeats rather
+ * than being lost. `_forward_from` in server.py is the other half.
  */
-/** History records, with a notice when the call hit the per-call maximum.
- *
- * A trailing plain-text block rather than a field, because `historyRecords` is
- * an array of readings and a truncation flag is not a reading — the same shape
- * and the same reason `read_events` reports dropped events this way. Outside
- * `structuredContent` for the same reason.
- *
- * Only when the cap itself was reached: a caller who asked for 10 and got 10 has
- * what they asked for.
- */
-function historyResult(dataValues: DataValue[] | null | undefined, wanted?: number) {
-  const records = toHistoryRecords(dataValues);
-  const result = recordBlocks(records);
-  if (wanted === undefined || !historyWasClipped(records.length, wanted)) return result;
-  return {
-    ...result,
-    content: [
-      ...result.content,
-      { type: "text", text: notice("historyTruncated", { count: records.length }) },
-    ],
-  };
+function forwardFrom(
+  start: Date | undefined,
+  end: Date | undefined,
+  last: string | null | undefined
+): string | null {
+  if (!start || (end && end.getTime() <= start.getTime())) return null;
+  return typeof last === "string" ? last : null;
 }
 
-/** The same framing for the subscription family (resultShapes.subscriptionRecords). */
+/** A text block for a reader that only has the text, repeating `completeness`.
+ *
+ * Only for a loss the caller did not choose — this server's cap, the OPC UA
+ * server's, or a full buffer — never for a count the caller asked for and got:
+ * telling someone who asked for 10 readings that there may be more would be
+ * noise on every small read. `completeness` reports that case on its own.
+ */
+function withNotice<T extends { content: Array<{ type: string; text: string }> }>(
+  result: T,
+  text: string | null
+): T {
+  if (text === null) return result;
+  return { ...result, content: [...result.content, { type: "text", text }] };
+}
+
+/** History records (resultShapes.historyRecords), and whether they are all of them.
+ *
+ * One text block per record, as FastMCP splits the Python server's list, plus
+ * the `completeness` object beside `result` in structuredContent (issue #137).
+ * The notice for a capped read predates that object and is kept for text-only
+ * readers, and fires exactly when it always did: when this server's own cap was
+ * reached, which is `contractLimit`.
+ */
+function historyResult(records: unknown[], completeness: Completeness, capNotice: string) {
+  let text: string | null = null;
+  if (completeness.reasons.includes("contractLimit")) {
+    // The cap, not the count returned: an event-history read reaches its cap on
+    // what the server sent, and `severity_min` may have kept fewer.
+    text = notice(capNotice, { count: completeness.limit ?? completeness.returned });
+  } else if (completeness.reasons.includes("serverLimit")) {
+    text = notice("serverTruncated", { count: completeness.returned });
+  }
+  return withNotice(recordBlocks(records, completeness), text);
+}
+
+/** The same framing for the subscription family (resultShapes.subscriptionRecords).
+ *
+ * Each record carries its own ring buffer's `dropped`; `completeness` totals them
+ * so one field answers for the whole result.
+ */
 function subscriptionResult(records: SubscriptionRecord[]) {
-  return recordBlocks(records);
+  return recordBlocks(records, bufferCompleteness(records));
 }
 
-/** And for the event family (resultShapes.eventRecords). */
-function eventResult(records: EventRecord[]) {
-  return recordBlocks(records);
+/** And for the event family (resultShapes.eventRecords).
+ *
+ * `list_active_alarms` passes no completeness: a refresh that does not finish is
+ * an error, never a shorter list, so its answer is whole or it is not given.
+ */
+function eventResult(records: EventRecord[], completeness?: Completeness) {
+  return recordBlocks(records, completeness);
 }
 
 /** A result that is one object rather than a list of records.
@@ -339,10 +391,10 @@ function eventResult(records: EventRecord[]) {
  * `truncated` flag for the whole walk, a method call has one result, and a
  * status report is one report. The Python server frames these identically.
  */
-function objectResult(record: unknown) {
+function objectResult(record: unknown, completeness?: Completeness) {
   return {
     content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
-    structuredContent: { result: record },
+    structuredContent: completeness ? { result: record, completeness } : { result: record },
   };
 }
 
@@ -351,22 +403,38 @@ function statusResult(status: ServerStatusRecord) {
   return objectResult(status);
 }
 
-function recordBlocks(records: unknown[]) {
+function recordBlocks(records: unknown[], completeness?: Completeness) {
   return {
     content: records.map((record) => ({
       type: "text",
       text: JSON.stringify(record, null, 2),
     })),
-    structuredContent: { result: records },
+    // Beside `result`, never inside it: `result` stays the array every existing
+    // client already reads, and a record list that sometimes ends in something
+    // that is not a record would be worse than the prose it replaces.
+    structuredContent: completeness ? { result: records, completeness } : { result: records },
   };
 }
 
-function outputSchema(resultShape: string | undefined): Tool["outputSchema"] {
-  if (!resultShape) return undefined;
+/** What tools/list advertises a tool returns: `result`, and `completeness` if it
+ *  can be partial. `PolicyMCPServer.list_tools` in server.py builds the same one. */
+function outputSchema(tool: ToolSpec): Tool["outputSchema"] {
+  if (!tool.resultShape) return undefined;
+  if (!tool.reportsCompleteness) {
+    return {
+      type: "object",
+      properties: { result: CONTRACT.resultShapes[tool.resultShape] },
+      required: ["result"],
+      additionalProperties: false,
+    } as Tool["outputSchema"];
+  }
   return {
     type: "object",
-    properties: { result: CONTRACT.resultShapes[resultShape] },
-    required: ["result"],
+    properties: {
+      result: CONTRACT.resultShapes[tool.resultShape],
+      completeness: CONTRACT.completeness.schema,
+    },
+    required: ["result", "completeness"],
     additionalProperties: false,
   } as Tool["outputSchema"];
 }
@@ -507,6 +575,9 @@ export class OpcuaTools {
   /** How long `awaitWarmUp` gives the warm-up, from its start. A field so the
    *  unit tests can shorten it; the server always uses the constant. */
   warmUpWaitMs = WARM_UP_WAIT_MS;
+  /** What the connected server says one service call may carry; see
+   *  operation-limits.ts. Probed with the capabilities, forgotten with them. */
+  private serverLimits: ServerOperationLimits = UNSTATED;
 
   constructor(
     private readonly conn: OpcuaConnection,
@@ -521,6 +592,8 @@ export class OpcuaTools {
       // it is the only moment the answer can have changed — which is what lets
       // `listTools` stop waiting on a socket.
       this.capabilities = null;
+      this.serverLimits = UNSTATED;
+      this.metadata.serverLimits = UNSTATED;
       // A new session may be a restarted server, whose nodes are not necessarily
       // the nodes the old ids named. What each one said about its unit and its
       // range was true of the session that said it.
@@ -665,6 +738,10 @@ export class OpcuaTools {
     }
     const historyOk = await this.accessHistoryDataCapability(session);
     const historyEventsOk = await this.accessHistoryEventsCapability(session);
+    // Read with the capabilities because it changes when they do — on a new
+    // session — and a tool that needs it can then use it without a round trip.
+    this.serverLimits = await readOperationLimits(session);
+    this.metadata.serverLimits = this.serverLimits;
     this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions(session);
 
     // A tool gated on capabilities is offered when the server reports *any* of
@@ -676,6 +753,17 @@ export class OpcuaTools {
     if (this.aggregateFunctions.length > 0) available.add("aggregate");
     this.capabilities = available;
     return available;
+  }
+
+  /** The server's stated operation limits, probing once if need be.
+   *
+   * Every tool that sends a batch asks here rather than reading the field, for
+   * the reason `capabilitiesMet` probes: a process that started while the plant
+   * was down has not asked yet, and "not asked" must not be read as "no limit".
+   */
+  private async operationLimits(): Promise<ServerOperationLimits> {
+    if (!this.capabilities) await this.probeCapabilities();
+    return this.serverLimits;
   }
 
   /** Whether a tool's capability gate is satisfied, probing once if need be.
@@ -730,7 +818,7 @@ export class OpcuaTools {
         description: tool.description,
         inputSchema: this.advertisedSchema(tool, aggregateOk),
         annotations: tool.annotations,
-        outputSchema: outputSchema(tool.resultShape),
+        outputSchema: outputSchema(tool),
       })) satisfies Tool[];
 
     return tools;
@@ -826,6 +914,9 @@ export class OpcuaTools {
       if (!spec) {
         throw new Error(message("unknownTool", { tool: name }));
       }
+      // Size before shape: the validator's work grows with the request, and this
+      // stops at the first thing out of bounds (issue #139). See limits.ts.
+      checkRequestBounds(name, args);
       validateArguments(name, spec.inputSchema, args);
       // Before the policy and the audit trail read the session, not merely
       // before the request goes out. `get_server_status` is the exception: it
@@ -1175,6 +1266,26 @@ export class OpcuaTools {
     return this.session;
   }
 
+  /** One logical read, sent as consecutive Reads of at most `chunk` items.
+   *
+   * Sequential rather than in parallel: the chunking exists because the server
+   * said how much one request may carry, and firing every chunk at once would
+   * put the same load on it in a different envelope. The results are
+   * concatenated in the order asked, so each node keeps its own status in its own
+   * place (issue #139).
+   */
+  private async readValues(
+    session: ClientSession,
+    items: Array<{ nodeId: string; attributeId: AttributeIds }>,
+    chunk: number
+  ): Promise<DataValue[]> {
+    const values: DataValue[] = [];
+    for (const part of chunked(items, chunk)) {
+      values.push(...(await session.read(part)));
+    }
+    return values;
+  }
+
   // --- reading -------------------------------------------------------------
 
   /** `read_opcua_nodes`: the current value of one or more nodes, fully qualified.
@@ -1183,28 +1294,24 @@ export class OpcuaTools {
    * the server rejects is one record with a `Bad…` status among the others —
    * promoting it to an error would discard every other node's value, which is
    * the opposite of what asking for them together is for.
+   *
+   * More than `limits.maxNodesPerRead` is refused by the input schema's
+   * `maxItems` before this runs: a short list of readings is indistinguishable
+   * from a complete one, so the list is never quietly cut. A server whose
+   * MaxNodesPerRead is lower gets the list in consecutive Reads instead.
    */
   private async readOpcuaNodes(nodeIds: string[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" }));
     }
-    // Refused, not truncated: a short list of readings is indistinguishable from
-    // a complete one, and dropping nodes from a read is the kind of quiet wrong
-    // answer the browse caps exist to prevent.
-    if (nodeIds.length > MAX_NODES_PER_READ) {
-      throw new Error(
-        message("tooManyNodes", {
-          tool: "read_opcua_nodes",
-          limit: MAX_NODES_PER_READ,
-          count: nodeIds.length,
-        })
-      );
-    }
+    const chunk = readChunk(await this.operationLimits());
 
     try {
-      const dataValues = await session.read(
-        nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value }))
+      const dataValues = await this.readValues(
+        session,
+        nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
+        chunk
       );
       // Two extra round trips on a cold cache for the whole batch, none on a
       // warm one, and never a reason for the read to fail. See node-metadata.ts.
@@ -1250,17 +1357,43 @@ export class OpcuaTools {
         // historised at 100ms is a request that never returns — and the browse
         // caps beside it have always been refusals rather than tuning knobs.
         const wanted = historyValues(request.numValues);
-        const historyReadings = await session.readHistoryValue(
-          [nodeId],
-          toDate(request.start) as any,
-          toDate(request.end) as any,
-          { numValuesPerNode: wanted }
-        );
+        const start = toDate(request.start);
+        const end = toDate(request.end);
+        const historyReadings = await session.readHistoryValue([nodeId], start as any, end as any, {
+          numValuesPerNode: wanted,
+        });
         if (historyReadings.length !== 1) throw new Error("Read history failed");
-        if (historyReadings[0].statusCode !== StatusCodes.Good) {
-          throw new Error(`Read history failed with status: ${historyReadings[0].statusCode.name}`);
+        const reading = historyReadings[0];
+        if (reading.statusCode !== StatusCodes.Good) {
+          throw new Error(`Read history failed with status: ${reading.statusCode.name}`);
         }
-        return historyResult((historyReadings[0].historyData as HistoryData).dataValues, wanted);
+        const continued = continues(reading.continuationPoint);
+        // The details `readHistoryValue` sent, so the server knows which history
+        // the point belongs to.
+        await releaseContinuationPoint(
+          session,
+          nodeId,
+          reading.continuationPoint,
+          new ReadRawModifiedDetails({
+            startTime: start,
+            endTime: end,
+            numValuesPerNode: wanted,
+            returnBounds: true,
+            isReadModified: false,
+          })
+        );
+        const records = toHistoryRecords((reading.historyData as HistoryData).dataValues);
+        return historyResult(
+          records,
+          historyCompleteness({
+            returned: records.length,
+            fetched: records.length,
+            wanted,
+            continuationPoint: continued,
+            nextStart: forwardFrom(start, end, records.at(-1)?.timestamp),
+          }),
+          "historyTruncated"
+        );
       }
 
       // Don't depend on a prior tools/list having populated the cache: a client
@@ -1276,21 +1409,72 @@ export class OpcuaTools {
         );
       }
 
+      const start = toDate(request.start)!;
+      const end = toDate(request.end) ?? new Date();
+      // The number of results is decided by `processing_interval` over the range,
+      // which is the whole point of asking for one — it is how to see a week
+      // without transferring a week. It is still a number of records, though,
+      // and a millisecond interval over a year is billions of them; so it is
+      // bounded by the same cap as a raw read, and refused before it is sent.
+      const intervals = aggregateIntervals(
+        start.getTime(),
+        end.getTime(),
+        request.processingInterval
+      );
+      if (intervals > MAX_HISTORY_VALUES) {
+        throw new ContractRefusal(
+          message("tooManyIntervals", {
+            tool: "read_opcua_history",
+            count: intervals,
+            processing_interval: formatNumber(request.processingInterval),
+            limit: MAX_HISTORY_VALUES,
+          })
+        );
+      }
+
+      const aggregateType = AggregateFunction[aggregateFunction as keyof typeof AggregateFunction];
       const aggregated = await session.readAggregateValue(
         { nodeId },
-        toDate(request.start) as any,
-        (toDate(request.end) ?? new Date()) as any,
-        AggregateFunction[aggregateFunction as keyof typeof AggregateFunction],
+        start as any,
+        end as any,
+        aggregateType,
         request.processingInterval
       );
       if (aggregated.statusCode !== StatusCodes.Good) {
         throw new Error(`Read aggregate failed with status: ${aggregated.statusCode.name}`);
       }
-      // No cap on an aggregate read: the number of results is decided by
-      // `processing_interval` over the range, which is the whole point of asking
-      // for one — it is how to see a week without transferring a week.
-      return historyResult((aggregated.historyData as HistoryData).dataValues);
+      const continued = continues(aggregated.continuationPoint);
+      await releaseContinuationPoint(
+        session,
+        nodeId,
+        aggregated.continuationPoint,
+        new ReadProcessedDetails({
+          startTime: start,
+          endTime: end,
+          aggregateType: [aggregateType],
+          processingInterval: request.processingInterval,
+        })
+      );
+      const records = toHistoryRecords((aggregated.historyData as HistoryData).dataValues);
+      // No count was asked for, so only the server can have cut this short. Where
+      // it resumes is the interval after the last one returned, which is not a
+      // timestamp this server should compute and round on the caller's behalf —
+      // so there is no `continuation`, and `serverTruncated` says to narrow.
+      return historyResult(
+        records,
+        historyCompleteness({
+          returned: records.length,
+          fetched: records.length,
+          wanted: null,
+          continuationPoint: continued,
+          nextStart: null,
+        }),
+        "historyTruncated"
+      );
     } catch (error) {
+      // A refusal of the request never reached the server, so it did not fail
+      // to be read — and wrapping it would say it had.
+      if (error instanceof ContractRefusal) throw error;
       throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }));
     }
   }
@@ -1338,6 +1522,7 @@ export class OpcuaTools {
       const found: NodeRefRecord[] = [];
       let inspected = 0;
       let truncated = false;
+      let unbrowsable = false;
 
       // `depth: 0` is "tell me about this node and nothing else" — which is how
       // a browse_path is turned into a node id without also listing everything
@@ -1359,7 +1544,10 @@ export class OpcuaTools {
             // The root failing is the caller's problem; a node deeper in may
             // simply be one this session cannot read, and stopping the whole
             // walk for it would make a large browse hostage to its worst node.
+            // It is still a gap in the answer, and `completeness` says so rather
+            // than letting "could not list" pass for "has no children".
             if (current.nodeId === root) throw error;
+            unbrowsable = true;
             continue;
           }
 
@@ -1403,9 +1591,13 @@ export class OpcuaTools {
       // Unconditional, unlike the variable detail: the type is what the record
       // *is*, not extra reading about its value, and it costs one batched
       // browse however many nodes were found.
-      await this.fillTypeDefinitions(session, found);
-      if (includeValues) await this.fillVariableDetail(session, found);
-      return objectResult({ nodes: found, truncated, inspected });
+      const serverLimits = await this.operationLimits();
+      await this.fillTypeDefinitions(session, found, serverLimits);
+      if (includeValues) await this.fillVariableDetail(session, found, serverLimits);
+      return objectResult(
+        { nodes: found, truncated, inspected },
+        traversalCompleteness({ returned: found.length, truncated, maxNodes, unbrowsable })
+      );
     } catch (error) {
       throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }));
     }
@@ -1451,7 +1643,8 @@ export class OpcuaTools {
    */
   private async fillTypeDefinitions(
     session: ClientSession,
-    records: NodeRefRecord[]
+    records: NodeRefRecord[],
+    serverLimits: ServerOperationLimits
   ): Promise<void> {
     if (records.length === 0) return;
     const traversal = CONTRACT.traversal;
@@ -1468,8 +1661,9 @@ export class OpcuaTools {
 
     // Chunked for the same reason the property reads are: MaxNodesPerBrowse is
     // an operational limit a conformant server may enforce, and the default
-    // walk already returns up to 500 nodes.
-    const size = traversal.maxTypeDefinitionsPerRequest;
+    // walk already returns up to 500 nodes. A server that states a lower one
+    // gets smaller chunks.
+    const size = browseChunk(serverLimits, traversal.maxTypeDefinitionsPerRequest);
     for (let start = 0; start < descriptions.length; start += size) {
       let results;
       try {
@@ -1494,7 +1688,8 @@ export class OpcuaTools {
    */
   private async fillVariableDetail(
     session: ClientSession,
-    records: NodeRefRecord[]
+    records: NodeRefRecord[],
+    serverLimits: ServerOperationLimits
   ): Promise<void> {
     const variables = records.filter((record) => record.node_class === "Variable");
     if (variables.length === 0) return;
@@ -1506,7 +1701,9 @@ export class OpcuaTools {
     ]);
     let values;
     try {
-      values = await session.read(reads);
+      // Three attributes per node, so a 500-node walk is a 1500-item read — the
+      // largest single request this server made, and one it used to send whole.
+      values = await this.readValues(session, reads, readChunk(serverLimits));
     } catch {
       // Best-effort enrichment: the nodes were found, and reporting them
       // without their values beats failing a browse that succeeded.
@@ -1584,11 +1781,30 @@ export class OpcuaTools {
    * which is what makes a *write-only* node writable — reading it to learn its
    * type is exactly what such a node refuses (issue #9). The rest are read
    * first, in one batch, and converted to the type the server reports.
+   *
+   * The whole batch goes out as one Write, and that is a promise rather than an
+   * accident (issue #139). A batch over the server's MaxNodesPerWrite is refused
+   * here, before anything is read or sent, instead of being split: OPC UA lets
+   * one Write partially succeed already, and splitting would add a failure where
+   * the first part has moved the plant and the second never arrives — which
+   * `uncertainOutcome` could not then describe. `limits.maxNodesPerWrite` is
+   * the schema's `maxItems`, enforced before this runs.
    */
   private async writeOpcuaNodes(nodes: WriteRequest[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodes) || nodes.length === 0) {
       throw new Error(message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" }));
+    }
+    const serverLimits = await this.operationLimits();
+    const limit = writeLimit(serverLimits);
+    if (nodes.length > limit) {
+      throw new ContractRefusal(
+        message("tooManyWritesForServer", {
+          tool: "write_opcua_nodes",
+          count: nodes.length,
+          limit,
+        })
+      );
     }
     const bounds = new Map<number, ValueBound | null>(
       nodes.map((node, index) => [index, this.policy.boundFor(String(node?.node_id ?? ""))])
@@ -1616,11 +1832,13 @@ export class OpcuaTools {
       ].sort((a, b) => a - b);
       const current =
         needsCurrent.length > 0
-          ? await session.read(
+          ? await this.readValues(
+              session,
               needsCurrent.map((index) => ({
                 nodeId: nodes[index].node_id,
                 attributeId: AttributeIds.Value,
-              }))
+              })),
+              readChunk(serverLimits)
             )
           : [];
       const currentByIndex = new Map(
@@ -1672,6 +1890,10 @@ export class OpcuaTools {
           });
           writeIndices.push(index);
         } catch (error) {
+          // A value this server refuses to send at all — a ByteString over
+          // limits.maxByteStringBytes — stops the batch rather than becoming
+          // one node's status: nothing has been sent yet, and nothing should be.
+          if (error instanceof ContractRefusal) throw error;
           results[index] = {
             node_id: results[index].node_id,
             status: "BadTypeMismatch",
@@ -1776,6 +1998,9 @@ export class OpcuaTools {
         outputs: (callResult.outputArguments ?? []).map((variant) => variantToJson(variant)),
       });
     } catch (error) {
+      // Refused before the call was sent, so it did not fail: wrapping it in
+      // "Failed to call method" would say the plant had turned it down.
+      if (error instanceof ContractRefusal) throw error;
       throw new Error(
         message("methodFailed", {
           method_node_id: methodNodeId,
@@ -1896,7 +2121,11 @@ export class OpcuaTools {
   // `events` tools, so a model that has learned one runtime's replies reads the
   // other's the same way. See packages/server-python/.../server.py.
 
-  private async subscribeEvents(nodeId: string, severityMin: number, bufferSize: number) {
+  private async subscribeEvents(nodeId: string, severityMin: number, requested: number) {
+    // Clamped, and reported as clamped: the buffer is memory this process holds
+    // for as long as the subscription lives, and "as many as you like" was a
+    // request with no ceiling at all (issue #139).
+    const bufferSize = eventBufferSize(requested);
     let replaced: boolean;
     try {
       ({ replaced } = await this.events.subscribe(
@@ -1924,16 +2153,21 @@ export class OpcuaTools {
     if (drained === null) {
       throw new Error(message("notSubscribedToEvents", { node_id: nodeId }));
     }
-    const result = eventResult(drained.records);
-    if (drained.dropped > 0) {
-      // In the response, not only on stderr: an agent that cannot tell a
-      // complete event stream from one that lost alarms reads the gap as quiet.
-      result.content.push({
-        type: "text",
-        text: droppedEventsMessage(drained.dropped, drained.size),
-      });
-    }
-    return result;
+    // In the response, not only on stderr: an agent that cannot tell a complete
+    // event stream from one that lost alarms reads the gap as quiet. As a field
+    // since issue #137, and as a sentence still for a reader of the text alone.
+    return withNotice(
+      eventResult(
+        drained.records,
+        drainCompleteness({
+          returned: drained.records.length,
+          limit,
+          remaining: drained.remaining,
+          dropped: drained.dropped,
+        })
+      ),
+      drained.dropped > 0 ? droppedEventsMessage(drained.dropped, drained.size) : null
+    );
   }
 
   /** `read_event_history`: the events the server kept, for a range already past.
@@ -1962,7 +2196,7 @@ export class OpcuaTools {
     const wanted = historyValues(request.numValues);
 
     try {
-      const events = await readEventHistory(
+      const page = await readEventHistory(
         this.requireSession(),
         nodeId,
         start,
@@ -1970,7 +2204,17 @@ export class OpcuaTools {
         wanted,
         request.severityMin
       );
-      return eventResult(events);
+      return historyResult(
+        page.records,
+        historyCompleteness({
+          returned: page.records.length,
+          fetched: page.fetched,
+          wanted,
+          continuationPoint: page.continued,
+          nextStart: forwardFrom(start, end, page.lastTime),
+        }),
+        "eventHistoryTruncated"
+      );
     } catch (error) {
       throw new Error(
         message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) })

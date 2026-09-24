@@ -34,6 +34,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Neither client library checks the dates of a pinned certificate, so an expired
   pin went on "verifying" the server indefinitely. Both runtimes now check at
   every connect and fail closed, naming the file and the date.
+- **Every request is bounded before it reaches the OPC UA server (#139).** New
+  limits in `contract/tools.json` -> `limits`, enforced identically by both
+  runtimes and refused with a message naming the limit and the value:
+  `maxNodesPerWrite` 100, `maxMethodArguments` 64 (both also the input schemas'
+  new `maxItems`, beside `maxNodesPerRead` 500), `maxRequestBytes` 1 MiB of
+  arguments, `maxStringBytes` 128 KiB per string, `maxByteStringBytes` 64 KiB
+  per decoded ByteString, `maxArrayItems` 10000 per array, `maxNestingDepth` 8,
+  and `maxEventBufferSize` 10000 (a clamp on `subscribe_events`). An aggregate
+  read is now held to `maxHistoryValues` intervals. The request-wide bounds run
+  before validation and authorization, so an oversized request never allocates
+  an OPC UA object; the validator gained `maxItems`.
+- The refusal for a batch read over 500 nodes is now the generic `tooManyItems`
+  sentence — "read_opcua_nodes accepts at most 500 entries in node_ids, got 501.
+  Nothing was sent to the OPC UA server; split the request." — rather than the
+  read-only `tooManyNodes` one, which is gone.
+- `write_opcua_nodes`'s description now says a batch is not a transaction.
+
 
 ### Fixed
 - **The Claude Desktop bundle could not configure server-certificate pinning,
@@ -122,6 +139,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to stop no longer dials a plant that is down for the rest of the backoff.
 - Node now passes `endpointMustExist` rather than the deprecated
   `endpoint_must_exist`, which logged a warning on every connect.
+- **History continuation points are released.** A read the OPC UA server cut
+  short returned a continuation point that neither runtime looked at or gave
+  back, so the server held it until the session closed — and a server holds only
+  so many, after which history reads fail with `BadNoContinuationPoints`. It is
+  now noticed (it is what `serverLimit` means) and released at once. On the
+  Python runtime this meant reading raw history through `Node.history_read`,
+  because python-opcua's `read_raw_history` discards the point.
+- **A browse that could not list part of the address space said nothing.** A
+  node below the root that refused to be browsed was skipped silently, so its
+  subtree was missing from a result that looked complete. `completeness` now
+  reports it as `unbrowsable`.
 
 ### Added
 - **The identity status is reported everywhere control is decided.**
@@ -155,6 +183,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ships in both packages (`build/config.json`; `opcua_mcp_server/config.json`,
   loaded by `load_config_schema()`), so the installers (#135) and generated
   reference docs (#149) can consume it rather than keep another list.
+- **Results say whether they are whole, as a field (#137).** Every tool that can
+  return fewer records than its request covered — `read_opcua_history`,
+  `read_event_history`, `read_events`, `browse_opcua_nodes` and the three
+  subscription tools — now returns a `completeness` object beside `result` in
+  `structuredContent`, on every call: `complete`, `reasons` (`requestLimit`,
+  `contractLimit`, `serverLimit`, `bufferOverflow`, `unbrowsable`), `returned`,
+  `truncated`, `limit`, `dropped`, `remaining` and `continuation`. It was prose
+  before — a capped history read and an overflowed event buffer each appended a
+  trailing text block that was deliberately kept out of the structured result,
+  so a client reading `structuredContent` could not tell a partial answer from a
+  complete one. The shape is `contract/tools.json` -> `completeness`, it is part
+  of each tool's advertised `outputSchema`, and both runtimes build it from one
+  table, `tests/fixtures/completeness.json`. `result` is unchanged, and the text
+  notices are still appended for text-only clients.
+- **`continuation` says how to get the rest, statelessly.** A forward history
+  read that stopped early returns `{"start_time": <last timestamp>}` to merge
+  into the same call; `read_events` returns `{}` (call again). Arguments rather
+  than a server-held token, so nothing can go stale or outlive a session.
+- **Each subscription record reports `dropped`**: the changes its ring buffer
+  discarded, which was only derivable before by subtracting `changes` from
+  `change_count`.
+- **A server's own `OperationLimits` are honoured (#139).** `MaxNodesPerRead`,
+  `MaxNodesPerWrite`, `MaxNodesPerBrowse` and
+  `MaxNodesPerTranslateBrowsePathsToNodeIds` are read once per session. Every
+  read this server sends — `read_opcua_nodes`, a write's read-first type
+  inference, browse's value detail, the engineering-unit properties — goes out
+  in consecutive chunks no larger than the server's limit, in order, each node
+  keeping its own status. A write batch over `MaxNodesPerWrite` is **refused
+  rather than split**, before anything is sent: a batch is one Write, and
+  splitting it would add the case where one part moved the plant and the next
+  never arrived. The bundled mock now publishes 100 and 50, so both paths run in
+  the suite.
 
 ### Documentation
 - **Both runtimes are first-class, and that is now a written promise rather

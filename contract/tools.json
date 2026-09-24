@@ -81,7 +81,7 @@
       }
     },
     "nodeRefs": {
-      "$comment": "One object, not a list, and returned as a single MCP text content block — because a browse that was cut short has to say so in the same breath as its results. A bare array could only report truncation by leaving it out, which is exactly how a short child list passes for a complete one.",
+      "$comment": "One object, not a list, and returned as a single MCP text content block — because a browse that was cut short has to say so in the same breath as its results. A bare array could only report truncation by leaving it out, which is exactly how a short child list passes for a complete one. `truncated` predates the shared `completeness` object that browse_opcua_nodes now also returns beside `result`, and is kept for the callers that read it; `completeness` additionally reports a subtree that could not be listed.",
       "type": "object",
       "properties": {
         "nodes": {
@@ -231,7 +231,7 @@
       "additionalProperties": false
     },
     "historyRecords": {
-      "$comment": "Returned as one MCP text content block per record for compatibility. The canonical structured result is {\"result\": [records...]}, and tools/list advertises that wrapper as outputSchema.",
+      "$comment": "Returned as one MCP text content block per record for compatibility. The canonical structured result is {\"result\": [records...], \"completeness\": {...}}, and tools/list advertises that wrapper as outputSchema. A read can stop at num_values, at limits.maxHistoryValues, or where the OPC UA server returned a continuation point; `completeness` says which, and whether and how to continue.",
       "type": "array",
       "items": {
         "type": "object",
@@ -253,7 +253,7 @@
       }
     },
     "subscriptionRecords": {
-      "$comment": "Returned as one MCP text content block per record for compatibility and as {\"result\": [records...]} structured content. `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
+      "$comment": "Returned as one MCP text content block per record for compatibility and as {\"result\": [records...], \"completeness\": {...}} structured content, where `completeness.dropped` totals the per-record `dropped`. `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
       "type": "array",
       "items": {
         "type": "object",
@@ -297,6 +297,10 @@
           "changes": {
             "type": "array",
             "description": "The retained changes, oldest first, at most `buffer_size` of them. Each is a record of the shape defined by \"historyRecords\": { value, timestamp, status }."
+          },
+          "dropped": {
+            "type": "integer",
+            "description": "Changes this subscription received and then discarded because `changes` was full — `change_count` minus how many are retained. 0 means `changes` is every change received since subscribing; anything else means the oldest are gone and a trend read from `changes` starts late."
           }
         },
         "required": [
@@ -309,7 +313,8 @@
           "deadband_type",
           "deadband_value",
           "data_change_trigger",
-          "changes"
+          "changes",
+          "dropped"
         ],
         "additionalProperties": false
       }
@@ -440,7 +445,7 @@
       "additionalProperties": false
     },
     "eventRecords": {
-      "$comment": "Returned as one MCP text content block per event for compatibility and as {\"result\": [records...]} structured content. No events is zero blocks. `read_events` appends one further prose block when its buffer overflowed; the structured result contains records only. Every field is present on every record; a field the event does not carry is null. The field order and OPC UA browse paths are \"events.fields\" below.",
+      "$comment": "Returned as one MCP text content block per event for compatibility and as {\"result\": [records...]} structured content — with a `completeness` object beside `result` for read_events and read_event_history, which can return fewer events than there were. No events is zero blocks. `read_events` appends one further prose block when its buffer overflowed, and read_event_history one when a cap it did not ask for stopped it; `result` contains records only, and `completeness` carries the same facts as fields. Every field is present on every record; a field the event does not carry is null. The field order and OPC UA browse paths are \"events.fields\" below.",
       "type": "array",
       "items": {
         "type": "object",
@@ -617,10 +622,78 @@
     "maxMessageSize": 67108864
   },
   "limits": {
-    "$comment": "Bounds on how much one call may ask for, here rather than written out in each runtime. Like traversal's caps these are refusals rather than tuning knobs: browse was bounded from the start because an unbounded walk of a plant address space is a request that never returns, and the same was true of a raw history read over a year of 100ms data, of a batch read with no length, and of a subscribe that asks a PLC for one subscription per node with nothing counting them. maxHistoryValues is also what num_values: 0 now means — 'as many as allowed', not 'every reading in the range'.",
+    "$comment": "Bounds on how much one call may ask for, here rather than written out in each runtime. Like traversal's caps these are refusals rather than tuning knobs: browse was bounded from the start because an unbounded walk of a plant address space is a request that never returns, and the same was true of a raw history read over a year of 100ms data, of a batch read with no length, and of a subscribe that asks a PLC for one subscription per node with nothing counting them. maxHistoryValues is also what num_values: 0 now means — 'as many as allowed', not 'every reading in the range' — and the most intervals one aggregate read may ask the server to compute. Issue #139 bounded the rest of what a call can carry. The three per-tool counts (maxNodesPerRead, maxNodesPerWrite, maxMethodArguments) are also written into the input schemas as `maxItems`, so a model is told the cap rather than discovering it, and tests/unit/test_limits.py holds the two copies equal. The five request-wide bounds (maxRequestBytes, maxStringBytes, maxArrayItems, maxNestingDepth, and maxByteStringBytes once a value is decoded) apply to every tool and are checked before the arguments are validated, authorized or turned into anything OPC UA: a request that fails one of them never allocates an OPC UA object, never reaches the policy layer's value checks, and never opens a service call. maxRequestBytes is the arguments object measured as compact UTF-8 JSON, after the MCP SDK has decoded it — neither SDK's stdio transport offers a hook to refuse a line before decoding it, so this bounds the work a request can cause rather than the bytes the transport already read. maxStringBytes is deliberately larger than the base64 text of a maxByteStringBytes ByteString, so every ByteString this server would write also fits as a string. maxEventBufferSize is a clamp, as subscriptions.maxBufferSize is, because subscribe_events already reports the buffer size it applied. The OPC UA server's own OperationLimits (see `operationLimits`) can only lower these, never raise them.",
     "maxNodesPerRead": 500,
+    "maxNodesPerWrite": 100,
+    "maxMethodArguments": 64,
     "maxHistoryValues": 5000,
-    "maxSubscriptions": 200
+    "maxSubscriptions": 200,
+    "maxEventBufferSize": 10000,
+    "maxRequestBytes": 1048576,
+    "maxStringBytes": 131072,
+    "maxByteStringBytes": 65536,
+    "maxArrayItems": 10000,
+    "maxNestingDepth": 8
+  },
+  "operationLimits": {
+    "$comment": "Where a server publishes how much one service call may carry: Server.ServerCapabilities.OperationLimits (OPC UA Part 5 §6.3.11). Read once per session, beside the capability probes, and dropped with the session. 0 or an unreadable node means the server states no limit, and the project limit applies unchanged; otherwise the lower of the two is used. What each runtime does with the answer differs by what the call can safely do (issue #139). A read is chunked: every read this server sends — read_opcua_nodes, the read-first type inference of a write, browse's value detail, the engineering-unit properties — goes out in consecutive Read requests of at most maxNodesPerRead nodes, one after the other, and the records come back in the order asked with each node's own status. A browse and a TranslateBrowsePathsToNodeIds are chunked the same way. A write is NOT chunked: a batch larger than the server's maxNodesPerWrite is refused before anything is sent. Splitting it would turn one Write — which OPC UA Part 4 §5.11.4 already lets partially succeed — into several independent ones, where a later part can fail or die on the session after an earlier part has moved the plant, and errors.uncertainOutcome could no longer say which part it was about. A method call carries one method, which every server accepts, so MaxNodesPerMethodCall never binds; its size is bounded by maxMethodArguments instead.",
+    "maxNodesPerRead": "ns=0;i=11705",
+    "maxNodesPerWrite": "ns=0;i=11707",
+    "maxNodesPerBrowse": "ns=0;i=11710",
+    "maxNodesPerTranslateBrowsePathsToNodeIds": "ns=0;i=11712"
+  },
+  "completeness": {
+    "$comment": "Whether a result is the whole answer, as a field rather than a sentence (issue #137). Every tool that can return fewer records than the request covered — because a cap stopped it, a buffer overflowed, or part of the address space could not be read — sets `reportsCompleteness` and returns this object beside `result` in structuredContent, on every call and not only when something is missing: a field that is sometimes absent is one a client has to guess about. It was prose before: a raw history read at its cap and a buffer that dropped events each appended a trailing text block, deliberately kept out of structuredContent, so a client reading the structured result could not tell a capped read from a complete one — the correctness gap #85's bounds left open. The notices remain for text-only readers, and now repeat what this says rather than being the only place it is said. `continuation` is stateless on purpose: it is arguments for the same tool, not a server-held token, so it cannot go stale, is bound to no session, survives a reconnect, and leaves nothing on the OPC UA server — which is also why a history read releases any continuation point the server returned instead of holding it. `schema` is what each runtime emits and what tools/list advertises; `reasons` names each value `reasons` may hold.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "complete": {
+          "type": "boolean",
+          "description": "True only when `result` holds every record the request covered and none were lost on the way. The one field to test: never infer completeness from how many records came back — a result that stopped at a cap and one that happens to be that long look identical."
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["requestLimit", "contractLimit", "serverLimit", "bufferOverflow", "unbrowsable"]
+          },
+          "description": "Why `complete` is false, one entry per cause and empty when it is true. 'requestLimit': a count this call asked for (num_values, limit, max_nodes) was reached. 'contractLimit': this server's own per-call cap was reached. 'serverLimit': the OPC UA server stopped early and said it holds more. 'bufferOverflow': a bounded buffer discarded records before this read — see `dropped`. 'unbrowsable': part of the address space could not be listed, so nodes below it are missing."
+        },
+        "returned": {
+          "type": "integer",
+          "description": "How many records `result` holds — for a browse, how many nodes. Counted here so a client never has to."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when this response stopped at a cap with more available, so `result` is a prefix of the answer rather than all of it."
+        },
+        "limit": {
+          "type": ["integer", "null"],
+          "description": "The cap that stopped the response, when it was one this server knows the size of. null when nothing was truncated, and when the OPC UA server stopped on a limit of its own."
+        },
+        "dropped": {
+          "type": "integer",
+          "description": "Records discarded by a bounded buffer before this read — events for read_events, value changes for the subscription tools (per subscription in each record's own `dropped`). They are gone; no follow-up call returns them. 0 for every other tool."
+        },
+        "remaining": {
+          "type": ["boolean", "null"],
+          "description": "Whether a follow-up call can return more: true when the server or buffer said so, false when nothing is left, null when a cap was reached and nothing says whether more exists."
+        },
+        "continuation": {
+          "type": ["object", "null"],
+          "description": "How to ask for the rest: arguments to merge over the ones just sent, and call the same tool again. {} means call it again unchanged (read_events drains as it reads). {\"start_time\": ...} continues a forward history read from the last record returned — inclusive, so the record(s) at that instant come back again and should be skipped by timestamp rather than lost. null when there is nothing to continue, or when the read cannot be resumed from its arguments (a backward history read, an aggregate read, a browse)."
+        }
+      },
+      "required": ["complete", "reasons", "returned", "truncated", "limit", "dropped", "remaining", "continuation"],
+      "additionalProperties": false
+    },
+    "reasons": {
+      "requestLimit": "A count the call itself asked for was reached: num_values, limit or max_nodes. The caller got what it asked for, and may ask for more.",
+      "contractLimit": "This server's own per-call cap was reached: limits.maxHistoryValues, or traversal.maxNodes. Asking for more in one call is refused; narrow the request or follow `continuation`.",
+      "serverLimit": "The OPC UA server returned fewer records than asked for, with a continuation point saying it holds more.",
+      "bufferOverflow": "A bounded buffer between the OPC UA server and this read discarded its oldest records. They cannot be recovered.",
+      "unbrowsable": "A node below the browse root refused to list its children, so whatever is under it is missing from the result."
+    }
   },
   "traversal": {
     "$comment": "Bounds and defaults for browse_opcua_nodes, here rather than written out in each runtime — they were duplicated as literals in tools.ts and server.py, which is how two servers come to disagree about how deep 'deep' is. The caps are not tuning knobs but refusals: an unbounded walk of a plant address space is a request that never returns.",
@@ -741,7 +814,14 @@
     "controlNeedsSecureChannel": "Tool \"{tool}\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",
     "controlNeedsVerifiedServer": "Tool \"{tool}\" is disabled because the OPC UA server's identity is not verified: the channel is secured, but to whichever server answered. Set OPCUA_SERVER_CERT to the server's certificate to pin it, or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true on a lab network only.",
     "capabilityMissing": "OPC UA server advertises none of: {capabilities}",
-    "tooManyNodes": "{tool} accepts at most {limit} nodes in one call, got {count}. Split the request.",
+    "tooManyItems": "{tool} accepts at most {limit} entries in {argument}, got {count}. Nothing was sent to the OPC UA server; split the request.",
+    "requestTooLarge": "{tool} arguments are {size} bytes of JSON, over the {limit}-byte limit on one request (limits.maxRequestBytes). Nothing was sent to the OPC UA server.",
+    "stringTooLong": "{tool} argument {argument} is a string of {size} bytes, over the {limit}-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server.",
+    "arrayTooLong": "{tool} argument {argument} has {count} items, over the {limit}-item limit on one array (limits.maxArrayItems). Nothing was sent to the OPC UA server.",
+    "nestedTooDeep": "{tool} argument {argument} nests arrays or objects more than {limit} levels deep, counting the arguments themselves (limits.maxNestingDepth). Nothing was sent to the OPC UA server.",
+    "byteStringTooLong": "A ByteString of {size} bytes is over the {limit}-byte limit on one ByteString value (limits.maxByteStringBytes). Nothing was sent to the OPC UA server.",
+    "tooManyWritesForServer": "{tool} was asked to write {count} nodes, but the OPC UA server accepts at most {limit} in one Write (its OperationLimits.MaxNodesPerWrite). Nothing was written. Split the request: a write is not split here, because each part could land or fail on its own.",
+    "tooManyIntervals": "{tool} would ask the OPC UA server for {count} intervals of {processing_interval} ms over that range, over the {limit}-interval limit on one aggregate read (limits.maxHistoryValues). Nothing was sent. Widen processing_interval or narrow start_time/end_time.",
     "tooManySubscriptions": "This server already holds {active} of at most {limit} subscriptions; subscribing to {wanted} more would exceed it. Cancel some with unsubscribe_opcua_nodes.",
     "nodeNotWritable": "Node {node_id} is not writable under the operator policy",
     "valueOutOfRange": "{value} is outside the range node {node_id} accepts ({low} to {high}{unit}), set by {source}. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate.",
@@ -778,9 +858,11 @@
     "subscriptionDeleteFailed": "Cancelled {subscription_id} here, but the OPC UA server did not accept the delete: {reason}. It may keep publishing until the subscription's lifetime expires."
   },
   "notices": {
-    "$comment": "Messages a tool adds beside a successful result, rather than instead of one. They are returned as a trailing plain-text content block and are deliberately NOT part of structuredContent: a notice is not a record, and a client reading the structured result must not have to filter it out. Worded here for the same reason the errors are — read_events carried two hand-mirrored copies of the dropped-events sentence before this block existed. Placeholders are {name}.",
+    "$comment": "Messages a tool adds beside a successful result, rather than instead of one. They are returned as a trailing plain-text content block and are deliberately NOT part of structuredContent: a notice is not a record, and a client reading the structured result must not have to filter it out. Since issue #137 they repeat what the structured `completeness` object already says, for a reader that only has the text; they are no longer the only place it is said. They fire when the loss is one the caller did not ask for — a cap of this server's, the OPC UA server's, or a buffer overflow — and not when a count the caller chose was reached, which `completeness` reports on its own. Worded here for the same reason the errors are — read_events carried two hand-mirrored copies of the dropped-events sentence before this block existed. Placeholders are {name}.",
     "droppedEvents": "Note: {dropped} older event(s) were dropped before this read — the buffer of {buffer_size} filled up. Raise buffer_size or read more often.",
-    "historyTruncated": "Note: {count} readings is the per-call maximum, so the range may hold more — narrow start_time/end_time, or summarise the whole of it with aggregate_function."
+    "historyTruncated": "Note: {count} readings is the per-call maximum, so the range may hold more — narrow start_time/end_time, or summarise the whole of it with aggregate_function.",
+    "eventHistoryTruncated": "Note: {count} events is the per-call maximum, so the range may hold more — narrow start_time/end_time, or raise severity_min.",
+    "serverTruncated": "Note: the OPC UA server stopped after {count} record(s) and holds more in this range — narrow start_time/end_time to see the rest."
   },
   "resources": [
     {
@@ -811,6 +893,7 @@
           "node_ids": {
             "type": "array",
             "minItems": 1,
+            "maxItems": 500,
             "items": { "type": "string" },
             "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
           }
@@ -826,6 +909,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "nodeRefs",
+      "reportsCompleteness": true,
       "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every node also reports its `type_definition` \u2014 what it *is*, as against what class it belongs to: 'AnalogItemType' for a tag that publishes a unit and a range, a subtype of 'AlarmConditionType' for something act_on_alarm applies to, 'FolderType' for structure. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
       "inputSchema": {
         "type": "object",
@@ -882,7 +966,8 @@
       "retryPolicy": "resend",
       "capabilities": ["history", "aggregate"],
       "resultShape": "historyRecords",
-      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. The `aggregate_function` argument is only advertised when the connected server reports aggregate support, and its description then lists the functions that server actually offers. This tool is advertised when the server supports historical access *or* aggregates — either capability makes some form of it usable, and a raw read against an aggregate-only server is refused by that server rather than hidden here.",
+      "reportsCompleteness": true,
+      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. The `aggregate_function` argument is only advertised when the connected server reports aggregate support, and its description then lists the functions that server actually offers. This tool is advertised when the server supports historical access *or* aggregates — either capability makes some form of it usable, and a raw read against an aggregate-only server is refused by that server rather than hidden here. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -930,7 +1015,8 @@
         "historyEvents"
       ],
       "resultShape": "eventRecords",
-      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Offered only when the server advertises AccessHistoryEventsCapability; storing values and storing events are separate features and many servers do one without the other. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers.",
+      "reportsCompleteness": true,
+      "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Offered only when the server advertises AccessHistoryEventsCapability; storing values and storing events are separate features and many servers do one without the other. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers. The structured result's `completeness` says whether the range held more events than came back.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -983,6 +1069,7 @@
       "retryPolicy": "resend",
       "capabilities": [],
       "resultShape": "subscriptionRecords",
+      "reportsCompleteness": true,
       "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. This is how to collect what subscribe_opcua_nodes has been watching; the same document is also readable as the 'opcua://subscriptions' resource.",
       "inputSchema": {
         "type": "object",
@@ -1028,14 +1115,15 @@
       "retryPolicy": "uncertainOutcome",
       "capabilities": [],
       "resultShape": "writeResults",
-      "description": "Write a value to one or more OPC UA nodes. THIS CHANGES PHYSICAL EQUIPMENT: a setpoint written here moves a real machine. Each node comes back with the OPC UA status the server answered, in the order asked, so a batch where one node was rejected still reports what the others did. Without `data_type` this server reads each node first to learn its type and converts the value to match, which costs a round trip and cannot work for a write-only node; give `data_type` to skip that and to be explicit about what is being written. Under the 'operator' profile only nodes on the configured allowlist may be written, and one forbidden target rejects the whole batch before anything is sent.",
+      "description": "Write a value to one or more OPC UA nodes. THIS CHANGES PHYSICAL EQUIPMENT: a setpoint written here moves a real machine. Each node comes back with the OPC UA status the server answered, in the order asked, so a batch where one node was rejected still reports what the others did. A batch is not a transaction: OPC UA lets some writes land while others are refused, and nothing is rolled back. Without `data_type` this server reads each node first to learn its type and converts the value to match, which costs a round trip and cannot work for a write-only node; give `data_type` to skip that and to be explicit about what is being written. Under the 'operator' profile only nodes on the configured allowlist may be written, and one forbidden target rejects the whole batch before anything is sent.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "nodes": {
             "type": "array",
             "minItems": 1,
-            "description": "The writes to perform. A single write is a one-element list.",
+            "maxItems": 100,
+            "description": "The writes to perform. A single write is a one-element list. At most 100 per call, and fewer where the OPC UA server publishes a lower MaxNodesPerWrite — a batch over either is refused before anything is sent, never split.",
             "items": {
               "type": "object",
               "properties": {
@@ -1102,7 +1190,8 @@
           },
           "arguments": {
             "type": "array",
-            "description": "Arguments in the order the method declares them. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean.",
+            "maxItems": 64,
+            "description": "Arguments in the order the method declares them, at most 64. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean.",
             "items": {}
           }
         },
@@ -1117,6 +1206,7 @@
       "retryPolicy": "reconnectOnly",
       "capabilities": [],
       "resultShape": "subscriptionRecords",
+      "reportsCompleteness": true,
       "description": "Watch one or more OPC UA nodes for value changes instead of polling them. The OPC UA server pushes each new value into a buffer this MCP server keeps; collect them with list_subscriptions or the 'opcua://subscriptions' resource. This is the right way to answer 'tell me when this changes' or 'what has this been doing' over a short window — repeatedly calling read_opcua_nodes both misses changes between calls and costs a round trip each time. Each node gets its own subscription record and its own ID; cancel them with unsubscribe_opcua_nodes. Subscriptions are re-established automatically if the connection drops.",
       "inputSchema": {
         "type": "object",
@@ -1169,6 +1259,7 @@
       "retryPolicy": "reconnectOnly",
       "capabilities": [],
       "resultShape": "subscriptionRecords",
+      "reportsCompleteness": true,
       "description": "Cancel one or more active data-change subscriptions and discard what they had buffered. Returns the subscriptions as they were at the moment they were cancelled, so anything still buffered can be read one last time. An ID that is not active is an error naming it, and no subscription is cancelled.",
       "inputSchema": {
         "type": "object",
@@ -1207,7 +1298,7 @@
           "buffer_size": {
             "type": "integer",
             "minimum": 0,
-            "description": "How many events to hold before the oldest are dropped (default 100)."
+            "description": "How many events to hold before the oldest are dropped (default 100, clamped to 10000). read_events reports how many were dropped."
           }
         },
         "required": [],
@@ -1221,7 +1312,8 @@
       "retryPolicy": "reconnectOnly",
       "capabilities": [],
       "resultShape": "eventRecords",
-      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, the result says how many were dropped rather than quietly skipping them.",
+      "reportsCompleteness": true,
+      "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, the result says how many were dropped rather than quietly skipping them — in the structured result's `completeness`, which also says whether more are still buffered.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -168,6 +168,57 @@ Batching is the caller's choice, not a different API.
 Both servers also expose one **resource**, `opcua://subscriptions`: the same
 records `list_subscriptions` returns, re-readable without spending a tool call.
 
+### How much one call may ask for
+
+Every request is bounded before anything reaches the OPC UA server, and a request
+over a bound is refused whole with a message naming the limit and the value —
+never truncated, never partly sent. The numbers live in `contract/tools.json` ->
+`limits`, so both runtimes enforce the same ones.
+
+| Limit | Value | Bounds |
+|---|---|---|
+| `maxNodesPerRead` | 500 | `node_ids` of one `read_opcua_nodes` call (also the schema's `maxItems`) |
+| `maxNodesPerWrite` | 100 | `nodes` of one `write_opcua_nodes` call (also `maxItems`) |
+| `maxMethodArguments` | 64 | `arguments` of one `call_opcua_method` call (also `maxItems`) |
+| `maxHistoryValues` | 5000 | Raw readings or stored events per history call, and intervals per aggregate read |
+| `maxSubscriptions` | 200 | Data-change subscriptions held at once |
+| `maxEventBufferSize` | 10000 | `subscribe_events` `buffer_size` — clamped, and reported as clamped |
+| `maxRequestBytes` | 1 MiB | A call's arguments, as compact UTF-8 JSON |
+| `maxStringBytes` | 128 KiB | Any one string, anywhere in the arguments |
+| `maxByteStringBytes` | 64 KiB | Any one ByteString value, once its base64 is decoded |
+| `maxArrayItems` | 10000 | Any one array, anywhere in the arguments |
+| `maxNestingDepth` | 8 | How deeply arrays and objects nest, counting the arguments object |
+
+The OPC UA server's own `OperationLimits` can only lower these. Reads are sent in
+chunks of the server's `MaxNodesPerRead`, in order, each node keeping its own
+status. A write batch over the server's `MaxNodesPerWrite` is **refused rather than
+split**: a batch is one Write, OPC UA already lets one Write partially succeed
+without rolling anything back, and splitting it would add a case where the first
+part moved the plant and the second never arrived. A write is not a transaction
+either way — read the per-node statuses.
+
+### Results that say whether they are whole
+
+A result that can hold fewer records than the request covered — a history read at
+its `num_values`, a browse at `max_nodes`, an event buffer that overflowed, a
+subscription whose ring buffer discarded old changes — carries a `completeness`
+object beside `result` in `structuredContent`:
+
+```
+{ "complete": false, "reasons": ["requestLimit"], "returned": 2, "truncated": true,
+  "limit": 2, "dropped": 0, "remaining": true,
+  "continuation": { "start_time": "2026-09-24T10:00:01.123Z" } }
+```
+
+**Test `complete`; never infer completeness from how many records came back.**
+`reasons` says why not (`requestLimit`, `contractLimit`, `serverLimit`,
+`bufferOverflow`, `unbrowsable`), `dropped` counts records a buffer lost before the
+read, and `continuation` is arguments to merge into the same call to get the rest
+— stateless, so it cannot go stale or outlive a session. The tools that carry it
+are `read_opcua_history`, `read_event_history`, `read_events`,
+`browse_opcua_nodes` and the three subscription tools; the shape is
+`contract/tools.json` -> `completeness`.
+
 Full per-tool reference with inputs, outputs and a node-ID map:
 **[docs/examples.md](docs/examples.md)**.
 
@@ -209,13 +260,15 @@ outside the node's own `EURange` is refused before anything is sent, which is a
 safety bound the equipment declared rather than one a human retyped.
 
 A walk of the address space says whether it finished, so a partial answer can
-never pass for a complete one:
+never pass for a complete one — in the record, and in the `completeness` object
+every partial-capable tool returns beside it:
 
 ```
 browse_opcua_nodes  depth=4  node_class="Variable"  include_values=true
 → { "nodes": [ { "node_id": "ns=2;i=3", "browse_name": "2:Temperature",
                  "node_class": "Variable", "data_type": "Double", "value": 26.34, … } ],
     "truncated": false, "inspected": 22 }
+  completeness: { "complete": true, "reasons": [], … }
 ```
 
 **Every tool declares a result shape**, and both runtimes are held to it. The

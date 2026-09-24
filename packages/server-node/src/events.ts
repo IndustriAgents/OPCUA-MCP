@@ -30,6 +30,7 @@ import {
 
 import { CONTRACT } from "./contract.js";
 import { message } from "./errors.js";
+import { continues, releaseContinuationPoint } from "./history.js";
 import { variantToJson } from "./records.js";
 import { notice } from "./notices.js";
 
@@ -319,6 +320,12 @@ export class EventSubscriptions {
  * node-opcua offers none for event history that lets the filter be supplied —
  * `readHistoryValue` is for values, and the ergonomic event helpers construct
  * their own select clauses, which is exactly what must not happen here.
+ *
+ * Returns what `completeness` needs as well as the records (issue #137): how many
+ * events the server sent before the severity filter — a cap is reached by those,
+ * not by the survivors — whether it returned a continuation point, and the time
+ * of the last one, which is where a forward read resumes. The continuation point
+ * itself is released rather than kept; see history.ts.
  */
 export async function readEventHistory(
   session: ClientSession,
@@ -327,14 +334,15 @@ export async function readEventHistory(
   endTime: Date,
   numValues: number,
   severityMin: number
-): Promise<EventRecord[]> {
+): Promise<EventHistoryPage> {
+  const details = new ReadEventDetails({
+    numValuesPerNode: numValues,
+    startTime,
+    endTime,
+    filter: buildEventFilter(),
+  });
   const request = new HistoryReadRequest({
-    historyReadDetails: new ReadEventDetails({
-      numValuesPerNode: numValues,
-      startTime,
-      endTime,
-      filter: buildEventFilter(),
-    }),
+    historyReadDetails: details,
     timestampsToReturn: TimestampsToReturn.Both,
     releaseContinuationPoints: false,
     nodesToRead: [new HistoryReadValueId({ nodeId: resolveNodeId(nodeId) })],
@@ -352,10 +360,30 @@ export async function readEventHistory(
     throw new Error(`Read event history failed with status: ${result.statusCode.name}`);
   }
 
-  const events = result.historyData?.events ?? [];
-  return events
-    .map((event: { eventFields: Variant[] }) => toEventRecord(event.eventFields))
-    .filter((record: EventRecord) => severityAtLeast(record, severityMin));
+  const continued = continues(result.continuationPoint);
+  await releaseContinuationPoint(session, nodeId, result.continuationPoint, details);
+
+  const fetched: EventRecord[] = (result.historyData?.events ?? []).map(
+    (event: { eventFields: Variant[] }) => toEventRecord(event.eventFields)
+  );
+  const last = fetched.at(-1)?.time;
+  return {
+    records: fetched.filter((record) => severityAtLeast(record, severityMin)),
+    fetched: fetched.length,
+    continued,
+    lastTime: typeof last === "string" ? last : null,
+  };
+}
+
+/** One event-history read, with what `completeness` is built from. */
+export interface EventHistoryPage {
+  records: EventRecord[];
+  /** Events the server sent, before `severity_min` filtered any out. */
+  fetched: number;
+  /** Whether the server said it holds more. */
+  continued: boolean;
+  /** When the last event the server sent occurred, or null. */
+  lastTime: string | null;
 }
 
 /** Whether one record clears the severity floor.

@@ -13,6 +13,9 @@ from uuid import UUID
 
 from opcua import ua
 
+from .errors import message
+from .limits import MAX_BYTE_STRING_BYTES, LimitExceeded
+
 _INTEGER_RANGES = {
     ua.VariantType.SByte: (-(2**7), 2**7 - 1),
     ua.VariantType.Byte: (0, 2**8 - 1),
@@ -80,11 +83,20 @@ def _scalar(raw: Any, variant_type: ua.VariantType) -> Any:
             raise ValueError(f"{raw!r} is not a Guid") from exc
     if variant_type == ua.VariantType.ByteString:
         if isinstance(raw, bytes):
-            return raw
-        try:
-            return base64.b64decode(str(raw), validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("ByteString values must be standard base64") from exc
+            decoded = raw
+        else:
+            try:
+                decoded = base64.b64decode(str(raw), validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("ByteString values must be standard base64") from exc
+        # A refusal of the request, not a conversion failure of one value: a
+        # write reports a conversion failure as that node's status and sends the
+        # rest, while this has to stop the batch before anything is sent (#139).
+        if len(decoded) > MAX_BYTE_STRING_BYTES:
+            raise LimitExceeded(
+                message("byteStringTooLong", size=len(decoded), limit=MAX_BYTE_STRING_BYTES)
+            )
+        return decoded
     if variant_type == ua.VariantType.NodeId:
         return ua.NodeId.from_string(str(raw))
     if variant_type == ua.VariantType.LocalizedText:

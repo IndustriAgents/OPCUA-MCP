@@ -64,6 +64,54 @@ Discover these any time with `browse_opcua_nodes`.
 
 ---
 
+## Partial results: `completeness`
+
+Seven tools can return fewer records than their request covered, and every one of
+them says so as a field — `completeness`, beside `result` in `structuredContent`
+(issue #137) — on every call, not only when something is missing:
+
+```json
+{ "result": [ … ],
+  "completeness": { "complete": false, "reasons": ["requestLimit"], "returned": 2,
+                    "truncated": true, "limit": 2, "dropped": 0, "remaining": true,
+                    "continuation": { "start_time": "2026-09-24T10:00:01.123Z" } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `complete` | `true` only when `result` is the whole answer and nothing was lost. **Test this; never infer completeness from how many records came back.** |
+| `reasons` | Why not, one entry per cause: `requestLimit` (a count you asked for — `num_values`, `limit`, `max_nodes` — was reached), `contractLimit` (this server's own cap was reached), `serverLimit` (the OPC UA server stopped early with a continuation point), `bufferOverflow` (a buffer discarded records before the read), `unbrowsable` (part of the address space could not be listed). |
+| `returned` | Records in `result` (nodes, for a browse). |
+| `truncated` / `limit` | Whether a cap stopped the response, and that cap's size when it is known. |
+| `dropped` | Records a bounded buffer discarded before this read — gone for good. |
+| `remaining` | `true` when more can be fetched, `false` when nothing is left, `null` when a cap was reached and nothing says whether more exists. |
+| `continuation` | Arguments to merge into the same call to get the rest. `{}` means call again unchanged (`read_events`); `{"start_time": …}` continues a forward history read, inclusive of the boundary record. `null` when a read cannot be resumed from its arguments — a browse, an aggregate, or a history read with no `start_time`, which runs newest first. |
+
+`continuation` is plain arguments rather than a token the server holds, so it
+cannot go stale, is tied to no session and survives a reconnect. The tools that
+carry it: `read_opcua_history`, `read_event_history`, `read_events`,
+`browse_opcua_nodes`, `subscribe_opcua_nodes`, `list_subscriptions`,
+`unsubscribe_opcua_nodes`. The trailing text notices (a buffer overflowed, a
+history cap was reached) are still appended for text-only clients; they now
+repeat what `completeness` says rather than being the only place it is said.
+
+## Limits
+
+Every request is bounded before it reaches the OPC UA server, and one over a
+bound is refused whole — never truncated, never partly sent — with a message
+naming the limit and the value:
+
+```
+write_opcua_nodes accepts at most 100 entries in nodes, got 101. Nothing was sent to the OPC UA server; split the request.
+write_opcua_nodes argument nodes[0].value is a string of 131073 bytes, over the 131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server.
+```
+
+The numbers are in `../contract/tools.json` -> `limits` and in the
+[README](../README.md#how-much-one-call-may-ask-for). The connected server's own
+`OperationLimits` can only lower them: reads go out in chunks of its
+`MaxNodesPerRead`, and a write batch over its `MaxNodesPerWrite` is refused rather
+than split. The bundled mock publishes 100 and 50, so both happen against it.
+
 ## Core tools (both servers)
 
 ### `read_opcua_nodes`
@@ -99,6 +147,10 @@ outside it is refused before anything is sent.
 
 A node the server rejects is one `Bad…` status among the others, never a failed
 call — one unreadable node must not discard the other forty-nine.
+
+At most 500 nodes per call. A server that publishes a lower `MaxNodesPerRead` is
+sent the list in consecutive Reads, and the records still come back in the order
+asked, each with its own status.
 > Prompt: *"Read temperature, pressure, and pump status together."*
 
 ### `write_opcua_nodes`
@@ -122,6 +174,13 @@ that round trip — and to write a **write-only** node, which refuses the read:
 sent the write at all (an unconvertible value, a type it could not read). The two
 are separate because "the server refused" and "we never asked" are different
 problems with different fixes.
+
+**A batch is not a transaction.** OPC UA lets some writes in one Write land while
+others are refused, and nothing is rolled back — read each `status`. At most 100
+writes per call, and fewer where the server publishes a lower `MaxNodesPerWrite`:
+a batch over either is refused before anything is sent rather than split, because
+splitting would add the case where the first half moved the plant and the second
+never arrived.
 > Note: the simulation republishes sensor/actuator state every ~1s, so direct
 > writes to those nodes are transient. Use the **command variables** or
 > **methods** to drive lasting state changes.
@@ -198,7 +257,13 @@ an empty result.
 
 **`truncated` is part of the answer.** Every walk is bounded by `max_nodes`
 (default 500), and a walk that stopped early says so — a prefix of the address
-space is otherwise indistinguishable from all of it.
+space is otherwise indistinguishable from all of it. `completeness` says the same
+beside the result, and adds what `truncated` cannot: a node below the root that
+refused to list its children, whose subtree is then missing.
+```json
+{ "complete": false, "reasons": ["requestLimit"], "returned": 2, "truncated": true,
+  "limit": 2, "dropped": 0, "remaining": true, "continuation": null }
+```
 
 ### `call_opcua_method`
 Call a method on an object node.
@@ -368,6 +433,19 @@ The shape is defined once, in `../contract/tools.json` under
 returned raw `DataValue` JSON here instead
 (`{"statusCode": {"value": 0}, "sourceTimestamp": …}`); see `../CHANGELOG.md`.
 
+`completeness` says whether that was the whole range. Asking for 3 readings of a
+range that holds more:
+```json
+{ "complete": false, "reasons": ["requestLimit"], "returned": 3, "truncated": true,
+  "limit": 3, "dropped": 0, "remaining": true,
+  "continuation": { "start_time": "2026-06-05T09:55:05.391Z" } }
+```
+Merge `continuation` into the same arguments and call again for the next page;
+it starts at the last record returned, inclusive, so drop that one by timestamp.
+Without a `start_time` the server reads newest first and `continuation` is
+`null` — give a `start_time` to page forward. A read that stops at the 5000 cap
+also appends a one-line notice for text-only clients.
+
 > Prompt: *"Show the last 5 temperature readings from history."*
 
 #### With an aggregate
@@ -392,6 +470,9 @@ interval:
 ```json
 { "value": 25.83, "timestamp": "2026-06-05T09:50:00.000Z", "status": "Good" }
 ```
+
+The number of intervals is bounded like a raw read, at 5000 — a 1 ms interval
+over an hour is 3.6 million records, and is refused before it is sent.
 
 > Prompt: *"What was the average temperature per minute over the last hour?"*
 
@@ -419,7 +500,7 @@ Start watching one or more nodes. Each gets its own subscription record and id.
   "publishing_interval": 500, "sampling_interval": 500,
   "buffer_size": 20, "change_count": 0,
   "deadband_type": "none", "deadband_value": 0,
-  "data_change_trigger": "statusValue", "changes": [] }
+  "data_change_trigger": "statusValue", "changes": [], "dropped": 0 }
 ```
 
 | Argument | Default | Meaning |
@@ -465,13 +546,16 @@ Every active subscription and what it has collected since.
     { "value": 25.33, "timestamp": "2026-09-12T08:24:11.478Z", "status": "Good" },
     { "value": 26.05, "timestamp": "2026-09-12T08:24:12.481Z", "status": "Good" },
     { "value": 24.23, "timestamp": "2026-09-12T08:24:13.484Z", "status": "Good" },
-    { "value": 24.75, "timestamp": "2026-09-12T08:24:14.486Z", "status": "Good" } ] }
+    { "value": 24.75, "timestamp": "2026-09-12T08:24:14.486Z", "status": "Good" } ],
+  "dropped": 0 }
 ```
 
 One record per subscription, one content block each — the same framing as
 `read_opcua_history`, and each entry of `changes` is a `historyRecords`
 record. `change_count` counts every change received; `changes` holds only the
-newest `buffer_size` of them.
+newest `buffer_size` of them, and `dropped` is how many were discarded to make
+room — so a trend read from `changes` knows whether it starts late.
+`completeness.dropped` totals it over every subscription returned.
 
 > Prompt: *"What has the temperature done since I asked you to watch it?"*
 
@@ -559,7 +643,13 @@ One content block per event:
 Every field is present on every event; the condition fields are `null` for a
 plain event like this one. If the buffer overflowed since the last read, one
 last block — prose, not a record — says how many events were lost and what to
-raise. The mock raises exactly this when its alarm state
+raise, and `completeness` says it as fields:
+```json
+{ "complete": false, "reasons": ["bufferOverflow"], "returned": 1, "truncated": false,
+  "limit": null, "dropped": 3, "remaining": false, "continuation": null }
+```
+When `limit` stops the read with more still buffered, `reasons` is
+`["requestLimit"]`, `remaining` is `true` and `continuation` is `{}`: call again. The mock raises exactly this when its alarm state
 changes — write `true` to `ns=2;i=25` to see it, and to `ns=2;i=26` to clear it.
 > Prompt: *"Anything happen since we last looked?"*
 
@@ -587,7 +677,9 @@ whether it was watched live or recovered afterwards, because both paths send the
 same select clauses and run the same decoder. Every argument is optional: the
 range defaults to the last hour, and the notifier to the Server object. The
 result is capped at 5000 events; an alarm burst can be far more than that, and
-asking for all of them is a request that never returns.
+asking for all of them is a request that never returns. `completeness` says when
+the cap, `num_values` or the server stopped the read, and gives the `start_time`
+to continue from.
 
 Offered only when the server advertises `AccessHistoryEventsCapability`
 (`ns=0;i=11194`). That is a different node and a different answer from the one

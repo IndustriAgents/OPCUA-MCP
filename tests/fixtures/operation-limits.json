@@ -1,0 +1,30 @@
+{
+  "$comment": "How a server's OperationLimits combine with this project's own (issue #139), driven through BOTH runtimes: tests/unit/test_operation_limits.py and packages/server-node/test/operation-limits.test.mjs read this file. `effective` is effectiveLimit / effective_limit: the server can only lower a project limit, and 0, a missing node or a nonsense value means it states none. `chunks` is how one logical read is split into service calls: consecutive, in order, never larger than the size in force — the sizes listed are the lengths of the requests that go on the wire. `aggregateIntervals` is how many intervals an aggregate read would ask the server to compute, which is what limits.maxHistoryValues bounds for it.",
+  "effective": [
+    { "name": "a server that states nothing leaves ours", "project": 500, "server": null, "effective": 500 },
+    { "name": "0 is the spec's 'no limit'", "project": 500, "server": 0, "effective": 500 },
+    { "name": "a lower server limit binds", "project": 500, "server": 100, "effective": 100 },
+    { "name": "a higher server limit does not raise ours", "project": 500, "server": 10000, "effective": 500 },
+    { "name": "equal is equal", "project": 100, "server": 100, "effective": 100 },
+    { "name": "a server limit of one is honoured", "project": 100, "server": 1, "effective": 1 },
+    { "name": "a negative limit is nonsense, and states nothing", "project": 500, "server": -5, "effective": 500 },
+    { "name": "a fractional limit is truncated toward zero", "project": 500, "server": 100.9, "effective": 100 }
+  ],
+  "chunks": [
+    { "name": "nothing to read is no request at all", "count": 0, "size": 100, "requests": [] },
+    { "name": "exactly one request's worth is one request", "count": 100, "size": 100, "requests": [100] },
+    { "name": "one over is two, the second carrying the one", "count": 101, "size": 100, "requests": [100, 1] },
+    { "name": "a 500-node read against a 100-node server", "count": 500, "size": 100, "requests": [100, 100, 100, 100, 100] },
+    { "name": "a browse detail read is three attributes a node", "count": 450, "size": 200, "requests": [200, 200, 50] },
+    { "name": "a size of zero still makes progress, one at a time", "count": 3, "size": 0, "requests": [1, 1, 1] }
+  ],
+  "aggregateIntervals": [
+    { "name": "no interval is one interval over the whole range", "start_ms": 0, "end_ms": 86400000, "interval_ms": 0, "count": 1 },
+    { "name": "a minute in seconds", "start_ms": 0, "end_ms": 60000, "interval_ms": 1000, "count": 60 },
+    { "name": "a partial last interval still counts", "start_ms": 0, "end_ms": 60500, "interval_ms": 1000, "count": 61 },
+    { "name": "exactly the cap", "start_ms": 0, "end_ms": 5000000, "interval_ms": 1000, "count": 5000 },
+    { "name": "one past the cap", "start_ms": 0, "end_ms": 5000001, "interval_ms": 1000, "count": 5001 },
+    { "name": "a backwards range is as many intervals as a forwards one", "start_ms": 60000, "end_ms": 0, "interval_ms": 1000, "count": 60 },
+    { "name": "an empty range is still one interval", "start_ms": 1000, "end_ms": 1000, "interval_ms": 1000, "count": 1 }
+  ]
+}

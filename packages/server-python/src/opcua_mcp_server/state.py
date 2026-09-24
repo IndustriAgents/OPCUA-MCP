@@ -38,6 +38,7 @@ from .config import SERVER_URL, WARM_UP_WAIT_MS
 from .connection import OpcuaConnection
 from .events import EventSubscriptions
 from .node_metadata import NodeMetadata
+from .operation_limits import UNSTATED
 from .policy import ToolPolicy, tool_policy
 from .subscriptions import SubscriptionManager
 
@@ -74,6 +75,9 @@ class ServerState:
             "history_events": False,
             "aggregate_functions": {},
         }
+        #: What the connected server says one service call may carry — see
+        #: operation_limits.py. Probed and forgotten with the capabilities.
+        self.operation_limits: dict[str, int | None] = dict(UNSTATED)
 
         self.subscriptions = SubscriptionManager()
         self.events = EventSubscriptions()
@@ -170,6 +174,8 @@ class ServerState:
         self.capabilities["history"] = False
         self.capabilities["history_events"] = False
         self.capabilities["aggregate_functions"] = {}
+        self.operation_limits = dict(UNSTATED)
+        self.node_metadata.server_limits = dict(UNSTATED)
 
     def available_capabilities(self) -> set[str]:
         """What the connected OPC UA server reports it can do."""

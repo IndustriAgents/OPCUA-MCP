@@ -24,6 +24,7 @@ Run as part of the normal suite:
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -121,6 +122,36 @@ DIFFERENTIAL_CALLS = [
     ),
     ("subscribe_events", {}),
 ]
+
+
+#: Calls whose `completeness` must be identical on both, not merely present.
+#: Chosen so nothing in it is volatile: a backward history read cannot be
+#: resumed, so its continuation is null on both, and a browse's counts depend
+#: only on the address space.
+COMPLETENESS_CALLS = [
+    ("read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 2}),
+    ("browse_opcua_nodes", {"depth": 3}),
+    ("browse_opcua_nodes", {"depth": 3, "max_nodes": 2}),
+    ("list_subscriptions", {}),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    COMPLETENESS_CALLS,
+    ids=[f"{name}-{index}" for index, (name, _) in enumerate(COMPLETENESS_CALLS)],
+)
+async def test_both_runtimes_say_the_same_about_what_is_missing(both, name, arguments):
+    """Two servers that return the same records must also agree on whether they are all."""
+    answers = {}
+    for impl, params in both.items():
+        async with connect(params) as session:
+            result = await session.call_tool(name, arguments)
+        assert not result.is_error, f"{impl}/{name}: {text_of(result)}"
+        answers[impl] = result.structured_content["completeness"]
+    assert answers["python"] == answers["node"], (
+        f"{name}: python says {answers['python']}, node says {answers['node']}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -289,7 +320,69 @@ DIFFERENTIAL_FAILURES = [
         "a batch read past the per-call maximum",
         "read_opcua_nodes",
         {"node_ids": [f"ns=2;i={index}" for index in range(501)]},
-        "read_opcua_nodes accepts at most 500 nodes in one call, got 501. Split the request.",
+        "read_opcua_nodes accepts at most 500 entries in node_ids, got 501. Nothing was sent "
+        "to the OPC UA server; split the request.",
+    ),
+    # Issue #139: every other request shape, refused before anything is sent.
+    (
+        "a write batch past the per-call maximum",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ScratchDouble"], "value": 1.0}] * 101},
+        "write_opcua_nodes accepts at most 100 entries in nodes, got 101. Nothing was sent to "
+        "the OPC UA server; split the request.",
+    ),
+    (
+        "a write batch past the OPC UA server's own MaxNodesPerWrite",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ScratchDouble"], "value": 1.0}] * 51},
+        "write_opcua_nodes was asked to write 51 nodes, but the OPC UA server accepts at most 50 "
+        "in one Write (its OperationLimits.MaxNodesPerWrite). Nothing was written. Split the "
+        "request: a write is not split here, because each part could land or fail on its own.",
+    ),
+    (
+        "a method call with more arguments than any method takes",
+        "call_opcua_method",
+        {"object_node_id": NODE["Methods"], "method_node_id": "ns=2;i=31", "arguments": [1] * 65},
+        "call_opcua_method accepts at most 64 entries in arguments, got 65. Nothing was sent to "
+        "the OPC UA server; split the request.",
+    ),
+    (
+        "a string past the per-string maximum",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ScratchDouble"], "value": "a" * 131073}]},
+        "write_opcua_nodes argument nodes[0].value is a string of 131073 bytes, over the "
+        "131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the "
+        "OPC UA server.",
+    ),
+    (
+        "a value nested past the depth limit",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ScratchDouble"], "value": [[[[[[1.0]]]]]]}]},
+        "write_opcua_nodes argument nodes[0].value[0][0][0][0][0] nests arrays or objects more "
+        "than 8 levels deep, counting the arguments themselves (limits.maxNestingDepth). "
+        "Nothing was sent to the OPC UA server.",
+    ),
+    (
+        "an array value past the per-array maximum",
+        "write_opcua_nodes",
+        {"nodes": [{"node_id": NODE["ScratchDouble"], "value": [0] * 10001}]},
+        "write_opcua_nodes argument nodes[0].value has 10001 items, over the 10000-item limit "
+        "on one array (limits.maxArrayItems). Nothing was sent to the OPC UA server.",
+    ),
+    (
+        "a ByteString past its maximum once decoded",
+        "write_opcua_nodes",
+        {
+            "nodes": [
+                {
+                    "node_id": NODE["ScratchDouble"],
+                    "value": base64.b64encode(bytes(65537)).decode("ascii"),
+                    "data_type": "ByteString",
+                }
+            ]
+        },
+        "A ByteString of 65537 bytes is over the 65536-byte limit on one ByteString value "
+        "(limits.maxByteStringBytes). Nothing was sent to the OPC UA server.",
     ),
     (
         "subscribing to more nodes than this server will hold",

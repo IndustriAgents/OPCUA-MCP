@@ -1,0 +1,182 @@
+{
+  "$comment": "What a request may carry before it reaches the OPC UA server (issue #139), driven through BOTH runtimes: tests/unit/test_request_limits.py and packages/server-node/test/request-limits.test.mjs read this file and assert the same verdict and the same sentence. `requests` runs each call through everything that happens before the network — the request-wide bounds (limits.ts / limits.py, checkRequestBounds) and then the contract schema, whose maxItems carries the per-tool counts — in that order, so a case can also pin which rule answers first. `error` is the exact message, from contract/tools.json -> errors; null means the call is accepted. Strings, arrays and nesting too large to write out are built from three directives both suites expand identically: {\"$string\": N} is N copies of 'a', and {\"$string\": [N, \"é\"]} N copies of that character; {\"$array\": [ITEM, N]} is N copies of ITEM, itself expanded; {\"$nest\": [N, LEAF]} is LEAF inside N single-element arrays. The numbers are written out rather than derived, so a change to a limit has to change this table on purpose — `limits` below is compared with the contract to make sure it does. The request-size cases are sized exactly: 8 write entries of {\"node_id\":\"a\",\"value\":\"<s>\"} are 227 bytes of JSON plus the strings, so strings summing to 1048349 bytes make a request of exactly 1048576. `byteStrings` is the one limit that applies after conversion, in the variant codec, because a ByteString's size is only known once its base64 is decoded. `eventBufferSizes` is the clamp subscribe_events applies.",
+  "limits": {
+    "maxNodesPerRead": 500,
+    "maxNodesPerWrite": 100,
+    "maxMethodArguments": 64,
+    "maxRequestBytes": 1048576,
+    "maxStringBytes": 131072,
+    "maxByteStringBytes": 65536,
+    "maxArrayItems": 10000,
+    "maxNestingDepth": 8,
+    "maxEventBufferSize": 10000
+  },
+  "requests": [
+    {
+      "name": "a string exactly at the limit is accepted",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$string": 131072 } }] },
+      "error": null
+    },
+    {
+      "name": "one byte over the string limit is refused, naming where it is",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$string": 131073 } }] },
+      "error": "write_opcua_nodes argument nodes[0].value is a string of 131073 bytes, over the 131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "the string limit counts bytes, not characters",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$string": [65537, "é"] } }] },
+      "error": "write_opcua_nodes argument nodes[0].value is a string of 131074 bytes, over the 131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a node id is a string like any other",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=2", { "$string": 131073 }] },
+      "error": "read_opcua_nodes argument node_ids[1] is a string of 131073 bytes, over the 131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a read-only tool is bounded too",
+      "tool": "browse_opcua_nodes",
+      "arguments": { "name_filter": { "$string": 131073 } },
+      "error": "browse_opcua_nodes argument name_filter is a string of 131073 bytes, over the 131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "an array value exactly at the item limit is accepted",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$array": [0, 10000] } }] },
+      "error": null
+    },
+    {
+      "name": "an array value one item over the limit is refused",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$array": [0, 10001] } }] },
+      "error": "write_opcua_nodes argument nodes[0].value has 10001 items, over the 10000-item limit on one array (limits.maxArrayItems). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a huge list is refused on its length, before the schema looks at a single element",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": { "$array": ["ns=2;i=2", 20000] } },
+      "error": "read_opcua_nodes argument node_ids has 20000 items, over the 10000-item limit on one array (limits.maxArrayItems). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a value nested to exactly the depth limit is accepted",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$nest": [5, 1] } }] },
+      "error": null
+    },
+    {
+      "name": "one level deeper is refused at the level that crossed it",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$nest": [6, 1] } }] },
+      "error": "write_opcua_nodes argument nodes[0].value[0][0][0][0][0] nests arrays or objects more than 8 levels deep, counting the arguments themselves (limits.maxNestingDepth). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a pathologically deep value is refused at the same place, not walked to the bottom",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": [{ "node_id": "ns=2;i=41", "value": { "$nest": [500, 1] } }] },
+      "error": "write_opcua_nodes argument nodes[0].value[0][0][0][0][0] nests arrays or objects more than 8 levels deep, counting the arguments themselves (limits.maxNestingDepth). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "an argument the tool does not have is bounded before it is named",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": ["ns=2;i=2"], "junk": { "$nest": [9, 0] } },
+      "error": "read_opcua_nodes argument junk[0][0][0][0][0][0][0] nests arrays or objects more than 8 levels deep, counting the arguments themselves (limits.maxNestingDepth). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a request of exactly the byte limit is accepted",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 130845 } }
+        ]
+      },
+      "error": null
+    },
+    {
+      "name": "one byte over the request limit is refused, though every string is within its own",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 131072 } },
+          { "node_id": "a", "value": { "$string": 130846 } }
+        ]
+      },
+      "error": "write_opcua_nodes arguments are 1048577 bytes of JSON, over the 1048576-byte limit on one request (limits.maxRequestBytes). Nothing was sent to the OPC UA server."
+    },
+    {
+      "name": "a write batch at the per-call limit is accepted",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": { "$array": [{ "node_id": "ns=2;i=41", "value": 1 }, 100] } },
+      "error": null
+    },
+    {
+      "name": "one write over the per-call limit refuses the whole batch",
+      "tool": "write_opcua_nodes",
+      "arguments": { "nodes": { "$array": [{ "node_id": "ns=2;i=41", "value": 1 }, 101] } },
+      "error": "write_opcua_nodes accepts at most 100 entries in nodes, got 101. Nothing was sent to the OPC UA server; split the request."
+    },
+    {
+      "name": "a batch read at the per-call limit is accepted",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": { "$array": ["ns=2;i=2", 500] } },
+      "error": null
+    },
+    {
+      "name": "one node over the batch-read limit",
+      "tool": "read_opcua_nodes",
+      "arguments": { "node_ids": { "$array": ["ns=2;i=2", 501] } },
+      "error": "read_opcua_nodes accepts at most 500 entries in node_ids, got 501. Nothing was sent to the OPC UA server; split the request."
+    },
+    {
+      "name": "a method call at the argument limit is accepted",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=31",
+        "arguments": { "$array": [1, 64] }
+      },
+      "error": null
+    },
+    {
+      "name": "one method argument over the limit",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=31",
+        "arguments": { "$array": [1, 65] }
+      },
+      "error": "call_opcua_method accepts at most 64 entries in arguments, got 65. Nothing was sent to the OPC UA server; split the request."
+    }
+  ],
+  "byteStrings": [
+    { "name": "a ByteString exactly at the limit converts", "bytes": 65536, "error": null },
+    {
+      "name": "one byte over is refused, whatever the write would have done",
+      "bytes": 65537,
+      "error": "A ByteString of 65537 bytes is over the 65536-byte limit on one ByteString value (limits.maxByteStringBytes). Nothing was sent to the OPC UA server."
+    }
+  ],
+  "eventBufferSizes": [
+    { "name": "absent is the default", "requested": null, "applied": 100 },
+    { "name": "zero is the default, not a buffer that keeps nothing", "requested": 0, "applied": 100 },
+    { "name": "a size within the limit is kept", "requested": 250, "applied": 250 },
+    { "name": "exactly the limit is kept", "requested": 10000, "applied": 10000 },
+    { "name": "past the limit is clamped to it", "requested": 10001, "applied": 10000 },
+    { "name": "an absurd size is clamped, not allocated", "requested": 1000000000, "applied": 10000 }
+  ]
+}

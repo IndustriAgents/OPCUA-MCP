@@ -46,6 +46,13 @@ import {
 
 import { isConnectionError } from "./connection.js";
 import { CONTRACT } from "./contract.js";
+import { chunked } from "./limits.js";
+import {
+  UNSTATED,
+  readChunk,
+  translateChunk,
+  type ServerOperationLimits,
+} from "./operation-limits.js";
 
 const ANALOG = CONTRACT.analog;
 
@@ -57,15 +64,6 @@ const ANALOG = CONTRACT.analog;
  * a conformant server is entitled to refuse.
  */
 const MAX_PER_REQUEST = ANALOG.maxPropertiesPerRequest;
-
-/** `items` in requests no larger than the server is obliged to accept. */
-function chunked<T>(items: T[]): T[][] {
-  const chunks: T[][] = [];
-  for (let start = 0; start < items.length; start += MAX_PER_REQUEST) {
-    chunks.push(items.slice(start, start + MAX_PER_REQUEST));
-  }
-  return chunks;
-}
 
 /** The three properties, in the order their browse paths are built and read. */
 export const PROPERTY_BROWSE_NAMES = [
@@ -144,6 +142,9 @@ export class NodeMetadata {
    *  Without it every read would pay a failed round trip and write a line to
    *  stderr, forever. */
   private unanswerable = false;
+  /** What the connected server says one request may carry, which can only make
+   *  the chunks above smaller. Set by the capability probe on every session. */
+  serverLimits: ServerOperationLimits = UNSTATED;
 
   /** Drop everything, because the session it was true of is gone. */
   forget(): void {
@@ -202,7 +203,7 @@ export class NodeMetadata {
       PROPERTY_BROWSE_NAMES.map((browseName) => makeBrowsePath(nodeId, `/${browseName}`))
     );
     const results: BrowsePathResult[] = [];
-    for (const chunk of chunked(paths)) {
+    for (const chunk of chunked(paths, translateChunk(this.serverLimits, MAX_PER_REQUEST))) {
       results.push(...(await session.translateBrowsePath(chunk)));
     }
 
@@ -221,7 +222,7 @@ export class NodeMetadata {
     });
 
     const values: DataValue[] = [];
-    for (const chunk of chunked(targets)) {
+    for (const chunk of chunked(targets, readChunk(this.serverLimits, MAX_PER_REQUEST))) {
       values.push(
         ...(await session.read(
           chunk.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value }))

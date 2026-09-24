@@ -48,6 +48,8 @@ from opcua import ua
 
 from .connection import is_connection_error
 from .contract import CONTRACT
+from .limits import chunked
+from .operation_limits import UNSTATED, read_chunk, translate_chunk
 
 _ANALOG = CONTRACT["analog"]
 
@@ -163,6 +165,10 @@ class NodeMetadata:
         #: TranslateBrowsePathsToNodeIds, say. Without it every read would pay a
         #: failed round trip and write a line to stderr, forever.
         self._unanswerable = False
+        #: What the connected server says one request may carry, which can only
+        #: make the chunks above smaller. Set by the capability probe on every
+        #: session.
+        self.server_limits: dict[str, int | None] = dict(UNSTATED)
 
     def forget(self) -> None:
         """Drop everything, because the session it was true of is gone."""
@@ -211,7 +217,7 @@ class NodeMetadata:
         ]
         results = [
             result
-            for chunk in _chunked(paths)
+            for chunk in chunked(paths, translate_chunk(self.server_limits, MAX_PER_REQUEST))
             for result in client.uaclient.translate_browsepaths_to_nodeids(chunk)
         ]
 
@@ -228,7 +234,7 @@ class NodeMetadata:
 
         values: list[Any] = [
             value
-            for chunk in _chunked(targets)
+            for chunk in chunked(targets, read_chunk(self.server_limits, MAX_PER_REQUEST))
             for value in client.uaclient.get_attributes(chunk, ua.AttributeIds.Value)
         ]
 
@@ -244,13 +250,6 @@ class NodeMetadata:
             )
 
         return {node_id: _assemble(properties) for node_id, properties in found.items()}
-
-
-def _chunked(items: list[Any]) -> list[list[Any]]:
-    """``items`` in requests no larger than the server is obliged to accept."""
-    return [
-        items[start : start + MAX_PER_REQUEST] for start in range(0, len(items), MAX_PER_REQUEST)
-    ]
 
 
 def _first_target(result: Any) -> Any:

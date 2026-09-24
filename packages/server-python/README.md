@@ -59,6 +59,16 @@ server cannot do is not on the menu, rather than failing at call time.
 **One tool per operation, not one per arity.** Reading one node and reading fifty
 is the same request with a longer list, so it is one tool and one code path.
 
+**Bounded, and honest about it.** Every request is bounded before it reaches the
+OPC UA server — at most 500 nodes per read, 100 per write, 64 method arguments,
+1 MiB of arguments, and fewer where the OPC UA server publishes lower
+`OperationLimits`; the full list is in the
+[README](https://github.com/IndustriAgents/OPCUA-MCP#how-much-one-call-may-ask-for).
+A request over a bound is refused whole, never partly sent. And every result that
+can be partial — history, events, browse, subscriptions — carries a
+`completeness` object beside `result` in `structuredContent`: test
+`completeness.complete`, and never infer it from how many records came back.
+
 See the central per-tool reference in **[docs/examples.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/examples.md)** for full tool signatures, parameters and return formats.
 
 ## Resources

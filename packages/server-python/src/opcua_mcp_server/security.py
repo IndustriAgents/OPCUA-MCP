@@ -18,6 +18,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from cryptography import x509
@@ -271,7 +272,8 @@ def security_warnings(config: SecurityConfig) -> list[str]:
             return [
                 "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT "
                 "to pin it. Encryption without it protects against passive eavesdropping, not "
-                "against an attacker who can impersonate the endpoint."
+                "against an attacker who can impersonate the endpoint, so control tools stay "
+                "disabled unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true."
             ]
         return []
 
@@ -285,6 +287,53 @@ def security_warnings(config: SecurityConfig) -> list[str]:
             "the password is in clear text unless the server's user-token policy encrypts it."
         )
     return warnings
+
+
+def _iso_second(moment: datetime) -> str:
+    """A validity bound as the refusal words it: ISO-8601 UTC, to the second.
+
+    ``security.ts`` formats the same instant the same way, so the refusal reads
+    identically on both runtimes.
+    """
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def pinned_certificate_problem(path: str, now: datetime | None = None) -> str | None:
+    """Why the pinned server certificate cannot vouch for the server, or None.
+
+    Checked at every connect rather than once at startup, because a certificate
+    expires while a process runs. Neither client library looks at the validity
+    window of a pinned certificate — python-opcua only encrypts to its key — so
+    without this an expired pin would keep "verifying" a server whose identity
+    document its owner has retired.
+
+    Fails closed: the connection is refused with this as the reason, rather than
+    carrying on unverified, because the operator said which server this is and
+    the evidence for it is no longer valid. An unreadable file is left to the
+    library, which refuses it in its own words.
+
+    ``pinnedCertificateProblem`` in ``security.ts`` is the other half.
+    """
+    try:
+        certificate = uacrypto.load_certificate(path)
+    except Exception:
+        return None
+    moment = now or datetime.now(timezone.utc)
+    not_before = certificate.not_valid_before_utc
+    not_after = certificate.not_valid_after_utc
+    if moment > not_after:
+        return (
+            f"OPCUA_SERVER_CERT {path} expired on {_iso_second(not_after)}, so it cannot "
+            f"verify the server. Pin the certificate the server presents now, renewing it on "
+            f"the server first if that is the one that expired."
+        )
+    if moment < not_before:
+        return (
+            f"OPCUA_SERVER_CERT {path} is not valid until {_iso_second(not_before)}, so it "
+            f"cannot verify the server yet. Check this machine's clock, or pin the certificate "
+            f"the server presents now."
+        )
+    return None
 
 
 def certificate_application_uri(path: str) -> str | None:
@@ -357,6 +406,11 @@ def create_client(url: str) -> Client:
         # The certificate is the authority on this, and the operator has not
         # said otherwise. Matches what node-opcua does with the same files.
         client.application_uri = certificate_uri
+
+    if config.server_cert is not None:
+        problem = pinned_certificate_problem(config.server_cert)
+        if problem is not None:
+            raise ValueError(problem)
 
     if config.policy != "None":
         policy = getattr(security_policies, f"SecurityPolicy{config.policy}")

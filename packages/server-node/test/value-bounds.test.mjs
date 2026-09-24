@@ -45,6 +45,9 @@ function policyFromFixture() {
     parsePolicyConfig({
       OPCUA_PROFILE: spec.profile,
       OPCUA_SECURITY_POLICY: spec.secure ? "Basic256Sha256" : "None",
+      // A verified server, which is what "secure" has to mean for control to be
+      // offered at all (#134); the gate itself is control-gate.json's.
+      ...(spec.secure ? { OPCUA_SERVER_CERT: "/pki/server.pem" } : {}),
       OPCUA_POLICY_FILE: writePolicy({ control: { writable_nodes: spec.writable_nodes } }),
     })
   );
@@ -96,6 +99,7 @@ describe("a bound on a renumbered server", () => {
       parsePolicyConfig({
         OPCUA_PROFILE: "operator",
         OPCUA_SECURITY_POLICY: "Basic256Sha256",
+        OPCUA_SERVER_CERT: "/pki/server.pem",
         OPCUA_POLICY_FILE: writePolicy({
           control: { writable_nodes: [{ node: "nsu=urn:plant;i=5", max: 100 }] },
         }),

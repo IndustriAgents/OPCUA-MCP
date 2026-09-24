@@ -110,18 +110,55 @@ means a fresh thumbprint, so renewal repeats these steps.
 
 ## The other direction
 
-Pin the server's own certificate with `OPCUA_SERVER_CERT`: both runtimes then
-refuse an endpoint presenting any other certificate, and the end-to-end suite
-checks that on both. Left unset, the certificate is taken from the endpoint
-description during the handshake and not verified at all — encryption then
-protects against eavesdropping rather than against an impersonated endpoint, and
-both servers say so on stderr. Neither runtime implements a CA trust list with
-revocation, so rotating the server's certificate means updating the pinned
-file. node-opcua files the
-ones it has accepted in a per-user PKI folder of its own
-(`~/Library/Preferences/node-opcua-default-nodejs/PKI` on macOS,
-`~/.config/node-opcua-default-nodejs/PKI` on Linux, under `%APPDATA%` on
-Windows); the Python runtime keeps nothing. See
+Everything above gets *your* certificate trusted by the server. The reverse —
+this client knowing it reached the right server — is `OPCUA_SERVER_CERT`, and
+**control tools need it**: `operator` and `full` offer writes, method calls and
+alarm actions only once the server's certificate is pinned.
+
+Encrypted and authenticated are different properties. Without a pin, both
+runtimes take the server's certificate from its endpoint description and encrypt
+to it — which protects against eavesdropping, and not against whoever managed to
+answer for the endpoint. A pin changes that: the handshake is encrypted to the
+pinned key, so a server without the matching private key cannot complete it.
+
+```bash
+OPCUA_SERVER_CERT=/etc/opcua/plc_server.pem   # the server's certificate, PEM or DER
+```
+
+Getting the file, whatever the vendor:
+
+- **From the server's own PKI** — usually `pki/own/certs` (node-opcua,
+  open62541, the .NET stack), or an *export certificate* action in the
+  certificate manager of Prosys, KEPServerEX, Siemens and the like. Best: it is
+  the operator's copy, not the network's.
+- **From the endpoint, once, on a network you trust.** node-opcua files every
+  server certificate it has accepted in a per-user PKI folder
+  (`~/Library/Preferences/node-opcua-default-nodejs/PKI` on macOS,
+  `~/.config/node-opcua-default-nodejs/PKI` on Linux, under `%APPDATA%` on
+  Windows); a first connection without a pin leaves it there. Compare its
+  thumbprint with the one the server's UI shows before you trust it:
+  `openssl x509 -in plc_server.pem -noout -fingerprint -sha256`.
+
+What a pin does and does not check:
+
+| Situation | What happens |
+|---|---|
+| The server presents the pinned certificate | Connects; `get_server_status` → `server_identity.server_authenticated: true`, `control: "secured"` |
+| Anything else answers | The handshake fails — the impostor cannot decrypt it. No request of any kind reaches it |
+| The pinned certificate has expired, or is not valid yet | Refused before connecting, naming the file and the date. Renew it on the server and pin the new one |
+| No pin | Connects and reads; control tools are hidden, and a call to one is refused with `Set OPCUA_SERVER_CERT … or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` |
+
+There is no CA trust store or revocation list: python-opcua has no server
+certificate validation to build one on, and both runtimes keep one behaviour.
+A pin is an exact match, so a revoked certificate is dealt with by replacing the
+pin — and a server that renews its certificate has to be re-pinned, which is the
+cost of the strongest check there is.
+
+`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` offers control over an encrypted but
+unverified channel, for a lab. It is not implied by
+`OPCUA_ALLOW_INSECURE_CONTROL`, which covers only a channel with no security at
+all, and whichever is in force is named in the startup line, in
+`get_server_status` and in every audit record. See
 [SECURITY.md](../SECURITY.md#connection-security-important).
 
 ## When it still will not connect

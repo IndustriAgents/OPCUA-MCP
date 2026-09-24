@@ -22,6 +22,12 @@ from .node_ids import namespace_uri_form, resolve_node_id
 PROFILES = ("observe", "operator", "full")
 ACCESS_CLASSES = ("read", "monitor", "alarm-action", "control")
 
+#: What the control gate can say, and the one word every surface uses for it:
+#: the startup line, ``get_server_status`` and every audit record. Named apart
+#: because "control is on" is not one fact — a verified server and a lab
+#: override both turn it on, and a reviewer has to be able to tell which did.
+CONTROL_GATES = ("secured", "INSECURE-OVERRIDE", "UNVERIFIED-OVERRIDE", "blocked")
+
 
 def _value(env: Mapping[str, str], name: str) -> str | None:
     raw = env.get(name, "").strip()
@@ -164,6 +170,51 @@ def _bound_enum(entry: Mapping[str, Any], node: str) -> tuple[Any, ...] | None:
 
 
 @dataclass(frozen=True)
+class ServerIdentity:
+    """What this process can prove about the other end of the channel (#134).
+
+    Two properties that used to be one boolean. *Secured* means the traffic is
+    signed (and, under SignAndEncrypt, encrypted): nobody can read or forge it in
+    transit. *Authenticated* means the peer has been shown to be the intended
+    server. The control gate used to check the first while its safety meaning
+    needs the second — both client libraries encrypt happily to whatever
+    certificate the endpoint presents, so an attacker who can answer for the
+    endpoint gets an encrypted channel, and with it the control tools.
+
+    Derived from configuration alone, and that is sound rather than optimistic: a
+    pinned certificate (``OPCUA_SERVER_CERT``) is the key the client encrypts the
+    handshake to, so a server without the matching private key cannot complete
+    it, and a pin outside its validity window refuses to connect at all (see
+    ``security.pinned_certificate_problem``). Whenever there is a session, a pin
+    means the peer is the pinned server.
+
+    ``server_identity`` in ``policy.ts`` is the other half, and
+    ``tests/fixtures/control-gate.json`` holds both to the same answers.
+    """
+
+    #: A SecurityPolicy other than None: mode Sign or SignAndEncrypt.
+    channel_secured: bool
+    server_authenticated: bool
+    #: ``pin`` or ``none``. A trust-store method would be a third value; neither
+    #: client library offers one both runtimes can use, so there is none yet.
+    authentication_method: str
+
+
+def server_identity(env: Mapping[str, str]) -> ServerIdentity:
+    """The channel's identity guarantees, from the security variables."""
+    secured = (_value(env, "OPCUA_SECURITY_POLICY") or "None").lower() != "none"
+    # `secured and`: a pin on an unsecured channel is refused at startup by
+    # security.py, but this must not read it as authentication if it ever gets
+    # here — with no channel security the server presents no certificate at all.
+    pinned = secured and _value(env, "OPCUA_SERVER_CERT") is not None
+    return ServerIdentity(
+        channel_secured=secured,
+        server_authenticated=pinned,
+        authentication_method="pin" if pinned else "none",
+    )
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     profile: str
     allowed_tools: frozenset[str] | None
@@ -174,8 +225,14 @@ class PolicyConfig:
     value_bounds: Mapping[str, ValueBound]
     callable_methods: frozenset[str]
     acknowledge_alarms: bool
+    #: Control over a channel with no security at all (SecurityPolicy None).
     allow_insecure_control: bool
-    secure_channel: bool
+    #: Control over a secured channel to a server whose identity is unverified.
+    #: Deliberately not folded into ``allow_insecure_control``: encryption and
+    #: peer authentication are independent properties, and an operator who
+    #: accepted the one for a lab has not thereby accepted the other.
+    allow_unverified_server_control: bool
+    server_identity: ServerIdentity
     #: Whether a write outside the range the OPC UA server itself published
     #: (``EURange``) is allowed through. Refused by default: a bound the
     #: equipment declares is worth more than one a human retyped, and it is the
@@ -241,13 +298,16 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
         "OPCUA_ALLOW_INSECURE_CONTROL",
         bool(file.get("allow_insecure_control", False)),
     )
+    allow_unverified = _boolean(
+        _value(env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL"),
+        "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL",
+        bool(file.get("allow_unverified_server_control", False)),
+    )
     allow_out_of_range = _boolean(
         _value(env, "OPCUA_ALLOW_OUT_OF_RANGE_WRITES"),
         "OPCUA_ALLOW_OUT_OF_RANGE_WRITES",
         bool(file.get("allow_out_of_range_writes", False)),
     )
-    security_policy = _value(env, "OPCUA_SECURITY_POLICY") or "None"
-
     return PolicyConfig(
         profile=profile,
         allowed_tools=allowed_tools,
@@ -256,9 +316,54 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
         callable_methods=frozenset(method_env),
         acknowledge_alarms=acknowledge,
         allow_insecure_control=allow_insecure,
-        secure_channel=security_policy.lower() != "none",
+        allow_unverified_server_control=allow_unverified,
+        server_identity=server_identity(env),
         allow_out_of_range_writes=allow_out_of_range,
     )
+
+
+def control_gate(config: PolicyConfig) -> str:
+    """Whether control may be offered over this connection, and why: one of
+    :data:`CONTROL_GATES`.
+
+    The profile and allowlists apply on top of this; it only answers whether the
+    channel is one control may travel over at all. Each override covers exactly
+    one missing property, so neither can stand in for the other — and a secured
+    channel is judged on the server's identity even when
+    ``OPCUA_ALLOW_INSECURE_CONTROL`` is set, because that override was never
+    about identity.
+    """
+    identity = config.server_identity
+    if not identity.channel_secured:
+        return "INSECURE-OVERRIDE" if config.allow_insecure_control else "blocked"
+    if identity.server_authenticated:
+        return "secured"
+    return "UNVERIFIED-OVERRIDE" if config.allow_unverified_server_control else "blocked"
+
+
+def control_refusal(config: PolicyConfig) -> str | None:
+    """The contract error a blocked gate refuses control with, or None if open.
+
+    Two messages rather than one, because the fix differs: an unsecured channel
+    needs a security policy, an unverified server needs its certificate pinned.
+    Each names the variables that would open it.
+    """
+    if control_gate(config) != "blocked":
+        return None
+    if config.server_identity.channel_secured:
+        return "controlNeedsVerifiedServer"
+    return "controlNeedsSecureChannel"
+
+
+def server_identity_record(config: PolicyConfig) -> dict[str, Any]:
+    """``serverStatus.server_identity``: the identity, and what it means for control."""
+    identity = config.server_identity
+    return {
+        "channel_secured": identity.channel_secured,
+        "server_authenticated": identity.server_authenticated,
+        "authentication_method": identity.authentication_method,
+        "control": control_gate(config),
+    }
 
 
 def values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
@@ -429,7 +534,7 @@ class ToolPolicy:
         if not guard:
             return False
 
-        if not self.config.secure_channel and not self.config.allow_insecure_control:
+        if control_gate(self.config) == "blocked":
             return False
         if self.config.profile == "full":
             return True
@@ -463,7 +568,7 @@ class ToolPolicy:
         if tool is None:
             raise ValueError(message("unknownTool", tool=name))
         if not self.is_visible(tool):
-            raise PermissionError(message("toolDisabled", tool=name, profile=self.config.profile))
+            raise PermissionError(self._refusal(tool))
         if self.config.profile != "operator":
             return
 
@@ -529,6 +634,26 @@ class ToolPolicy:
                         method_node_id=methods[0],
                     )
                 )
+
+    def _refusal(self, tool: dict[str, Any]) -> str:
+        """Why a hidden tool is hidden, worded so the reader knows what to change.
+
+        The channel gate is named only where it is the reason: a control tool
+        the profile would otherwise offer and the allowlist does not exclude.
+        Telling an ``observe`` deployment to pin a certificate would be advice
+        that changes nothing.
+        """
+        allowed = self.config.allowed_tools
+        refusal = control_refusal(self.config)
+        if (
+            refusal is not None
+            and tool["accessClass"] in {"control", "alarm-action"}
+            and tool.get("guard")
+            and self.config.profile in {"operator", "full"}
+            and (allowed is None or tool["name"] in allowed)
+        ):
+            return message(refusal, tool=tool["name"])
+        return message("toolDisabled", tool=tool["name"], profile=self.config.profile)
 
     def _resolve(self, node_id: str) -> str | None:
         """One node id in the spelling this policy compares by, or None if it has none.
@@ -646,16 +771,19 @@ def tool_policy() -> ToolPolicy:
 def describe_policy(policy: ToolPolicy) -> str:
     """One-line summary for the startup log.
 
-    The three states are named apart. The old version printed
+    Every state is named apart. The old version printed
     ``insecure-control=enabled`` both for a properly secured deployment and for
     an active lab override, which made the override the opposite of conspicuous
     — the one line an operator might scan for it said the same thing either way.
+    ``server-identity`` is here for the same reason: ``control=blocked`` on a
+    secured channel is otherwise a puzzle.
     """
     config = policy.config
-    if config.secure_channel:
-        control = "secured"
-    elif config.allow_insecure_control:
-        control = "INSECURE-OVERRIDE"
+    identity = config.server_identity
+    if identity.server_authenticated:
+        who = identity.authentication_method
+    elif identity.channel_secured:
+        who = "unverified"
     else:
-        control = "blocked"
-    return f"profile={config.profile} control={control}"
+        who = "none"
+    return f"profile={config.profile} control={control_gate(config)} server-identity={who}"

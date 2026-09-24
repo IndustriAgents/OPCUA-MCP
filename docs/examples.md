@@ -227,6 +227,12 @@ when another tool fails.
   "connected": true,
   "endpoint_url": "opc.tcp://localhost:4840/freeopcua/server/",
   "security": "policy=None mode=None user=anonymous",
+  "server_identity": {
+    "channel_secured": false,
+    "server_authenticated": false,
+    "authentication_method": "none",
+    "control": "blocked"
+  },
   "server_state": "Running",
   "current_time": "2026-09-17T13:06:37.580Z",
   "start_time": "2026-09-17T13:06:10.558Z",
@@ -248,6 +254,15 @@ when another tool fails.
 }
 ```
 > Prompt: *"Are we actually connected, and is the PLC healthy?"*
+
+`server_identity` answers "why can't it write?" before anyone asks. Encrypted and
+authenticated are separate properties: `channel_secured` is a security policy
+other than `None`, `server_authenticated` is the server's certificate pinned with
+`OPCUA_SERVER_CERT`, and control tools need both. `control` says whether the
+channel gate is open and why — `secured`, `INSECURE-OVERRIDE`,
+`UNVERIFIED-OVERRIDE` (a lab override, named as such) or `blocked`. It comes from
+configuration, so it is there while disconnected too, and the profile and
+allowlists still apply on top of it.
 
 Use `namespaces` rather than hard-coding a namespace index: the same URI can sit
 at a different index after a server restart, so an `ns=2;i=3` that worked
@@ -297,6 +312,12 @@ This is the one tool that never fails for being disconnected — it reports it:
   "connected": false,
   "endpoint_url": "opc.tcp://localhost:4840",
   "security": "policy=None mode=None user=anonymous",
+  "server_identity": {
+    "channel_secured": false,
+    "server_authenticated": false,
+    "authentication_method": "none",
+    "control": "blocked"
+  },
   "server_state": null,
   "current_time": null,
   "start_time": null,

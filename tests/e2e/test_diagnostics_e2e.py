@@ -24,6 +24,15 @@ from test_mcp_e2e import ISO_UTC_TIMESTAMP, NODE_BUILD, _server_params, connect,
 #: Every namespace array begins with the OPC UA namespace itself, at index 0.
 OPC_UA_NAMESPACE = "http://opcfoundation.org/UA/"
 
+#: `server_identity` for the suite's usual deployment: the unsecured mock, with
+#: control opened by `OPCUA_ALLOW_INSECURE_CONTROL` (see `test_mcp_e2e`).
+UNSECURED_LAB_IDENTITY = {
+    "channel_secured": False,
+    "server_authenticated": False,
+    "authentication_method": "none",
+    "control": "INSECURE-OVERRIDE",
+}
+
 BUILD_INFO_FIELDS = {
     "product_name",
     "product_uri",
@@ -71,6 +80,9 @@ async def test_reports_a_live_connection(impl_params):
     # The endpoint is the one the test pointed this server at, not a default.
     assert status["endpoint_url"] == params.env["OPCUA_SERVER_URL"]
     assert status["security"] == "policy=None mode=None user=anonymous"
+    # The unsecured mock, with the suite's lab override: said as such, so a
+    # reader cannot take "control is on" for "the server is verified" (#134).
+    assert status["server_identity"] == UNSECURED_LAB_IDENTITY
 
 
 async def test_reports_the_servers_own_status(impl_params):
@@ -197,6 +209,8 @@ async def test_answers_when_the_server_is_unreachable(opcua_server):
         assert status["connected"] is False, f"{impl}: claims to be connected to {dead_url}"
         assert status["endpoint_url"] == dead_url
         assert status["security"] == "policy=None mode=None user=anonymous"
+        # From configuration, so still there while nothing is connected.
+        assert status["server_identity"] == UNSECURED_LAB_IDENTITY
         assert status["server_state"] is None
         assert status["namespaces"] == []
         assert status["error"], f"{impl}: reported no reason for being disconnected"

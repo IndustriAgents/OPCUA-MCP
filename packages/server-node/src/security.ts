@@ -13,7 +13,12 @@ import {
   type UserIdentityInfo,
   UserTokenType,
 } from "node-opcua-client";
-import { keyOperationsFromPrivateKey, readCertificate, readPrivateKey } from "node-opcua-crypto";
+import {
+  exploreCertificate,
+  keyOperationsFromPrivateKey,
+  readCertificate,
+  readPrivateKey,
+} from "node-opcua-crypto";
 
 import { existsSync } from "fs";
 
@@ -280,7 +285,8 @@ export function securityWarnings(config: SecurityConfig): string[] {
       ? [
           "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT to " +
             "pin it. Encryption without it protects against passive eavesdropping, not " +
-            "against an attacker who can impersonate the endpoint.",
+            "against an attacker who can impersonate the endpoint, so control tools stay " +
+            "disabled unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true.",
         ]
       : [];
   }
@@ -298,6 +304,52 @@ export function securityWarnings(config: SecurityConfig): string[] {
   return warnings;
 }
 
+/** A validity bound as the refusal words it: ISO-8601 UTC, to the second.
+ *  `security.py` formats the same instant the same way. */
+function isoSecond(moment: Date): string {
+  return moment.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Why the pinned server certificate cannot vouch for the server, or null.
+ *
+ * Checked at every connect rather than once at startup, because a certificate
+ * expires while a process runs. Neither client library looks at the validity
+ * window of a pinned certificate — python-opcua only encrypts to its key — so
+ * without this an expired pin would keep "verifying" a server whose identity
+ * document its owner has retired.
+ *
+ * Fails closed: the connection is refused with this as the reason, rather than
+ * carrying on unverified, because the operator said which server this is and
+ * the evidence for it is no longer valid. An unreadable file is left to the
+ * library, which refuses it in its own words.
+ *
+ * `pinned_certificate_problem` in `security.py` is the other half.
+ */
+export function pinnedCertificateProblem(path: string, now: Date = new Date()): string | null {
+  let notBefore: Date;
+  let notAfter: Date;
+  try {
+    ({ notBefore, notAfter } = exploreCertificate(readCertificate(path)).tbsCertificate.validity);
+  } catch {
+    return null;
+  }
+  if (now > notAfter) {
+    return (
+      `OPCUA_SERVER_CERT ${path} expired on ${isoSecond(notAfter)}, so it cannot verify the ` +
+      `server. Pin the certificate the server presents now, renewing it on the server first ` +
+      `if that is the one that expired.`
+    );
+  }
+  if (now < notBefore) {
+    return (
+      `OPCUA_SERVER_CERT ${path} is not valid until ${isoSecond(notBefore)}, so it cannot ` +
+      `verify the server yet. Check this machine's clock, or pin the certificate the server ` +
+      `presents now.`
+    );
+  }
+  return null;
+}
+
 /** Client options that select the configured policy, mode, certificate and URI.
  *
  * `serverCertificate`, when pinned, is also what spares python-opcua's client
@@ -305,6 +357,10 @@ export function securityWarnings(config: SecurityConfig): string[] {
  * runtimes end up doing the same thing for the same reason.
  */
 export function clientSecurityOptions(config: SecurityConfig) {
+  if (config.serverCert) {
+    const problem = pinnedCertificateProblem(config.serverCert);
+    if (problem !== null) throw new Error(problem);
+  }
   return {
     securityMode: MessageSecurityMode[config.mode],
     securityPolicy: SecurityPolicy[config.policy],

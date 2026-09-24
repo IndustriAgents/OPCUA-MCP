@@ -65,6 +65,9 @@ def policy_from_fixture() -> ToolPolicy:
         {
             "OPCUA_PROFILE": spec["profile"],
             "OPCUA_SECURITY_POLICY": "Basic256Sha256" if spec["secure"] else "None",
+            # A verified server, which is what "secure" has to mean for control to
+            # be offered at all (#134); the gate itself is control-gate.json's.
+            **({"OPCUA_SERVER_CERT": "/pki/server.pem"} if spec["secure"] else {}),
             "OPCUA_POLICY_FILE": _write_policy(
                 {"control": {"writable_nodes": spec["writable_nodes"]}}
             ),
@@ -121,6 +124,7 @@ def test_a_bound_follows_a_renumbered_server():
         {
             "OPCUA_PROFILE": "operator",
             "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+            "OPCUA_SERVER_CERT": "/pki/server.pem",
             "OPCUA_POLICY_FILE": _write_policy(
                 {"control": {"writable_nodes": [{"node": "nsu=urn:plant;i=5", "max": 100}]}}
             ),

@@ -29,12 +29,20 @@ _SUMMARY_ATTRIBUTES = {
 }
 
 
-def disconnected_status(endpoint_url: str, security: str, error: str | None) -> dict:
-    """The report for a connection that is not up: configuration, and why."""
+def disconnected_status(
+    endpoint_url: str, security: str, server_identity: dict, error: str | None
+) -> dict:
+    """The report for a connection that is not up: configuration, and why.
+
+    ``server_identity`` is reported here too: it comes from configuration, and
+    "why are the control tools missing?" is as likely a question while the
+    connection is down as while it is up.
+    """
     return {
         "connected": False,
         "endpoint_url": endpoint_url,
         "security": security,
+        "server_identity": server_identity,
         "server_state": None,
         "current_time": None,
         "start_time": None,
@@ -114,7 +122,7 @@ def _diagnostics_summary(client) -> dict | None:
     return record
 
 
-def read_server_status(client, endpoint_url: str, security: str) -> dict:
+def read_server_status(client, endpoint_url: str, security: str, server_identity: dict) -> dict:
     """Read ServerStatus and the NamespaceArray over a live connection.
 
     Both are mandatory nodes in OPC UA Part 5, so no browsing is needed to find
@@ -129,6 +137,7 @@ def read_server_status(client, endpoint_url: str, security: str) -> dict:
         "connected": True,
         "endpoint_url": endpoint_url,
         "security": security,
+        "server_identity": server_identity,
         "server_state": _state_name(getattr(status, "State", None)),
         "current_time": format_iso_utc(getattr(status, "CurrentTime", None)),
         "start_time": format_iso_utc(getattr(status, "StartTime", None)),

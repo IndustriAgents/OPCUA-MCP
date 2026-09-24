@@ -25,12 +25,21 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 
-def write_self_signed(directory: Path, name: str, application_uri: str) -> tuple[Path, Path]:
+def write_self_signed(
+    directory: Path,
+    name: str,
+    application_uri: str,
+    not_before: datetime.datetime | None = None,
+    not_after: datetime.datetime | None = None,
+) -> tuple[Path, Path]:
     """Write ``<name>.pem`` / ``<name>_key.pem`` and return both paths.
 
     ``application_uri`` goes into the subjectAltName, where OPC UA requires it:
     a peer may reject a session whose ApplicationDescription URI does not match
     the certificate it presented.
+
+    The validity window defaults to a day either side of now; the bounds are
+    settable so a test can pin an expired or not-yet-valid certificate (#134).
     """
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = x509.Name(
@@ -46,8 +55,8 @@ def write_self_signed(directory: Path, name: str, application_uri: str) -> tuple
         .issuer_name(subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .not_valid_before(not_before or now - datetime.timedelta(days=1))
+        .not_valid_after(not_after or now + datetime.timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             # dataEncipherment and keyEncipherment are what the OPC UA security

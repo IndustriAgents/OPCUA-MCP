@@ -8,7 +8,9 @@ negotiated no security, or presented no certificate, has nothing to connect to.
 
 Covered here: the environment variables reaching node-opcua and python-opcua, an
 encrypted channel, `Sign` as well as `SignAndEncrypt`, username/password
-authentication, and the two failure modes an operator is most likely to hit.
+authentication, the two failure modes an operator is most likely to hit, and the
+control gate (#134): control needs the server's certificate pinned, not merely
+an encrypted channel.
 
 **Not** covered, and no mock can cover it: a real server's certificate trust
 list. python-opcua's server accepts any client certificate, whereas a Siemens,
@@ -25,6 +27,8 @@ server had died for an unrelated reason.
 
 from __future__ import annotations
 
+import datetime
+import json
 import os
 import tempfile
 from contextlib import asynccontextmanager
@@ -52,6 +56,10 @@ CORE_TOOLS = {
     "write_opcua_nodes",
     "call_opcua_method",
 }
+
+#: The tools the control gate decides (#134): every write, method call and alarm
+#: action. `full` offers all of them once the gate is open.
+CONTROL_TOOLS = {"write_opcua_nodes", "call_opcua_method"}
 
 
 def _server_params(impl: str, url: str, env: dict[str, str]) -> StdioServerParameters:
@@ -143,12 +151,28 @@ async def _read_or_reason(impl, url, env, errlog) -> str:
     return f"{text}\n{stderr_of(errlog)}"
 
 
+def status_of(result) -> dict:
+    """The `get_server_status` record."""
+    assert not result.is_error, text_of(result)
+    return json.loads(text_of(result))
+
+
 @pytest.mark.parametrize("mode", ["SignAndEncrypt", "Sign"])
 async def test_reads_and_writes_over_a_secured_connection(
-    impl, secure_opcua_server, secure_env, errlog, mode
+    impl, secure_opcua_server, secure_env, secure_pki, errlog, mode
 ):
-    """The whole point: an encrypted, authenticated session that actually works."""
-    params = _server_params(impl, secure_opcua_server, {**secure_env, "OPCUA_SECURITY_MODE": mode})
+    """The whole point: an encrypted, authenticated session that actually works.
+
+    Authenticated in both directions — the server checks the password, and this
+    client checks the server's certificate against the pin. Without the pin the
+    writes below are refused (see the control-gate tests further down).
+    """
+    env = {
+        **secure_env,
+        "OPCUA_SECURITY_MODE": mode,
+        "OPCUA_SERVER_CERT": secure_pki["server_cert"],
+    }
+    params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         tools = {tool.name for tool in (await session.list_tools()).tools}
         assert tools >= CORE_TOOLS
@@ -165,6 +189,14 @@ async def test_reads_and_writes_over_a_secured_connection(
 
         read_back = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         assert "42.5" in text_of(read_back)
+
+        status = status_of(await session.call_tool("get_server_status", {}))
+        assert status["server_identity"] == {
+            "channel_secured": True,
+            "server_authenticated": True,
+            "authentication_method": "pin",
+            "control": "secured",
+        }
 
     log = stderr_of(errlog)
     # Both runtimes summarise the negotiated security identically on connect.
@@ -329,6 +361,138 @@ async def test_an_unverified_server_says_so_on_a_secured_connection(
     assert "certificate is not being verified" in log
     assert "impersonate the endpoint" in log
     assert "server-cert=pinned" not in log
+
+
+# --- the control gate: encrypted is not authenticated (issue #134) ---------------
+
+
+@pytest.mark.parametrize("mode", ["SignAndEncrypt", "Sign"])
+async def test_an_unverified_server_gets_no_control(
+    impl, secure_opcua_server, secure_env, errlog, mode
+):
+    """Encrypted to whoever answered is not a channel to control a plant over.
+
+    Before #134 this exact configuration — `full`, a secured channel, no
+    `OPCUA_SERVER_CERT` — offered every control tool, so an attacker able to
+    answer for the endpoint got an encrypted channel and the writes with it. The
+    channel still works for reading; control is hidden, refused if called
+    anyway, and the refusal names the variable that would open it.
+    """
+    params = _server_params(impl, secure_opcua_server, {**secure_env, "OPCUA_SECURITY_MODE": mode})
+    async with connect(params, errlog) as session:
+        tools = {tool.name for tool in (await session.list_tools()).tools}
+        assert not tools & CONTROL_TOOLS, f"{impl}: offered {tools & CONTROL_TOOLS}"
+        assert "read_opcua_nodes" in tools
+
+        # Reads are unaffected: encryption still protects them in transit.
+        assert TEMPERATURE in text_of(
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
+        )
+
+        refused = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": TEMPERATURE, "value": "13.5"}]}
+        )
+        assert refused.is_error, f"{impl}: wrote over an unverified channel"
+        assert text_of(refused) == (
+            'Tool "write_opcua_nodes" is disabled because the OPC UA server\'s identity is not '
+            "verified: the channel is secured, but to whichever server answered. Set "
+            "OPCUA_SERVER_CERT to the server's certificate to pin it, or "
+            "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true on a lab network only."
+        )
+
+        status = status_of(await session.call_tool("get_server_status", {}))
+        assert status["server_identity"] == {
+            "channel_secured": True,
+            "server_authenticated": False,
+            "authentication_method": "none",
+            "control": "blocked",
+        }
+        # Nothing was written: the value is still whatever it was.
+        assert "13.5" not in text_of(
+            await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
+        )
+
+    assert "control=blocked server-identity=unverified" in stderr_of(errlog)
+
+
+async def test_the_insecure_override_does_not_vouch_for_the_server(
+    impl, secure_opcua_server, secure_env, errlog
+):
+    """`OPCUA_ALLOW_INSECURE_CONTROL` is about an unsecured channel, not an
+    unverified server: encryption and peer authentication are independent, and
+    a lab override for the one is not consent to the other."""
+    env = {**secure_env, "OPCUA_ALLOW_INSECURE_CONTROL": "true"}
+    params = _server_params(impl, secure_opcua_server, env)
+    async with connect(params, errlog) as session:
+        tools = {tool.name for tool in (await session.list_tools()).tools}
+        refused = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": TEMPERATURE, "value": "13.5"}]}
+        )
+
+    assert not tools & CONTROL_TOOLS, impl
+    assert refused.is_error, impl
+    assert "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL" in text_of(refused)
+
+
+async def test_the_unverified_override_opens_control_and_says_so(
+    impl, secure_opcua_server, secure_env, errlog
+):
+    """The explicit lab escape hatch works — and is conspicuous everywhere a
+    reviewer would look: the startup line, the status report and the audit
+    record of the very write it let through."""
+    env = {**secure_env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "true"}
+    params = _server_params(impl, secure_opcua_server, env)
+    async with connect(params, errlog) as session:
+        tools = {tool.name for tool in (await session.list_tools()).tools}
+        assert tools >= CONTROL_TOOLS, impl
+        written = await session.call_tool(
+            "write_opcua_nodes", {"nodes": [{"node_id": TEMPERATURE, "value": "21.5"}]}
+        )
+        assert '"status": "Good"' in text_of(written), text_of(written)
+        status = status_of(await session.call_tool("get_server_status", {}))
+
+    assert status["server_identity"]["control"] == "UNVERIFIED-OVERRIDE"
+    assert status["server_identity"]["server_authenticated"] is False
+
+    log = stderr_of(errlog)
+    assert "control=UNVERIFIED-OVERRIDE server-identity=unverified" in log
+    records = [
+        json.loads(line)
+        for line in log.splitlines()
+        if line.startswith("{") and '"opcua_mcp_policy"' in line
+    ]
+    assert records, f"{impl}: no audit record for the write"
+    assert {record["control"] for record in records} == {"UNVERIFIED-OVERRIDE"}, records
+
+
+async def test_an_expired_pin_refuses_to_connect(
+    impl, secure_opcua_server, secure_env, tmp_path, errlog
+):
+    """A pin outside its validity window fails closed, and says why.
+
+    Neither client library looks at the validity of a pinned certificate, so
+    without this an expired pin would go on "verifying" a server whose identity
+    document its owner has retired. The reason names the variable and the date.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expired, _ = write_self_signed(
+        tmp_path,
+        "expired",
+        SECURE_SERVER_URI,
+        not_before=now - datetime.timedelta(days=30),
+        not_after=now - datetime.timedelta(days=1),
+    )
+    env = {
+        **secure_env,
+        "OPCUA_SERVER_CERT": str(expired),
+        # The point is the reason, not the retry schedule.
+        "OPCUA_RECONNECT_MAX_RETRY": "0",
+    }
+
+    reason = await _read_or_reason(impl, secure_opcua_server, env, errlog)
+
+    assert '"status": "Good"' not in reason, f"{impl}: connected through an expired pin"
+    assert f"OPCUA_SERVER_CERT {expired} expired on" in reason, f"{impl}: got {reason!r}"
 
 
 # --- X.509 user authentication (issue #7) ---------------------------------------

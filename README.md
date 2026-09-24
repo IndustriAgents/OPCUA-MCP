@@ -248,7 +248,7 @@ and the unit suite fails if either runtime reads a variable it does not declare.
 | `OPCUA_CLIENT_CERT` | — | Client certificate (PEM/DER). Required for any policy other than `None` |
 | `OPCUA_CLIENT_KEY` | — | Private key for `OPCUA_CLIENT_CERT` |
 | `OPCUA_APPLICATION_URI` | the `subjectAltName` URI of `OPCUA_CLIENT_CERT` | Application URI announced to the server. Set it only for a certificate that carries no URI of its own |
-| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint. Requires a policy other than `None` |
+| `OPCUA_SERVER_CERT` | — | The OPC UA **server's** certificate, pinned. Without it, encryption protects against eavesdropping but not against an impostor endpoint, and **control tools are refused**. Requires a policy other than `None`; an expired pin refuses to connect |
 | `OPCUA_USERNAME` | — | Username identity; the session is anonymous when unset |
 | `OPCUA_PASSWORD` | — | Password for `OPCUA_USERNAME` |
 | `OPCUA_USER_CERT` | — | Certificate identifying the **user**, for X.509 authentication. A different key pair from `OPCUA_CLIENT_CERT`, which secures the channel. Cannot be combined with `OPCUA_USERNAME` |
@@ -259,7 +259,8 @@ and the unit suite fails if either runtime reads a variable it does not declare.
 | `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated node IDs writable by the `operator` profile. `ns=2;i=5` or, preferably, `nsu=<namespace-uri>;i=5` — see [Writing an allowlist that stays correct](#writing-an-allowlist-that-stays-correct) |
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated `object_node_id\|method_node_id` pairs callable by `operator` |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Allow `operator` to act on alarms — `acknowledge_alarm` and every `act_on_alarm` action |
-| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools without OPC UA channel security |
+| `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Lab-only override permitting control tools over a channel with **no** security (`SecurityPolicy=None`). Does not cover an unverified server on a secured channel |
+| `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Lab-only override permitting control tools over a secured channel whose server certificate is **not pinned** — encrypted, but to whoever answered |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the `EURange` the OPC UA server itself published for that node — see [Bounding the value, not only the node](#bounding-the-value-not-only-the-node) |
 | `OPCUA_AUDIT_FILE` | — | Append-only file for the control audit trail, one JSON object per line, written *beside* stderr. A file that cannot be opened stops the server rather than falling back |
 | `OPCUA_OPERATOR_ID` | — | Label stamped on every audit record, so a shipped log says which deployment a control call came from |
@@ -306,8 +307,15 @@ Three profiles, and the default is the restrictive one:
 `operator` is the one worth understanding. A write to a node outside
 `OPCUA_ALLOWED_WRITE_NODES` is refused before anything reaches OPC UA, and one
 forbidden target rejects an entire batch rather than letting part of it through.
-Both `operator` and `full` also require a secured OPC UA channel unless
-`OPCUA_ALLOW_INSECURE_CONTROL=true` says otherwise in as many words.
+Both `operator` and `full` also require a **verified server**: a security
+policy *and* the server's certificate pinned with `OPCUA_SERVER_CERT`. Encrypted
+is not enough — without the pin the channel is encrypted to whoever answered.
+Two lab-only overrides say otherwise in as many words, one per missing property:
+`OPCUA_ALLOW_INSECURE_CONTROL=true` for a channel with no security, and
+`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` for a secured one to an unpinned
+server. A refused control call names the variable to set, and
+`get_server_status` → `server_identity` says which of the three is in force
+([SECURITY.md](SECURITY.md#control-needs-a-verified-server)).
 
 The policy is enforced again on **every call**, not only when tools are listed —
 an MCP client may hold a stale catalogue, and a hidden tool is a usability
@@ -383,7 +391,7 @@ example, are in **[SECURITY.md](SECURITY.md#tool-profiles-and-control-policy)**.
 
 The defaults are unencrypted and unauthenticated, which suits the mock plant and
 nothing else. A real deployment wants a policy, a client certificate, an identity
-and a pinned server certificate:
+and a pinned server certificate — the last is what control tools require:
 
 ```bash
 OPCUA_SECURITY_POLICY=Basic256Sha256     # implies SignAndEncrypt
@@ -450,8 +458,10 @@ Full guide, including the MCP Inspector and AI-agent walkthroughs:
 > connection itself still defaults to `SecurityPolicy.None` and
 > `MessageSecurityMode.None` — unauthenticated and unencrypted. That combination
 > is for the bundled mock and local development. For production, configure both
-> channel security and an `operator` allowlist — see the two sections above. Control tools are
-> blocked on an insecure channel unless the explicit lab override is set.
+> channel security and an `operator` allowlist — see the two sections above. Control tools
+> need the OPC UA server's certificate pinned (`OPCUA_SERVER_CERT`), not only an encrypted
+> channel: encryption says nobody can read the traffic, the pin says who is on the other end.
+> Each can be waived for a lab by its own explicit override, and never by the other's.
 
 See [SECURITY.md](SECURITY.md) for the security posture, what the servers do and
 do not verify, and how to report a vulnerability;

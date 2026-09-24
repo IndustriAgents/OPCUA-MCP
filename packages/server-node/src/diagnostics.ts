@@ -8,6 +8,7 @@
 import { ClientSession, ServerState } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
+import type { ServerIdentityRecord } from "./policy.js";
 
 /** What the OPC UA server says it is (`serverStatus.build_info`). */
 export interface BuildInfoRecord {
@@ -51,6 +52,7 @@ export interface ServerStatusRecord {
   connected: boolean;
   endpoint_url: string;
   security: string;
+  server_identity: ServerIdentityRecord;
   server_state: string | null;
   current_time: string | null;
   start_time: string | null;
@@ -60,16 +62,23 @@ export interface ServerStatusRecord {
   error: string | null;
 }
 
-/** The report for a connection that is not up: configuration, and why. */
+/** The report for a connection that is not up: configuration, and why.
+ *
+ * `server_identity` is reported here too: it comes from configuration, and "why
+ * are the control tools missing?" is as likely a question while the connection
+ * is down as while it is up.
+ */
 export function disconnectedStatus(
   endpointUrl: string,
   security: string,
+  serverIdentity: ServerIdentityRecord,
   error: string | null
 ): ServerStatusRecord {
   return {
     connected: false,
     endpoint_url: endpointUrl,
     security,
+    server_identity: serverIdentity,
     server_state: null,
     current_time: null,
     start_time: null,
@@ -155,7 +164,8 @@ function diagnosticsSummary(summary: unknown): DiagnosticsRecord | null {
 export async function readServerStatus(
   session: ClientSession,
   endpointUrl: string,
-  security: string
+  security: string,
+  serverIdentity: ServerIdentityRecord
 ): Promise<ServerStatusRecord> {
   const [statusValue, namespaceValue, diagnosticsValue] = await session.readVariableValue([
     CONTRACT.diagnostics.serverStatusNodeId,
@@ -175,6 +185,7 @@ export async function readServerStatus(
     connected: true,
     endpoint_url: endpointUrl,
     security,
+    server_identity: serverIdentity,
     server_state: status ? stateName(status.state) : null,
     current_time: status ? toIsoUtc(status.currentTime) : null,
     start_time: status ? toIsoUtc(status.startTime) : null,

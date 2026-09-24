@@ -59,8 +59,10 @@ import {
 import {
   ToolPolicy,
   asNumber,
+  controlGate,
   formatNumber,
   pairsAt,
+  serverIdentityRecord,
   toolPolicy,
   valuesAt,
   type ValueBound,
@@ -454,6 +456,10 @@ function auditDecision(
     // who is calling, and a name nothing verified would be worse than none.
     operator: operatorId(),
     profile: policy.config.profile,
+    // What let control through, or kept it out: `secured` for a verified server,
+    // or which lab override was in force. An override that shows up only in a
+    // startup line nobody kept is an override nobody can audit.
+    control: controlGate(policy.config),
     tool: name,
     decision,
     ...auditTargets(tool, args),
@@ -1055,15 +1061,16 @@ export class OpcuaTools {
   private async getServerStatus(): Promise<ServerStatusRecord> {
     const endpoint = this.conn.endpointUrl;
     const security = describeSecurity(securityConfig());
+    const identity = serverIdentityRecord(this.policy.config);
     try {
       // Through the same retry as every other read, so that asking for the
       // status also re-establishes a session that has silently died — which is
       // exactly the moment someone asks.
       return await this.conn.withRetry(() =>
-        readServerStatus(this.requireSession(), endpoint, security)
+        readServerStatus(this.requireSession(), endpoint, security, identity)
       );
     } catch (error) {
-      return disconnectedStatus(endpoint, security, describeError(error));
+      return disconnectedStatus(endpoint, security, identity, describeError(error));
     }
   }
 

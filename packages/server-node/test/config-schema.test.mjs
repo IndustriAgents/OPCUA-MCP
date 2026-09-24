@@ -98,6 +98,8 @@ const PROBES = {
     parsePolicyConfig({ OPCUA_ALLOW_ACKNOWLEDGE_ALARMS: v }).acknowledgeAlarms,
   OPCUA_ALLOW_INSECURE_CONTROL: (v) =>
     parsePolicyConfig({ OPCUA_ALLOW_INSECURE_CONTROL: v }).allowInsecureControl,
+  OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL: (v) =>
+    parsePolicyConfig({ OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL: v }).allowUnverifiedServerControl,
   OPCUA_ALLOW_OUT_OF_RANGE_WRITES: (v) =>
     parsePolicyConfig({ OPCUA_ALLOW_OUT_OF_RANGE_WRITES: v }).allowOutOfRangeWrites,
   OPCUA_RECONNECT_INITIAL_DELAY_MS: (v) =>

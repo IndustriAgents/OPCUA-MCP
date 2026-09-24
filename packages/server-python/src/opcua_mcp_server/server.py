@@ -51,8 +51,10 @@ from .notices import notice
 from .policy import (
     ValueBound,
     as_number,
+    control_gate,
     describe_policy,
     format_number,
+    server_identity_record,
     values_at,
 )
 from .records import history_records, scalar_to_json, variant_to_json
@@ -215,6 +217,10 @@ def _audit_decision(
         # of who is calling, and a name nothing verified would be worse than none.
         "operator": operator_id(),
         "profile": state.policy.config.profile,
+        # What let control through, or kept it out: `secured` for a verified
+        # server, or which lab override was in force. An override that shows up
+        # only in a startup line nobody kept is an override nobody can audit.
+        "control": control_gate(state.policy.config),
         "tool": name,
         "decision": decision,
         **_audit_targets(spec, arguments),
@@ -921,6 +927,7 @@ def get_server_status(ctx: Context) -> CallToolResult:
     """
     connection = ctx.request_context.lifespan_context["opcua_connection"]
     security = describe_security(security_config())
+    identity = server_identity_record(_state(ctx).policy.config)
     try:
         # Through the same retry as every other read, so that asking for the
         # status also re-establishes a session that has silently died — which is
@@ -928,10 +935,10 @@ def get_server_status(ctx: Context) -> CallToolResult:
         # live socket from a dead one short of using it, so this read *is* the
         # liveness check.
         status = connection.run(
-            lambda: read_server_status(connection.client, connection.url, security)
+            lambda: read_server_status(connection.client, connection.url, security, identity)
         )
     except Exception as error:
-        status = disconnected_status(connection.url, security, describe_error(error))
+        status = disconnected_status(connection.url, security, identity, describe_error(error))
     return _object_result(status)
 
 

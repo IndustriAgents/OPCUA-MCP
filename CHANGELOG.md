@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — **breaking** for `operator` / `full` without `OPCUA_SERVER_CERT`
+- **Control now needs an authenticated OPC UA server, not only an encrypted
+  channel** (#134). The control gate checked `OPCUA_SECURITY_POLICY != None`,
+  which says the traffic is encrypted and nothing about who it is encrypted
+  *to*: both client libraries take whatever certificate the endpoint presents,
+  so anyone able to answer for the endpoint (DNS, ARP, a compromised switch)
+  got an encrypted channel and, with `operator` or `full`, the writes, method
+  calls and alarm actions that came with it. Control tools are now offered only
+  when the server's certificate is pinned with `OPCUA_SERVER_CERT` — the one
+  server-identity check both runtimes have — and are otherwise hidden and
+  refused. Reads, browsing and monitoring over an encrypted-but-unverified
+  channel are unchanged.
+
+  **Upgrading:** a deployment on `operator` or `full` with a security policy but
+  no `OPCUA_SERVER_CERT` loses its control tools. Pin the server's certificate
+  (see [docs/certificates.md](docs/certificates.md#the-other-direction)); or,
+  for a lab only, set the new `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true`
+  (policy file: `allow_unverified_server_control`). Deployments on
+  `SecurityPolicy=None` with `OPCUA_ALLOW_INSECURE_CONTROL=true` are unaffected;
+  that override still means exactly "control over an unsecured channel", and
+  deliberately does **not** also accept an unverified server on a secured one —
+  encryption and peer authentication are independent properties, and consent to
+  lacking one is not consent to lacking the other.
+- **A pinned certificate outside its validity window refuses to connect.**
+  Neither client library checks the dates of a pinned certificate, so an expired
+  pin went on "verifying" the server indefinitely. Both runtimes now check at
+  every connect and fail closed, naming the file and the date.
+
 ### Fixed
 - **The Claude Desktop bundle could not configure server-certificate pinning,
   X.509 user login or the audit trail** (#133). Claude Desktop passes a bundled
@@ -51,6 +79,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uv.lock` recorded the workspace packages at 0.5.0 after the 0.5.1 release.
 
 ### Added
+- **The identity status is reported everywhere control is decided.**
+  `get_server_status` carries a new `server_identity` object
+  (`channel_secured`, `server_authenticated`, `authentication_method`, and
+  `control`: `secured`, `INSECURE-OVERRIDE`, `UNVERIFIED-OVERRIDE` or
+  `blocked`), even while disconnected. Every control audit record carries the
+  same `control` value, so a write let through by a lab override says so in the
+  trail. The startup line reads e.g.
+  `Tool policy: profile=operator control=blocked server-identity=unverified`.
+- **Control refusals say what to set.** A control tool refused by the channel
+  gate now fails with `controlNeedsSecureChannel` or
+  `controlNeedsVerifiedServer` (new in `contract/tools.json` → `errors`), each
+  naming the variables that would open it, instead of "disabled by
+  OPCUA_PROFILE=full" — which blamed the profile the operator had just set.
+- `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` in `contract/config.json`, and so in
+  the generated MCPB bundle settings and MCP Registry metadata.
+- `tests/fixtures/control-gate.json`: all 60 combinations of profile, channel,
+  pin and override, driven through both runtimes.
 - **`contract/config.json`, one machine-readable definition of the configuration
   surface** (#133). Every `OPCUA_*` variable with its stable key, category, type,
   choices (and per-runtime subsets), minimum, default, secrecy, security
@@ -114,6 +159,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A runtime divergence has somewhere to go.** The bug template gains a *both
   runtimes, behaving differently* option, and CONTRIBUTING states the rule: a
   behaviour change lands in both runtimes in the same PR, or is declared.
+
+### Not done (tracked on #134)
+- A CA trust store with revocation checking. python-opcua has no server
+  certificate validation to build one on, and a Node-only mechanism would break
+  the parity both runtimes keep; pinning is exact-match, so a revoked or
+  URI-mismatched certificate is handled by replacing the pin.
 
 ## [0.5.1] — 2026-09-22
 

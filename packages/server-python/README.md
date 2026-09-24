@@ -2,7 +2,7 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with OPC UA servers. This server enables AI assistants and other MCP clients to interact with industrial automation systems through standardized OPC UA communication protocols.
 
-There is a [Node runtime](https://github.com/IndustriAgents/OPCUA-MCP/tree/main/packages/server-node) exposing the same tools from the same contract — pick whichever stack you already run.
+There is a [Node runtime](https://github.com/IndustriAgents/OPCUA-MCP/tree/main/packages/server-node) exposing the same tools from the same contract. Both are first-class: one test suite runs against both, and they are released together under one version. Pick whichever stack you already run; the few declared differences between them, and the known divergences still being fixed, are listed in [docs/compatibility.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/compatibility.md#runtime-differences).
 
 ## Overview
 
@@ -113,8 +113,10 @@ shell's `PATH`, so a bare `"command": "uvx"` often works in a terminal and fails
 in the app. Add `--dry-run` to see the result first, `--force` to replace an
 existing `opcua` entry.
 
-There is also a **downloadable `.mcpb` bundle** for Claude Desktop and
-**single-file executables** that need no Python at all — see
+There is also a **downloadable `.mcpb` bundle** for Claude Desktop — which
+carries the Node runtime, because Claude Desktop supplies Node rather than
+Python — and **single-file executables** of this runtime that need no Python at
+all — see
 [docs/install.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/install.md).
 
 In an MCP client:

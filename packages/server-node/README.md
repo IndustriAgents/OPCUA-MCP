@@ -2,7 +2,7 @@
 
 A Node / TypeScript Model Context Protocol (MCP) server for OPC UA operations, runnable with `npx`. It lets an MCP client read and write nodes, browse an address space, call methods, watch nodes for changes, and work the alarm and history surfaces of an OPC UA server.
 
-There is a [Python runtime](https://github.com/IndustriAgents/OPCUA-MCP/tree/main/packages/server-python) exposing the same tools from the same contract — pick whichever stack you already run.
+There is a [Python runtime](https://github.com/IndustriAgents/OPCUA-MCP/tree/main/packages/server-python) exposing the same tools from the same contract. Both are first-class: one test suite runs against both, and they are released together under one version. Pick whichever stack you already run; the few declared differences between them, and the known divergences still being fixed, are listed in [docs/compatibility.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/compatibility.md#runtime-differences).
 
 ## Features
 

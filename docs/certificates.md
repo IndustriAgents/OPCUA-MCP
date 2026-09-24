@@ -3,9 +3,13 @@
 Any `OPCUA_SECURITY_POLICY` other than `None` needs a client certificate and its
 private key: the identity the MCP server proves when it opens the secure
 channel, and the thing an OPC UA server decides whether to trust. Neither
-runtime generates one for you — a key pair that appears by itself is a key pair
-nobody owns — so this page covers making one that servers accept, getting it
-trusted, and reading the failures when they are not.
+runtime will use a generated one for you — a key pair that appears by itself is
+a key pair nobody owns — so this page covers making one that servers accept,
+getting it trusted, and reading the failures when they are not. (node-opcua
+does write a self-signed default into its own PKI folder the first time the Node
+runtime connects, even unsecured; it is never used for a secured channel, which
+refuses to start without `OPCUA_CLIENT_CERT`. See the
+[runtime differences](compatibility.md#runtime-differences).)
 
 Which variables to set: [Configuration](../README.md#configuration). What the
 servers verify and what they do not: [SECURITY.md](../SECURITY.md). A rehearsal
@@ -106,10 +110,14 @@ means a fresh thumbprint, so renewal repeats these steps.
 
 ## The other direction
 
-The server's own certificate is taken from its endpoint description during the
-handshake, and neither runtime checks it against a trust list — so there is no
-server certificate file to configure, and encryption here protects against
-eavesdropping rather than against an impersonated endpoint. node-opcua files the
+Pin the server's own certificate with `OPCUA_SERVER_CERT`: both runtimes then
+refuse an endpoint presenting any other certificate, and the end-to-end suite
+checks that on both. Left unset, the certificate is taken from the endpoint
+description during the handshake and not verified at all — encryption then
+protects against eavesdropping rather than against an impersonated endpoint, and
+both servers say so on stderr. Neither runtime implements a CA trust list with
+revocation, so rotating the server's certificate means updating the pinned
+file. node-opcua files the
 ones it has accepted in a per-user PKI folder of its own
 (`~/Library/Preferences/node-opcua-default-nodejs/PKI` on macOS,
 `~/.config/node-opcua-default-nodejs/PKI` on Linux, under `%APPDATA%` on

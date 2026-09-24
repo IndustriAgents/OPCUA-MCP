@@ -1,0 +1,112 @@
+{
+  "$comment": "Conformance config for the open62541 lab server (compatibility/labs/open62541/lab_server.c), built by compatibility/labs/open62541/build.sh. The harness starts and restarts it itself. Credentials are environment references: export OPCUA_CONFORMANCE_USERNAME and OPCUA_CONFORMANCE_PASSWORD (any throwaway values) before a run; the lab server reads the same two variables.",
+  "schemaVersion": 1,
+  "server": {
+    "id": "open62541-lab",
+    "name": "open62541 conformance lab server",
+    "implementation": "open62541 (C)",
+    "language": "C",
+    "independent": true,
+    "source": "compatibility/labs/open62541/lab_server.c"
+  },
+  "endpoint": "opc.tcp://127.0.0.1:4850",
+  "lab": {
+    "variables": {
+      "server": { "env": "OPEN62541_LAB_SERVER", "default": ".conformance/open62541/lab_server" }
+    },
+    "command": [
+      "{server}", "--port", "{port}",
+      "--cert", "{pki}/server.der", "--key", "{pki}/server_key.der",
+      "--trust", "{pki}/client.der", "--trust", "{pki}/user.der"
+    ],
+    "reorderedCommand": [
+      "{server}", "--port", "{port}",
+      "--cert", "{pki}/server.der", "--key", "{pki}/server_key.der",
+      "--trust", "{pki}/client.der", "--trust", "{pki}/user.der",
+      "--pad-namespace"
+    ],
+    "serverApplicationUri": "urn:opcua-mcp:conformance-lab:server",
+    "startupSeconds": 30,
+    "warmupSeconds": 30
+  },
+  "security": {
+    "policy": "Basic256Sha256",
+    "modes": ["None", "Sign", "SignAndEncrypt"],
+    "default": { "policy": "None", "mode": "None" },
+    "clientTrust": "enforced"
+  },
+  "identities": {
+    "anonymous": true,
+    "user": {
+      "username": { "env": "OPCUA_CONFORMANCE_USERNAME" },
+      "password": { "env": "OPCUA_CONFORMANCE_PASSWORD" }
+    },
+    "x509": true
+  },
+  "namespaces": { "lab": "urn:opcua-mcp:conformance-lab" },
+  "nodes": {
+    "browseRoot": "nsu=urn:opcua-mcp:conformance-lab;s=Lab",
+    "largeFolder": { "node": "nsu=urn:opcua-mcp:conformance-lab;s=Large", "minChildren": 1200 },
+    "scalars": {
+      "Boolean": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Boolean",
+      "Int32": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Int32",
+      "UInt16": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/UInt16",
+      "Int64": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Int64",
+      "Float": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Float",
+      "Double": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Double",
+      "String": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/String",
+      "DateTime": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/DateTime",
+      "ByteString": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/ByteString",
+      "Guid": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/Guid",
+      "LocalizedText": "nsu=urn:opcua-mcp:conformance-lab;s=Scalars/LocalizedText"
+    },
+    "arrays": {
+      "Double": "nsu=urn:opcua-mcp:conformance-lab;s=Arrays/Double",
+      "Int32": "nsu=urn:opcua-mcp:conformance-lab;s=Arrays/Int32",
+      "Boolean": "nsu=urn:opcua-mcp:conformance-lab;s=Arrays/Boolean",
+      "String": "nsu=urn:opcua-mcp:conformance-lab;s=Arrays/String"
+    },
+    "structures": {
+      "Range": "nsu=urn:opcua-mcp:conformance-lab;s=Structures/Range",
+      "EUInformation": "nsu=urn:opcua-mcp:conformance-lab;s=Structures/EUInformation"
+    },
+    "writable": [
+      { "node": "nsu=urn:opcua-mcp:conformance-lab;s=Scratch/Double", "value": 12.5 },
+      { "node": "nsu=urn:opcua-mcp:conformance-lab;s=Scratch/Int32", "value": -7 }
+    ],
+    "deniedWrite": { "node": "nsu=urn:opcua-mcp:conformance-lab;s=Permissions/DeniedWrite", "value": 2.0 },
+    "deniedRead": "nsu=urn:opcua-mcp:conformance-lab;s=Permissions/DeniedRead",
+    "unknown": "nsu=urn:opcua-mcp:conformance-lab;s=DoesNotExist",
+    "method": {
+      "object": "nsu=urn:opcua-mcp:conformance-lab;s=Methods",
+      "method": "nsu=urn:opcua-mcp:conformance-lab;s=Methods/Echo",
+      "arguments": ["conformance"],
+      "outputTypes": ["String", "UInt32"]
+    },
+    "deniedMethod": {
+      "object": "nsu=urn:opcua-mcp:conformance-lab;s=Methods",
+      "method": "nsu=urn:opcua-mcp:conformance-lab;s=Methods/Denied",
+      "arguments": [2, 3]
+    },
+    "historized": "nsu=urn:opcua-mcp:conformance-lab;s=Dynamic/Ramp",
+    "historyPaging": { "numValues": 100, "serverPageSize": 25 },
+    "changing": "nsu=urn:opcua-mcp:conformance-lab;s=Dynamic/Ramp",
+    "events": { "source": "ns=0;i=2253" },
+    "alarms": {
+      "source": "ns=0;i=2253",
+      "acknowledge": true,
+      "rearm": {
+        "object": "nsu=urn:opcua-mcp:conformance-lab;s=Methods",
+        "method": "nsu=urn:opcua-mcp:conformance-lab;s=Methods/RaiseAlarm"
+      }
+    }
+  },
+  "triage": [
+    {
+      "scenario": "values.structure",
+      "outcome": "project-bug",
+      "summary": "Structured values — even namespace-0 types both libraries know, Range and EUInformation — come back as a string, not an object: python-opcua's unformatted repr on Python ('Range(Low:{self.Low}, High:{self.High})', so the field values are lost) and node-opcua's debug dump on Node. The shared value codec has no ExtensionObject rule, so the two runtimes also disagree.",
+      "tracking": "#171"
+    }
+  ]
+}

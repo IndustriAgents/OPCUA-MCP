@@ -1,0 +1,88 @@
+name: Real-server conformance
+
+# Manual only, and never a required check: it builds two third-party OPC UA
+# servers from source (open62541 and Eclipse Milo) and runs the conformance
+# harness against each with both runtimes (#147). The results are uploaded as
+# an artifact for comparison with compatibility/results/ — publishing one is a
+# deliberate commit, not something CI does. Distinct from the "conformance"
+# composite action, which is the mock-based release gate (#142).
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: Which lab server to run against
+        type: choice
+        default: both
+        options: [both, open62541, milo]
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    name: Conformance against ${{ matrix.server }} (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [open62541, milo]
+    steps:
+      - name: Checkout
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Node.js
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/server-node/package-lock.json
+
+      - name: Set up Java (Milo)
+        if: matrix.server == 'milo' && (inputs.server == 'both' || inputs.server == 'milo')
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install both runtimes
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        run: |
+          uv sync --all-packages
+          cd packages/server-node && npm ci && npm run build
+
+      - name: Build the lab server
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        run: |
+          if [ "${{ matrix.server }}" = open62541 ]; then
+            echo "OPEN62541_LAB_SERVER=$(compatibility/labs/open62541/build.sh "$RUNNER_TEMP/open62541" | tail -1)" >> "$GITHUB_ENV"
+          else
+            echo "MILO_CLASSPATH=$(cat "$(compatibility/labs/milo/build.sh "$RUNNER_TEMP/milo" | tail -1)")" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run the harness (both runtimes)
+        if: inputs.server == 'both' || inputs.server == matrix.server
+        working-directory: tests
+        run: |
+          # Throwaway lab credentials, never echoed. Milo's example server has
+          # its demo account compiled in; open62541's lab server takes these.
+          export OPCUA_CONFORMANCE_USERNAME=lab
+          export OPCUA_CONFORMANCE_PASSWORD="$(openssl rand -hex 16)"
+          export MILO_EXAMPLE_USERNAME=user MILO_EXAMPLE_PASSWORD=password1
+          uv run --no-sync python -m conformance run \
+            --config "../compatibility/labs/${{ matrix.server }}.json" \
+            --out "$RUNNER_TEMP/results/${{ matrix.server }}.json"
+
+      - name: Upload the result
+        if: always() && (inputs.server == 'both' || inputs.server == matrix.server)
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-${{ matrix.server }}
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: warn

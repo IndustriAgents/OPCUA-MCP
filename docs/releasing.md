@@ -75,6 +75,48 @@ until the same suite has passed on the tag. Both run it in required mode
 instead of quietly skipping a subsystem — see
 [../tests/README.md](../tests/README.md#required-mode).
 
+## The conformance matrix in the release notes
+
+Every release's notes link the real-server conformance matrix **as of its tag**,
+so a reader can see which servers that exact version was run against and what
+was found:
+
+```markdown
+Conformance: [real-server matrix for v0.6.0](https://github.com/IndustriAgents/OPCUA-MCP/blob/v0.6.0/docs/compatibility.md#real-server-conformance)
+```
+
+Put the line in the release's CHANGELOG section and in the GitHub release body.
+Link the tag, never `main`: the matrix on `main` moves on, and the tag is what
+pins both the matrix and the dated result files it was generated from.
+
+The matrix records the package version each result was produced with. A
+release may be called **production-qualified** for a server only when the
+matrix at its tag has a result for that server *at the version being released*
+and its level is *Supported*, or *Partially supported* with each finding named
+in the release notes. To get there, run the harness on the release commit
+before tagging — against every lab server and any vendor server you have — and
+commit the results with the re-rendered matrix:
+
+```bash
+compatibility/labs/open62541/build.sh && compatibility/labs/milo/build.sh
+export OPEN62541_LAB_SERVER=.conformance/open62541/lab_server
+export MILO_CLASSPATH="$(cat .conformance/milo/classpath)"
+export OPCUA_CONFORMANCE_USERNAME=lab OPCUA_CONFORMANCE_PASSWORD="$(openssl rand -hex 16)"
+export MILO_EXAMPLE_USERNAME=user MILO_EXAMPLE_PASSWORD=password1   # Milo's compiled-in demo account
+cd tests
+uv run --no-sync python -m conformance run --config ../compatibility/labs/open62541.json
+uv run --no-sync python -m conformance run --config ../compatibility/labs/milo.json
+uv run --no-sync python -m conformance render
+```
+
+A release without fresh results is still a release; its notes then say which
+version the linked results were produced with, and do not claim production
+qualification. The unit tier (step 3 above) fails if the matrix does not match
+the committed results or a result carries an unclassified failure, so a stale or
+hand-edited matrix cannot be tagged. The same harness runs in CI on demand —
+**Actions → Real-server conformance** — against both lab servers built from
+source, and uploads the results as an artifact rather than committing them.
+
 ## The downloadable artifacts
 
 `release.yml` runs off the same tag and handles what `publish.yml` cannot: the

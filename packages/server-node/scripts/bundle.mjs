@@ -31,6 +31,7 @@ const here = dirname(fileURLToPath(import.meta.url)); // packages/server-node/sc
 export const PKG_ROOT = join(here, "..");
 export const REPO_ROOT = join(PKG_ROOT, "..", "..");
 export const CONTRACT_PATH = join(REPO_ROOT, "contract", "tools.json");
+export const CONFIG_SCHEMA_PATH = join(REPO_ROOT, "contract", "config.json");
 
 /** The version every generated artifact is stamped with. */
 const PACKAGE = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"));
@@ -74,8 +75,10 @@ const EXTERNAL = ["proper-lockfile"];
 
 /** esbuild plugin: replace `./contract.js` with the contract inlined as literals.
  *
- * Reads the canonical `/contract/tools.json` and `package.json` at build time,
- * so a bundle can no more drift from the contract than the npm package can.
+ * Reads the canonical `/contract/tools.json`, `/contract/config.json` and
+ * `package.json` at build time, so a bundle can no more drift from the contract
+ * than the npm package can. Keep it in step with `contract.ts`'s exports: one
+ * the server imports but this omits fails the bundle build, not a user's run.
  */
 function inlineContract() {
   return {
@@ -92,6 +95,8 @@ function inlineContract() {
         contents: [
           `export const CONTRACT = ${readFileSync(CONTRACT_PATH, "utf8")};`,
           `export const VERSION = ${JSON.stringify(VERSION)};`,
+          `const CONFIG_SCHEMA = ${readFileSync(CONFIG_SCHEMA_PATH, "utf8")};`,
+          `export function configSchema() { return CONFIG_SCHEMA; }`,
         ].join("\n"),
         loader: "js",
       }));

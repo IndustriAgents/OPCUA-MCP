@@ -2,8 +2,11 @@
 
 The root [`server.json`](../server.json) describes this server for the official
 [MCP Registry](https://modelcontextprotocol.io/registry): the npm package, its
-stdio transport, and every environment variable it reads. The npm manifest
-carries the matching `"mcpName": "io.github.midhunxavier/opcua"`, which is how
+stdio transport, and every environment variable it reads. That last part —
+`packages[].environmentVariables` — is generated from
+[`contract/config.json`](../contract/config.json); edit the schema and run
+`npm run config:generate` in `packages/server-node` rather than editing it here.
+The npm manifest carries the matching `"mcpName": "io.github.midhunxavier/opcua"`, which is how
 the registry proves the package and this repository belong to the same owner.
 
 > **Status: metadata only.** Nothing here publishes a listing. `server.json` is
@@ -56,10 +59,16 @@ Only link to the listing once that returns it.
 
 ## What the metadata says, and does not
 
-- **`OPCUA_SERVER_URL` is the only required variable.** No endpoint of anyone's
-  is embedded, and no credential is.
-- **`OPCUA_PASSWORD` is marked `isSecret`**, so a client that honours the flag
-  will not store or display it in the clear.
+- **`OPCUA_SERVER_URL` and `OPCUA_PROFILE` are the only required variables**,
+  and both carry defaults: the mock's endpoint and `observe`. No endpoint of
+  anyone's is embedded, and no credential is.
+- **`OPCUA_PASSWORD` is marked `isSecret`**, as are the paths to the two private
+  keys (`OPCUA_CLIENT_KEY`, `OPCUA_USER_KEY`), so a client that honours the flag
+  will not store or display them in the clear.
+- **Every variable either runtime reads is listed** — including server
+  certificate pinning, X.509 user authentication, value-range overrides and the
+  audit file — because the list is generated from the same schema the unit
+  suite holds both runtimes to.
 - **Security variables are optional** because the mocks need none. Their
   descriptions say when a certificate and policy are required instead.
 - **`OPCUA_PROFILE` defaults to `observe`**, the same default the servers apply.

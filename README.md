@@ -224,7 +224,11 @@ it asks the server for its retained conditions directly (ConditionRefresh).
 
 ## Configuration
 
-Both runtimes read the same environment variables:
+Both runtimes read the same environment variables. Their canonical, machine-readable
+definition — type, choices, default, whether the value is secret, which runtimes
+read it — is [`contract/config.json`](contract/config.json): the Claude Desktop
+bundle's settings form and the MCP Registry's `server.json` are generated from it,
+and the unit suite fails if either runtime reads a variable it does not declare.
 
 | Variable | Default | Meaning |
 |---|---|---|

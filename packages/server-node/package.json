@@ -19,7 +19,9 @@
     "format:check": "prettier --check .",
     "prepare": "npm run build",
     "build:mcpb": "node scripts/build-mcpb.mjs",
-    "build:sea": "node scripts/build-sea.mjs"
+    "build:sea": "node scripts/build-sea.mjs",
+    "config:generate": "node scripts/config-artifacts.mjs",
+    "config:check": "node scripts/config-artifacts.mjs --check"
   },
   "keywords": [
     "mcp",

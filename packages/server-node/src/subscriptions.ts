@@ -39,6 +39,26 @@ export const DEFAULT_BUFFER_SIZE = LIMITS.defaultBufferSize;
 export const MIN_BUFFER_SIZE = LIMITS.minBufferSize;
 export const MAX_BUFFER_SIZE = LIMITS.maxBufferSize;
 
+/** The CreateSubscription request behind one data-change subscription.
+ *
+ * Everything but the publishing interval comes from the contract. Keep-alives
+ * and lifetime are expressed in publishing intervals, so deriving them from a
+ * count rather than a duration keeps a fast subscription from expiring between
+ * two quiet publishes. These numbers were written here and nowhere in the Python
+ * runtime, which sent its library's defaults and so left an orphaned
+ * subscription alive for hours instead of a minute (#157).
+ */
+export function subscriptionRequest(publishingInterval: number) {
+  return {
+    requestedPublishingInterval: publishingInterval,
+    requestedMaxKeepAliveCount: LIMITS.request.maxKeepAliveCount,
+    requestedLifetimeCount: LIMITS.request.lifetimeCount,
+    maxNotificationsPerPublish: LIMITS.request.maxNotificationsPerPublish,
+    publishingEnabled: true,
+    priority: LIMITS.request.priority,
+  };
+}
+
 /** One subscription as the contract describes it (`subscriptionRecords`). */
 export interface SubscriptionRecord {
   subscription_id: string;
@@ -175,7 +195,7 @@ export function resolveFilter(options: {
   dataChangeTrigger?: string | null;
 }): SubscriptionFilter {
   const deadbandType = options.deadbandType ?? "none";
-  if (!(deadbandType in DEADBAND_TYPES)) {
+  if (!Object.hasOwn(DEADBAND_TYPES, deadbandType)) {
     throw new Error(
       message("notAllowedValue", {
         tool: "subscribe_opcua_nodes",
@@ -188,7 +208,7 @@ export function resolveFilter(options: {
     );
   }
   const trigger = options.dataChangeTrigger ?? DEFAULT_DATA_CHANGE_TRIGGER;
-  if (!(trigger in DATA_CHANGE_TRIGGERS)) {
+  if (!Object.hasOwn(DATA_CHANGE_TRIGGERS, trigger)) {
     throw new Error(
       message("notAllowedValue", {
         tool: "subscribe_opcua_nodes",
@@ -333,17 +353,7 @@ export class SubscriptionManager {
     const { nodeId, publishingInterval, samplingInterval, bufferSize } = entry;
     const filter = monitoringFilter(entry.filter);
 
-    const subscription = await session.createSubscription2({
-      requestedPublishingInterval: publishingInterval,
-      // Keep-alives and lifetime are expressed in publishing intervals, so
-      // deriving them from a count rather than a duration keeps a fast
-      // subscription from expiring between two quiet publishes.
-      requestedMaxKeepAliveCount: 10,
-      requestedLifetimeCount: 60,
-      maxNotificationsPerPublish: 100,
-      publishingEnabled: true,
-      priority: 10,
-    });
+    const subscription = await session.createSubscription2(subscriptionRequest(publishingInterval));
 
     try {
       const monitoredItem = await subscription.monitor(
@@ -373,11 +383,10 @@ export class SubscriptionManager {
       // Never leave the OPC UA server holding a subscription this process has
       // forgotten about: it would keep publishing until its lifetime expires.
       await terminateQuietly(subscription);
-      throw new Error(
-        `Failed to subscribe to node ${nodeId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      // Unwrapped: `subscribe_opcua_nodes` names the node through the contract's
+      // `subscribeFailed`, and wrapping here as well said "Failed to subscribe to
+      // node X" twice in one message (#157).
+      throw error;
     }
   }
 

@@ -473,6 +473,101 @@ async def test_an_audit_file_that_cannot_be_opened_stops_the_server(impl, opcua_
     assert "OPCUA_AUDIT_FILE" in result.stderr, f"{impl}: {result.stderr}"
 
 
+#: A control call refused before authorization, for its shape or for its size.
+#: The oversized value is a string past `limits.maxStringBytes`; it is refused
+#: before the schema is even consulted (#139), and never reaches the plant.
+REFUSED_CONTROL_CALLS = {
+    "malformed": (
+        {"nodes": [{"node_id": "ns=2;i=13"}]},
+        "write_opcua_nodes requires nodes[0].value",
+    ),
+    "oversized": (
+        {"nodes": [{"node_id": "ns=2;i=13", "value": "x" * 131_073}]},
+        "write_opcua_nodes argument nodes[0].value is a string of 131073 bytes, over the "
+        "131072-byte limit on one string (limits.maxStringBytes). Nothing was sent to the "
+        "OPC UA server.",
+    ),
+}
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+@pytest.mark.parametrize("kind", list(REFUSED_CONTROL_CALLS))
+async def test_a_control_call_the_contract_refuses_is_still_audited(impl, kind, opcua_server):
+    """A control call refused for its shape or its size is still a control attempt.
+
+    Python checked both inside its audited block and Node before it, so the same
+    refused write left a `denied` line on one runtime and nothing at all on the
+    other (#157). Both record it now, with the refusal as the reason.
+    """
+    if impl == "node" and not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    arguments, reason = REFUSED_CONTROL_CALLS[kind]
+    async with connect_capturing_stderr(operator_params(impl, opcua_server)) as (session, errlog):
+        result = await session.call_tool("write_opcua_nodes", arguments)
+        assert result.is_error, impl
+        records = audit_records(errlog)
+
+    assert [record["decision"] for record in records] == ["denied"], f"{impl}: {records}"
+    [refusal] = records
+    assert refusal["reason"] == reason, refusal
+    assert refusal["node_ids"] == ["ns=2;i=13"], refusal
+
+
+#: Malformed policy files and the refusal both runtimes must give at startup.
+#: The full rule table is `tests/fixtures/policy-file-validation.json`, run by
+#: both unit suites; these are the shapes that used to escape as a Python
+#: traceback or start silently on Node, driven through the real entry points.
+MALFORMED_POLICY_FILES = {
+    "a callable_methods entry missing its method_id": {
+        "control": {"callable_methods": [{"object_id": "ns=2;i=1"}]}
+    },
+    "control given as a string": {"control": "operator"},
+    "a flag given as the string false": {"allow_insecure_control": "false"},
+    "a profile that is not a string": {"profile": 5},
+}
+
+
+@pytest.mark.parametrize("shape", list(MALFORMED_POLICY_FILES))
+def test_a_malformed_policy_file_stops_both_runtimes_with_the_same_first_error(
+    shape, opcua_server, tmp_path
+):
+    """One clean `Configuration error:` line, the same on both, and no audit file.
+
+    The audit file is the check order made visible (#157). Node opened it before
+    reading the policy, so a bad policy left a freshly created, empty audit file
+    behind; both now check security, policy and reconnection before creating it.
+    """
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built")
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps(MALFORMED_POLICY_FILES[shape]), encoding="utf-8")
+
+    first_errors = {}
+    for impl in ("python", "node"):
+        audit = tmp_path / f"{impl}-audit.jsonl"
+        params = operator_params(impl, opcua_server)
+        params.env["OPCUA_POLICY_FILE"] = str(policy)
+        params.env["OPCUA_AUDIT_FILE"] = str(audit)
+        result = subprocess.run(
+            [params.command, *params.args],
+            env=params.env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            stdin=subprocess.DEVNULL,
+        )
+        assert result.returncode == 1, f"{impl}: exited {result.returncode}:\n{result.stderr}"
+        assert "Traceback" not in result.stderr, f"{impl}:\n{result.stderr}"
+        assert not audit.exists(), f"{impl}: created the audit file before refusing the policy"
+        errors = [
+            line for line in result.stderr.splitlines() if line.startswith("Configuration error:")
+        ]
+        assert errors, f"{impl}: no configuration error reported:\n{result.stderr}"
+        first_errors[impl] = errors[0]
+
+    assert first_errors["python"] == first_errors["node"], first_errors
+
+
 async def test_both_runtimes_write_the_same_record_shape(opcua_server):
     """One call, both servers, the same keys in the same order.
 

@@ -626,6 +626,7 @@ export class OpcuaTools {
       // range was true of the session that said it.
       this.metadata.forget();
       await this.subs.reattach(session);
+      await this.events.reattach(session);
       // With the session in hand, not through the connection: this runs inside
       // `reconnect()`, and a probe that called `ensureConnection()` from here
       // would re-enter the connect path it is standing in.
@@ -941,19 +942,25 @@ export class OpcuaTools {
       if (!spec) {
         throw new Error(message("unknownTool", { tool: name }));
       }
-      // Size before shape: the validator's work grows with the request, and this
-      // stops at the first thing out of bounds (issue #139). See limits.ts.
-      checkRequestBounds(name, args);
-      validateArguments(name, spec.inputSchema, args);
-      // Before the policy and the audit trail read the session, not merely
-      // before the request goes out. `get_server_status` is the exception: it
-      // reports on the connection, and waits for the warm-up only boundedly.
-      if (name !== "get_server_status") await this.awaitConnectionInFlight();
 
-      // This is the security boundary. Filtering tools/list improves the model's
-      // choices, but clients cache catalogs and may call a previously visible
-      // tool directly, so authorize again before touching the OPC UA network.
       try {
+        // Inside the audited block, as on the Python runtime: a control call
+        // refused for its size or its shape is still a control attempt, and is
+        // recorded as `denied`. This one checked both first and so left no line
+        // at all (#157).
+        //
+        // Size before shape: the validator's work grows with the request, and
+        // this stops at the first thing out of bounds (issue #139). See limits.ts.
+        checkRequestBounds(name, args);
+        validateArguments(name, spec.inputSchema, args);
+        // Before the policy and the audit trail read the session, not merely
+        // before the request goes out. `get_server_status` is the exception: it
+        // reports on the connection, and waits for the warm-up only boundedly.
+        if (name !== "get_server_status") await this.awaitConnectionInFlight();
+        // This is the security boundary. Filtering tools/list improves the
+        // model's choices, but clients cache catalogs and may call a previously
+        // visible tool directly, so authorize again before touching the OPC UA
+        // network.
         this.policy.authorize(name, args);
       } catch (error) {
         auditAfter(
@@ -2219,7 +2226,7 @@ export class OpcuaTools {
     // In the response, not only on stderr: an agent that cannot tell a complete
     // event stream from one that lost alarms reads the gap as quiet. As a field
     // since issue #137, and as a sentence still for a reader of the text alone.
-    return withNotice(
+    const result = withNotice(
       eventResult(
         drained.records,
         drainCompleteness({
@@ -2231,6 +2238,9 @@ export class OpcuaTools {
       ),
       drained.dropped > 0 ? droppedEventsMessage(drained.dropped, drained.size) : null
     );
+    // The same reasoning for the gap a reconnect leaves: nothing was dropped
+    // from the buffer, the events simply never arrived (#157).
+    return withNotice(result, drained.resubscribed ? notice("eventsResubscribed") : null);
   }
 
   /** `read_event_history`: the events the server kept, for a range already past.

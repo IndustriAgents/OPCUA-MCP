@@ -123,7 +123,10 @@ function checkObject(
     // Before the per-property checks, so a typo is reported as the typo it is
     // rather than as whatever the misspelled name happens to resemble.
     for (const name of Object.keys(value)) {
-      if (!(name in properties)) {
+      // Own properties only. `in` walks the prototype, so `constructor`,
+      // `toString` and `__proto__` passed as argument names were accepted as
+      // though the schema declared them; Python's dict lookup never did (#157).
+      if (!Object.hasOwn(properties, name)) {
         throw new Error(
           message("unknownArgument", {
             tool,

@@ -98,6 +98,13 @@ export const CONTRACT: {
     deadbandTypes: Record<string, string>;
     dataChangeTriggers: Record<string, string>;
     defaultDataChangeTrigger: string;
+    /** CreateSubscription parameters beside the publishing interval; see subscriptions.ts. */
+    request: {
+      maxKeepAliveCount: number;
+      lifetimeCount: number;
+      maxNotificationsPerPublish: number;
+      priority: number;
+    };
   };
   traversal: {
     rootNodeId: string;
@@ -128,6 +135,15 @@ export const CONTRACT: {
       bufferSize: number;
       readLimit: number;
       refreshTimeoutSeconds: number;
+    };
+    /** CreateSubscription parameters for every event subscription; see events.ts. */
+    subscriptionRequest: {
+      publishingIntervalMs: number;
+      queueSize: number;
+      maxKeepAliveCount: number;
+      lifetimeCount: number;
+      maxNotificationsPerPublish: number;
+      priority: number;
     };
     fields: Array<{ key: string; path: string }>;
   };

@@ -338,6 +338,14 @@ background and keeps the same session, while the Python runtime rebuilds a fresh
 session when the next call needs one. The settings mean the same on both; see
 [runtime differences](docs/compatibility.md#runtime-differences).
 
+Event subscriptions are re-created on a new session too, and the next `read_events` adds a
+note that events raised while the connection was down were not received
+(`read_event_history` can recover them from a server that stores them).
+
+Stopped by `SIGTERM` or `SIGINT`, either server deletes its subscriptions and
+closes the session before exiting 0, waiting at most five seconds for an OPC UA
+server that has stopped answering.
+
 Plant connectivity never gates the MCP protocol. Both servers answer
 `initialize` at once and make their first connection in the background; a
 `tools/list` or `get_server_status` that arrives while that first round is

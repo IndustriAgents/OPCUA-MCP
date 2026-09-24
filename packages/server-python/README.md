@@ -268,7 +268,9 @@ session rather than failing until the process is restarted. `python-opcua` has n
 reconnection of its own, so this server owns the whole of it — including building
 a fresh client per attempt, because a restarted server may present a new
 certificate. Data-change subscriptions are re-created on the new session, so the
-IDs keep working and the values already buffered are still there to be read. Tune
+IDs keep working and the values already buffered are still there to be read. Event
+subscriptions are re-created too, and the next `read_events` notes that events
+raised while the connection was down were not received. Tune
 it with `OPCUA_RECONNECT_INITIAL_DELAY_MS`, `OPCUA_RECONNECT_MAX_DELAY_MS`,
 `OPCUA_RECONNECT_MAX_RETRY` and `OPCUA_SESSION_TIMEOUT_MS` above.
 

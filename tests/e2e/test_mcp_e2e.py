@@ -804,6 +804,9 @@ async def test_subscribing_to_an_unknown_node_fails_identically(server):
         result = await session.call_tool("subscribe_opcua_nodes", {"node_ids": ["ns=2;i=999999"]})
         text = text_of(result)
         assert "Failed to subscribe to node ns=2;i=999999" in text, f"{impl}: got {text!r}"
+        # Once. Node's subscription manager and its tool body both prefixed it,
+        # so the sentence said the same thing twice (#157).
+        assert text.count("Failed to subscribe") == 1, f"{impl}: got {text!r}"
         assert "BadNodeIdUnknown" in text, f"{impl}: got {text!r}"
         assert result.is_error is True, f"{impl}: expected an error result"
 

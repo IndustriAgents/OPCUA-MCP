@@ -193,9 +193,19 @@ leaving an empty subscription behind.
 Teardown is not optional, and it is the part that is easy to get wrong: closing
 the OPC UA session without deleting its subscriptions leaves the server
 publishing into the void until their lifetime expires. Both runtimes delete
-first, session second — Python in the lifespan's `finally`, Node on `SIGINT`,
-`SIGTERM` *and* `server.onclose`, because the usual end of an MCP session is not
-a signal at all but the client closing stdin.
+first, session second, on every way a session ends: the client closing stdin
+(Python's lifespan `finally`, Node's `server.onclose`), which is the usual one,
+and `SIGINT` / `SIGTERM`, which is how a supervisor stops a process. The Python
+runtime had no signal handler until #157, so a `SIGTERM` killed it where it
+stood; both now bound the signal path by the same five-second grace period and
+exit 0.
+
+The lifetime they would otherwise expire after is the same on both runtimes,
+because both send the same CreateSubscription parameters —
+`contract/tools.json` -> `subscriptions.request` for data changes and
+`events.subscriptionRequest` for events. Python used to pass a bare publishing
+interval and so took python-opcua's defaults (a lifetime of 10000 publishing
+intervals, about 2.7 hours at the default interval, against Node's 60).
 
 ### Filtering where the values are
 
@@ -421,6 +431,14 @@ event filter rather than a monitored value — and that `list_active_alarms`
 sidesteps the buffer entirely: it makes its own short-lived subscription, calls
 ConditionRefresh, and collects the retained conditions the server replays
 between the RefreshStart and RefreshEnd events.
+
+A new session re-creates the event subscriptions as it re-creates the
+data-change ones, keeping what was already buffered. Unlike a data change, a
+missed event is not superseded by the next one, so the gap is reported: the
+first `read_events` after the reconnect carries the contract's
+`eventsResubscribed` notice. The runtimes used to disagree here in two wrong
+ways — Node dropped the buffer and answered "not subscribed", Python drained a
+buffer bound to the dead session and answered `[]` indefinitely (#157).
 
 `contract/tools.json` -> `events` is what keeps the two runtimes saying the same
 thing: one list of OPC UA browse paths that is simultaneously the EventFilter

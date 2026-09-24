@@ -118,6 +118,17 @@ outcome than "it could not do that".
 Point `OPCUA_POLICY_FILE` at it. Environment variables override the file, so a
 deployment can ship one policy and narrow it per host.
 
+The file is checked strictly and completely at startup, on both runtimes, before
+anything else is opened. A field of the wrong type is refused rather than
+coerced — the flags must be `true` or `false` (the string `"false"` used to be
+truthy, and so *enabled* what it named), `control` must be an object, each
+`callable_methods` entry needs a non-empty `object_id` and `method_id`, and
+`NaN` / `Infinity` are not JSON. `null` means "not set" for every field. A field
+an environment variable overrides is still checked, so a broken file cannot pass
+unnoticed until the override is removed. The server then stops with one
+`Configuration error:` line, worded the same by both runtimes; the full rule
+table is `tests/fixtures/policy-file-validation.json`.
+
 ### Bounding the value, not only the node
 
 Node identity is not the whole of a write. A model that has correctly identified

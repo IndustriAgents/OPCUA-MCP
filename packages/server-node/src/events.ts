@@ -73,22 +73,21 @@ export function droppedEventsMessage(dropped: number, bufferSize: number): strin
 
 /** The subscription parameters both the buffered and the ConditionRefresh paths use.
  *
- * `queueSize` is the load-bearing one. A ConditionRefresh answers with the
- * RefreshStart event, every retained condition, and the RefreshEnd event in one
- * publishing cycle; with the default queue of 1 the server discards all but the
- * last and the refresh looks like it found no alarms at all.
+ * From the contract, which says why each number is what it is — above all
+ * `queueSize`, without which a ConditionRefresh looks like it found no alarms.
+ * They were written out here while the Python runtime sent python-opcua's own
+ * defaults, so the two asked a server for very different subscriptions (#157).
  */
-const PUBLISHING_INTERVAL_MS = 200;
-const QUEUE_SIZE = 1000;
+const REQUEST = EVENTS.subscriptionRequest;
 
-function subscriptionRequest() {
+export function subscriptionRequest() {
   return {
-    requestedPublishingInterval: PUBLISHING_INTERVAL_MS,
-    requestedLifetimeCount: 1000,
-    requestedMaxKeepAliveCount: 20,
-    maxNotificationsPerPublish: 10000,
+    requestedPublishingInterval: REQUEST.publishingIntervalMs,
+    requestedLifetimeCount: REQUEST.lifetimeCount,
+    requestedMaxKeepAliveCount: REQUEST.maxKeepAliveCount,
+    maxNotificationsPerPublish: REQUEST.maxNotificationsPerPublish,
     publishingEnabled: true,
-    priority: 1,
+    priority: REQUEST.priority,
   };
 }
 
@@ -116,7 +115,7 @@ async function monitorEvents(
     {
       samplingInterval: 0,
       discardOldest: true,
-      queueSize: QUEUE_SIZE,
+      queueSize: REQUEST.queueSize,
       filter: buildEventFilter(),
     },
     TimestampsToReturn.Both
@@ -146,12 +145,15 @@ function isRefreshMarker(record: EventRecord): boolean {
 /** One notifier node's live subscription and the events it has collected. */
 interface EventBuffer {
   session: ClientSession;
-  subscription: ClientSubscription;
+  /** Null only while `subscribe` is creating it. */
+  subscription: ClientSubscription | null;
   severityMin: number;
   size: number;
   records: EventRecord[];
   /** Events the buffer dropped because it was full, reported once on read. */
   dropped: number;
+  /** Re-created on a new session since the last read, so there is a gap to report. */
+  resubscribed: boolean;
 }
 
 /**
@@ -194,15 +196,57 @@ export class EventSubscriptions {
     // happened reads the missing events as quiet.
     const replaced = await this.drop(nodeId);
 
-    const subscription = await session.createSubscription2(subscriptionRequest());
     const buffer: EventBuffer = {
       session,
-      subscription,
+      subscription: null,
       severityMin,
       size: bufferSize,
       records: [],
       dropped: 0,
+      resubscribed: false,
     };
+    await this.attach(session, nodeId, buffer);
+    this.buffers.set(nodeId, buffer);
+    return { replaced };
+  }
+
+  /** Re-create every event subscription on `session`, after the old one died.
+   *
+   * The promise `SubscriptionManager.reattach` makes for data changes, kept for
+   * events too: the subscription the agent set up keeps working, and what was
+   * buffered before the outage is still there to read. The runtimes used to get
+   * this wrong in two different ways — this one dropped the buffer and answered
+   * "not subscribed", Python kept draining an empty buffer from a subscription
+   * that no longer existed (#157). The gap is not hidden: the next `read_events`
+   * says it happened.
+   *
+   * Best-effort per notifier. One the new session will not take back is dropped,
+   * so `read_events` says "not subscribed" rather than "nothing happened".
+   */
+  async reattach(session: ClientSession): Promise<void> {
+    for (const [nodeId, buffer] of [...this.buffers]) {
+      try {
+        await this.attach(session, nodeId, buffer);
+        buffer.resubscribed = true;
+        console.error(`Re-established the event subscription on node ${nodeId}`);
+      } catch (error) {
+        this.buffers.delete(nodeId);
+        console.error(
+          `Could not re-establish the event subscription on node ${nodeId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+  }
+
+  /** Create the OPC UA subscription and monitored item behind one buffer.
+   *
+   * Shared by `subscribe` and `reattach`, so a re-created subscription asks the
+   * server for exactly what the first one did.
+   */
+  private async attach(session: ClientSession, nodeId: string, buffer: EventBuffer) {
+    const subscription = await session.createSubscription2(subscriptionRequest());
 
     // Never leave the OPC UA server holding a subscription this process has
     // forgotten about: it would keep publishing until its lifetime expires, and
@@ -230,24 +274,35 @@ export class EventSubscriptions {
       }
     });
 
-    this.buffers.set(nodeId, buffer);
-    return { replaced };
+    buffer.session = session;
+    buffer.subscription = subscription;
   }
 
-  /** Take up to `limit` of the oldest buffered events, removing them. */
+  /** Take up to `limit` of the oldest buffered events, removing them.
+   *
+   * `resubscribed` is reported once, like `dropped`: the read after a reconnect
+   * is the one that has a gap in it.
+   */
   drain(
     session: ClientSession,
     nodeId: string,
     limit: number
-  ): { records: EventRecord[]; remaining: number; dropped: number; size: number } | null {
+  ): {
+    records: EventRecord[];
+    remaining: number;
+    dropped: number;
+    size: number;
+    resubscribed: boolean;
+  } | null {
     const buffer = this.live(session, nodeId);
     if (!buffer) return null;
 
     const records = buffer.records.splice(0, limit);
-    const dropped = buffer.dropped;
+    const { dropped, resubscribed } = buffer;
     buffer.dropped = 0;
+    buffer.resubscribed = false;
     this.remember(records);
-    return { records, remaining: buffer.records.length, dropped, size: buffer.size };
+    return { records, remaining: buffer.records.length, dropped, size: buffer.size, resubscribed };
   }
 
   /** Tear down the subscription for `nodeId`, if there is one. */
@@ -256,7 +311,7 @@ export class EventSubscriptions {
     const buffer = this.buffers.get(nodeId);
     if (!buffer) return false;
     this.buffers.delete(nodeId);
-    await terminateQuietly(buffer.subscription);
+    if (buffer.subscription) await terminateQuietly(buffer.subscription);
     return true;
   }
 

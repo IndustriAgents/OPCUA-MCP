@@ -64,18 +64,102 @@ def _profile(raw: str | None) -> str:
     return normalized
 
 
+def _not_json(constant: str) -> Any:
+    """Refuse ``NaN``, ``Infinity`` and ``-Infinity``, which are not JSON.
+
+    Python's parser accepts them and JavaScript's does not, so a bound of
+    ``Infinity`` was a policy file one runtime started with and the other refused.
+    """
+    raise ValueError(f"{constant} is not valid JSON")
+
+
 def _load_policy_file(path: str | None) -> dict[str, Any]:
     if path is None:
         return {}
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"), parse_constant=_not_json)
     except Exception as exc:
         raise ValueError(f"Cannot read OPCUA_POLICY_FILE {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"OPCUA_POLICY_FILE {path} must contain a JSON object")
-    if data.get("version", 1) != 1:
-        raise ValueError(f"Unsupported OPC UA policy version {data['version']}; expected 1")
+    _check_policy_file(data)
     return data
+
+
+def _check_policy_file(file: dict[str, Any]) -> None:
+    """Refuse a policy file whose fields are the wrong shape, before any is used.
+
+    Every field, whether or not an environment variable overrides it: a broken
+    file must not start working-looking the day the override is removed. The
+    checks run in one fixed order so a file with two faults reports the same one
+    on both runtimes, and ``null`` means "not set" throughout — as it already did
+    for ``min`` and ``max``.
+
+    This used to be whatever each runtime's code happened to do with a surprise.
+    ``bool("false")`` is True, so ``"allow_insecure_control": "false"`` *enabled*
+    insecure control; a ``callable_methods`` entry missing its ids was a
+    ``KeyError`` traceback here and the allowlist entry ``undefined|undefined``
+    in Node; ``"version": true`` passed because ``True == 1`` (#157).
+    ``tests/fixtures/policy-file-validation.json`` pins every rule for both.
+    """
+    version = file.get("version")
+    if version is not None and (
+        isinstance(version, bool) or not isinstance(version, (int, float)) or version != 1
+    ):
+        raise ValueError(f"Unsupported OPC UA policy version {_json(version)}; expected 1")
+    profile = file.get("profile")
+    if profile is not None and not isinstance(profile, str):
+        raise ValueError("OPCUA_POLICY_FILE profile must be a string")
+    tools = file.get("allowed_tools")
+    if tools is not None and not (
+        isinstance(tools, list) and all(isinstance(name, str) for name in tools)
+    ):
+        raise ValueError("OPCUA_POLICY_FILE allowed_tools must be a list of tool names")
+    _require_flag(file, "allow_insecure_control", "allow_insecure_control")
+    _require_flag(file, "allow_unverified_server_control", "allow_unverified_server_control")
+    _require_flag(file, "allow_out_of_range_writes", "allow_out_of_range_writes")
+
+    control = file.get("control")
+    if control is None:
+        return
+    if not isinstance(control, dict):
+        raise ValueError("OPCUA_POLICY_FILE control must be an object")
+    writable = control.get("writable_nodes")
+    if writable is not None:
+        if not isinstance(writable, list):
+            raise ValueError("OPCUA_POLICY_FILE control.writable_nodes must be a list")
+        for entry in writable:
+            _value_bound(entry)
+    methods = control.get("callable_methods")
+    if methods is not None:
+        if not isinstance(methods, list):
+            raise ValueError("OPCUA_POLICY_FILE control.callable_methods must be a list")
+        for entry in methods:
+            if not (
+                isinstance(entry, dict)
+                and _non_empty(entry.get("object_id"))
+                and _non_empty(entry.get("method_id"))
+            ):
+                raise ValueError(
+                    "A control.callable_methods entry must be an object with a non-empty "
+                    "object_id and method_id"
+                )
+    _require_flag(control, "acknowledge_alarms", "control.acknowledge_alarms")
+
+
+def _require_flag(section: dict[str, Any], key: str, name: str) -> None:
+    value = section.get(key)
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"OPCUA_POLICY_FILE {name} must be true or false")
+
+
+def _non_empty(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _json(value: Any) -> str:
+    """A value as ``JSON.stringify`` spells it, for a message both runtimes share."""
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -126,9 +210,9 @@ def _value_bound(entry: Any) -> tuple[str, ValueBound]:
     if isinstance(entry, str):
         return entry, ValueBound()
     if not isinstance(entry, Mapping):
-        raise ValueError(
-            f"writable_nodes entry must be a node id or an object, got {type(entry).__name__}"
-        )
+        # No "got <type>": that named a Python type, which the Node runtime
+        # cannot, and the refusal is shared.
+        raise ValueError("writable_nodes entry must be a node id or an object")
     unknown = set(entry) - _BOUND_KEYS
     if unknown:
         # Loud, because the failure it prevents is silent: an operator who writes
@@ -157,7 +241,8 @@ def _bound_number(entry: Mapping[str, Any], key: str, node: str) -> float | None
     value = entry.get(key)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    # Finite as well: `1e400` parses to infinity, which is not a bound anyone wrote.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f'writable_nodes entry "{node}" has a non-numeric {key}')
     return float(value)
 
@@ -245,9 +330,8 @@ class PolicyConfig:
 def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     """Parse policy, with environment variables overriding the optional JSON file."""
     file = _load_policy_file(_value(env, "OPCUA_POLICY_FILE"))
+    # `_load_policy_file` has checked every shape; what is left is `None` for "not set".
     control = file.get("control") or {}
-    if not isinstance(control, dict):
-        raise ValueError("OPCUA_POLICY_FILE control must be an object")
 
     profile = _profile(_value(env, "OPCUA_PROFILE") or file.get("profile"))
     allowed = _csv(_value(env, "OPCUA_ALLOWED_TOOLS"))
@@ -255,9 +339,11 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
         allowed = file.get("allowed_tools")
     known = {tool["name"] for tool in CONTRACT["tools"]}
     if allowed is not None:
-        unknown = set(allowed) - known
+        # The first one as listed, not the first alphabetically: the Node runtime
+        # has always named that one, and it is the one the operator wrote first.
+        unknown = [name for name in allowed if name not in known]
         if unknown:
-            raise ValueError(f"Unknown tool in allowed_tools: {sorted(unknown)[0]}")
+            raise ValueError(f"Unknown tool in allowed_tools: {unknown[0]}")
         allowed_tools = frozenset(allowed)
     else:
         allowed_tools = None
@@ -269,9 +355,7 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     # about at three in the morning.
     writable = _csv(_value(env, "OPCUA_ALLOWED_WRITE_NODES"))
     if writable is None:
-        writable = control.get("writable_nodes", [])
-    if not isinstance(writable, list):
-        raise ValueError("OPCUA_POLICY_FILE control.writable_nodes must be a list")
+        writable = control.get("writable_nodes") or []
     bounds: dict[str, ValueBound] = {}
     for entry in writable:
         node, bound = _value_bound(entry)
@@ -282,7 +366,7 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     if method_env is None:
         method_env = [
             f"{item['object_id']}|{item['method_id']}"
-            for item in control.get("callable_methods", [])
+            for item in control.get("callable_methods") or []
         ]
     for method in method_env:
         if "|" not in method:
@@ -293,22 +377,22 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
     acknowledge = _boolean(
         _value(env, "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS"),
         "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
-        bool(control.get("acknowledge_alarms", False)),
+        control.get("acknowledge_alarms") is True,
     )
     allow_insecure = _boolean(
         _value(env, "OPCUA_ALLOW_INSECURE_CONTROL"),
         "OPCUA_ALLOW_INSECURE_CONTROL",
-        bool(file.get("allow_insecure_control", False)),
+        file.get("allow_insecure_control") is True,
     )
     allow_unverified = _boolean(
         _value(env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL"),
         "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL",
-        bool(file.get("allow_unverified_server_control", False)),
+        file.get("allow_unverified_server_control") is True,
     )
     allow_out_of_range = _boolean(
         _value(env, "OPCUA_ALLOW_OUT_OF_RANGE_WRITES"),
         "OPCUA_ALLOW_OUT_OF_RANGE_WRITES",
-        bool(file.get("allow_out_of_range_writes", False)),
+        file.get("allow_out_of_range_writes") is True,
     )
     return PolicyConfig(
         profile=profile,

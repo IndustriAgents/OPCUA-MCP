@@ -209,7 +209,21 @@ async function format(document, path) {
   return prettier.format(JSON.stringify(document, null, 2), { ...options, filepath: path });
 }
 
-/** Every generated file, as [path, expected text, current text]. */
+/** `text` with LF line endings. The repository stores these files with LF, but
+ *  a Windows checkout with `core.autocrlf` hands them over as CRLF — the same
+ *  content, and not drift. */
+export function normalizeEol(text) {
+  return text.replace(/\r\n/g, "\n");
+}
+
+/**
+ * Every generated file, as [path, expected text, current text].
+ *
+ * `expected` is rendered in whichever line ending the file on disk already uses,
+ * so a regeneration on a CRLF checkout rewrites only what changed rather than
+ * every line; git normalises it back to LF on commit either way. Compare the two
+ * with `normalizeEol` on both sides, as `main` does.
+ */
 export async function renderAll(schema = loadSchema()) {
   const targets = [
     [MCPB_MANIFEST_PATH, renderMcpbManifest],
@@ -218,7 +232,9 @@ export async function renderAll(schema = loadSchema()) {
   return Promise.all(
     targets.map(async ([path, render]) => {
       const current = readFileSync(path, "utf8");
-      return [path, await format(render(schema, JSON.parse(current)), path), current];
+      const rendered = await format(render(schema, JSON.parse(current)), path);
+      const expected = current.includes("\r\n") ? rendered.replace(/\n/g, "\r\n") : rendered;
+      return [path, expected, current];
     })
   );
 }
@@ -227,7 +243,7 @@ async function main(argv) {
   const check = argv.includes("--check");
   const drifted = [];
   for (const [path, expected, current] of await renderAll()) {
-    if (expected === current) continue;
+    if (normalizeEol(expected) === normalizeEol(current)) continue;
     drifted.push(relative(REPO_ROOT, path));
     if (!check) writeFileSync(path, expected);
   }

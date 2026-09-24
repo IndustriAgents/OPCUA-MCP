@@ -21,6 +21,7 @@ import {
   SCHEMA_PATH,
   loadSchema,
   mcpbField,
+  normalizeEol,
   registryVariable,
   renderAll,
 } from "../scripts/config-artifacts.mjs";
@@ -29,10 +30,11 @@ const SCHEMA = loadSchema();
 
 describe("generated configuration metadata", () => {
   it("is exactly what the generator writes from the schema", async () => {
+    // Line endings aside: a Windows checkout may hand these files over as CRLF.
     for (const [path, expected, current] of await renderAll(SCHEMA)) {
       assert.equal(
-        current,
-        expected,
+        normalizeEol(current),
+        normalizeEol(expected),
         `${relative(REPO_ROOT, path)} is stale: run \`npm run config:generate\``
       );
     }
@@ -50,6 +52,17 @@ describe("generated configuration metadata", () => {
         assert.equal(variable.placeholder, undefined, setting.env);
       }
     }
+  });
+
+  it("renders in the line ending the file already has", async () => {
+    // So `config:generate` on a CRLF checkout does not rewrite every line.
+    for (const [, expected, current] of await renderAll(SCHEMA)) {
+      assert.equal(expected.includes("\r\n"), current.includes("\r\n"));
+    }
+  });
+
+  it("ignores line endings when comparing", () => {
+    assert.equal(normalizeEol('{\r\n  "a": 1\r\n}\r\n'), '{\n  "a": 1\n}\n');
   });
 
   it("ships the canonical schema in the build", () => {

@@ -154,14 +154,17 @@ export function renderToolReference(contract, { link, anchors }) {
       "tools are offered under every profile, including the default `observe`. " +
       "`control` tools need `operator`, which offers them only for allowlisted " +
       "targets, or `full`; `alarm-action` tools need `operator` with " +
-      "`OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel " +
-      "unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool " +
-      "annotations each tool advertises.",
+      "`OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — " +
+      "a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override " +
+      "is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, " +
+      "`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are " +
+      "the MCP tool annotations each tool advertises.",
     ...(gated.length
       ? [
           "",
-          `† **Capability-gated**: listed only when the connected server advertises ` +
-            `what it needs — ${gated.join("; ")}.`,
+          `† **Needs a server feature**: always listed, and refused at call time with ` +
+            `\`capability_not_supported\` or \`capability_unknown\` when the connected ` +
+            `server does not advertise what it needs — ${gated.join("; ")}.`,
         ]
       : []),
   ].join("\n");

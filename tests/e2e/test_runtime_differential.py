@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 
 import pytest
+from conftest import AGGREGATE_NODE_ID
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, text_of
 
 #: Fields whose value legitimately differs between two calls a moment apart.
@@ -346,10 +348,17 @@ DIFFERENTIAL_FAILURES = [
         "browse_opcua_nodes argument depth must be an integer",
     ),
     (
-        "an aggregate read with no start time",
+        # This mock offers no aggregates, so the call is refused before its
+        # arguments are looked at any further (#140); `aggregateNeedsStart` is
+        # compared against the aggregate mock below.
+        "an aggregate read against a server without aggregates",
         "read_opcua_history",
         {"node_id": NODE["Temperature"], "aggregate_function": "Average"},
-        "read_opcua_history requires start_time when aggregate_function is given",
+        "capability_not_supported: read_opcua_history needs aggregate functions "
+        "(AggregateFunctions, ns=0;i=2997), and the OPC UA server at <url> does not offer it "
+        "(determined on session generation 1 at <checked_at>). Nothing was sent. Call "
+        "read_opcua_history without aggregate_function for the raw readings and summarise "
+        "them yourself, over a range short enough to stay under the per-call maximum.",
     ),
     (
         # #157: Node read this as the host's local time and Python as UTC — two
@@ -503,6 +512,36 @@ DIFFERENTIAL_FAILURES = [
 ]
 
 
+def _stable(text: str, url: str) -> str:
+    """A refusal with the two parts that differ by run, not by runtime, masked.
+
+    The endpoint carries this session's port, and a capability refusal says when
+    its answer was read — the same field on both runtimes, a moment apart.
+    """
+    text = text.replace(url, "<url>")
+    return re.sub(r"(session generation \d+ at )\S+?Z\)", r"\1<checked_at>)", text)
+
+
+async def test_an_aggregate_read_with_no_start_time_is_worded_the_same(aggregate_opcua_server):
+    """Against a server that does offer aggregates, the argument rule is what refuses."""
+    if not NODE_BUILD.exists():
+        pytest.skip("Node server not built — run `npm install && npm run build`")
+    failures = {}
+    for impl in ("python", "node"):
+        async with connect(_server_params(impl, aggregate_opcua_server)) as session:
+            result = await session.call_tool(
+                "read_opcua_history",
+                {"node_id": AGGREGATE_NODE_ID, "aggregate_function": "Average"},
+            )
+        assert result.is_error, f"{impl}: {text_of(result)!r}"
+        failures[impl] = text_of(result).strip()
+    assert (
+        failures["python"]
+        == failures["node"]
+        == ("read_opcua_history requires start_time when aggregate_function is given")
+    ), failures
+
+
 @pytest.mark.parametrize(
     ("name", "tool", "arguments", "expected"),
     DIFFERENTIAL_FAILURES,
@@ -517,7 +556,7 @@ async def test_both_runtimes_word_the_same_failure_identically(
         async with connect(params) as session:
             result = await session.call_tool(tool, arguments)
         assert result.is_error, f"{impl}: {name} must fail, got {text_of(result)!r}"
-        failures[impl] = text_of(result).strip()
+        failures[impl] = _stable(text_of(result).strip(), params.env["OPCUA_SERVER_URL"])
 
     assert failures["python"] == failures["node"], (
         f"{name} is worded differently by the two runtimes:\n"

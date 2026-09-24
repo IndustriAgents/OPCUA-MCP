@@ -5,10 +5,11 @@ tool surface is defined once in ``contract/tools.json`` and shared with the Node
 runtime; see ``contract.py``.
 
 Importing this package is side-effect free. ``main`` and ``mcp`` are resolved
-lazily (PEP 562) because reaching them imports ``server``, and *that* connects to
-the configured OPC UA server once to probe which capability-gated tools to
-register (see ``capabilities``). Pure helpers — records, datetimes, the contract —
-are importable without a server anywhere in sight.
+lazily (PEP 562) because reaching them imports ``server``, which builds the whole
+MCP server and its tool registrations. Nothing touches the OPC UA server until
+the lifespan starts, and the catalogue never depends on it (#140). Pure helpers
+— records, datetimes, the contract — are importable without a server anywhere in
+sight.
 """
 
 from __future__ import annotations

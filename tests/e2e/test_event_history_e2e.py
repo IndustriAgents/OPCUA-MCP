@@ -180,23 +180,34 @@ async def test_it_is_offered_where_the_server_keeps_events(server):
     assert "read_event_history" in names, impl
 
 
-async def test_it_is_hidden_where_the_server_does_not(alarm_server):
+async def test_it_is_refused_where_the_server_does_not(alarm_server):
     """The gate has to be false somewhere, or it is not a gate.
 
     The alarms mock is a real node-opcua server with a real condition model and
     no event archive, so it is the honest negative case — better than a stub,
     because a stub would only prove the gate reads the flag this project writes.
+
+    The tool is still listed: the catalogue does not depend on the server (#140).
+    The call is what is refused, before anything is sent, with the code, the
+    capability, and what to use instead.
     """
     impl, params = alarm_server
     async with connect(params) as session:
         names = {t.name for t in (await session.list_tools()).tools}
-        assert "read_event_history" not in names, impl
-
-        # Catalog filtering is not enforcement: a client may hold a stale
-        # tools/list. The call itself has to be refused too, which is the lesson
-        # of #83 applied to the new gate.
+        assert "read_event_history" in names, impl
         result = await session.call_tool("read_event_history", {})
+        status = (await session.call_tool("get_server_status", {})).structured_content
     assert result.is_error is True, impl
+    text = text_of(result)
+    assert text.startswith("capability_not_supported: read_event_history needs event history"), (
+        f"{impl}: {text!r}"
+    )
+    assert "subscribe_events" in text, f"{impl}: no remediation in {text!r}"
+    capabilities = status["result"]["capabilities"]
+    assert capabilities["support"]["historyEvents"] == "not_supported", f"{impl}: {capabilities}"
+    assert f"session generation {capabilities['session_generation']} " in text, (
+        f"{impl}: the refusal and the status disagree on which session: {text!r} / {capabilities}"
+    )
 
 
 async def test_both_runtimes_return_the_same_events(opcua_server):

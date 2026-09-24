@@ -20,6 +20,16 @@ import {
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { browseAllReferences, typeDefinitionOf } from "./browse.js";
+import {
+  type CapabilityAnswers,
+  type CapabilityStatusRecord,
+  answersFrom,
+  capabilityStatus,
+  refusal,
+  requirements,
+  unasked,
+  verdict,
+} from "./capabilities.js";
 import { WARM_UP_WAIT_MS } from "./config.js";
 import {
   OpcuaConnection,
@@ -384,8 +394,11 @@ function objectResult(record: unknown, completeness?: Completeness) {
   };
 }
 
+/** `resultShapes.serverStatus`: what the server says, and what it was found to support. */
+type ServerStatusReport = ServerStatusRecord & { capabilities: CapabilityStatusRecord };
+
 /** The diagnostics report (resultShapes.serverStatus). */
-function statusResult(status: ServerStatusRecord) {
+function statusResult(status: ServerStatusReport) {
   return objectResult(status);
 }
 
@@ -587,11 +600,10 @@ export function newCallId(): string {
 }
 
 export class OpcuaTools {
-  private aggregateFunctions: string[] = [];
-  /** What the connected server reports it can do; null until first probed.
-   *  Dropped on every session change — a restarted server may answer
-   *  differently, and a stale yes is a tool that fails instead of being hidden. */
-  private capabilities: Set<string> | null = null;
+  /** What the server was found to support, and on which session generation.
+   *  Never trusted across a generation — a restarted server may answer
+   *  differently — and never consulted by `listTools` (#140). */
+  private capabilities: CapabilityAnswers = unasked();
   private readonly subs = new SubscriptionManager();
   private readonly events = new EventSubscriptions();
   /** What each node published about its own number, for the life of one session. */
@@ -615,10 +627,7 @@ export class OpcuaTools {
     // to the session that created it. Without this, a server restart would leave
     // every `subscribe_opcua_nodes` handle the agent holds silently dead.
     this.conn.onSessionReplaced = async (session) => {
-      // A new session may be a restarted server with different capabilities, and
-      // it is the only moment the answer can have changed — which is what lets
-      // `listTools` stop waiting on a socket.
-      this.capabilities = null;
+      // What the old session was told about the server's limits was true of it.
       this.serverLimits = UNSTATED;
       this.metadata.serverLimits = UNSTATED;
       // A new session may be a restarted server, whose nodes are not necessarily
@@ -629,17 +638,27 @@ export class OpcuaTools {
       await this.events.reattach(session);
       // With the session in hand, not through the connection: this runs inside
       // `reconnect()`, and a probe that called `ensureConnection()` from here
-      // would re-enter the connect path it is standing in.
+      // would re-enter the connect path it is standing in. Read now so the
+      // operation limits and `get_server_status` have answers for the new
+      // session; a call re-reads anything from an older generation itself.
+      await this.probeCapabilities(session).catch(() => undefined);
+    };
+    // node-opcua re-created the session under us, typically because the server
+    // restarted. The subscriptions came across with it; what this server learned
+    // about the old session did not.
+    this.conn.onSessionRestored = async (session) => {
+      this.serverLimits = UNSTATED;
+      this.metadata.serverLimits = UNSTATED;
+      this.metadata.forget();
       await this.probeCapabilities(session).catch(() => undefined);
     };
   }
 
   /** Open the first connection and probe it. Started by `startWarmUp`.
    *
-   * The Python runtime does this in its lifespan and this runtime did not — it
-   * got its first connection from whichever `tools/list` happened to arrive
-   * first, which is precisely the coupling #83 removed. Without a warm-up the
-   * first catalogue would now always be the core tools, even against a plant
+   * The Python runtime does this in its lifespan. The catalogue no longer
+   * depends on it (#140) — what it buys is a first `get_server_status` that is
+   * already connected, and capability answers already read, against a plant
    * that is up.
    *
    * Best-effort and never fatal: an MCP client starts this server when *it*
@@ -649,7 +668,9 @@ export class OpcuaTools {
    */
   async warmUp(): Promise<void> {
     await this.conn.ensureConnection().catch(() => undefined);
-    if (!this.capabilities) await this.probeCapabilities().catch(() => undefined);
+    if (this.capabilities.generation !== this.conn.sessionGeneration) {
+      await this.probeCapabilities().catch(() => undefined);
+    }
   }
 
   /** Start the warm-up without waiting for it, once. Returns it, for tests.
@@ -661,12 +682,12 @@ export class OpcuaTools {
    * never started (#136). The transport now opens at once and this runs beside
    * it.
    *
-   * What awaiting it bought is kept, within a bound. Requests served *during*
-   * the warm-up are why it had moved in front of the transport: a catalogue
-   * listed then was the core tools only, and a status read then said "not
-   * connected", against a plant that was up. So those two wait for it — see
-   * `awaitWarmUp` — and a tool call that needs a session joins its round through
-   * `ensureConnection`, as it always did.
+   * What awaiting it bought is kept, within a bound. A status read during the
+   * warm-up said "not connected" against a plant that was up, so
+   * `get_server_status` waits for it — see `awaitWarmUp` — and a tool call that
+   * needs a session joins its round through `ensureConnection`, as it always
+   * did. `tools/list` does not wait: since #140 there is nothing in the
+   * catalogue for the warm-up to change.
    */
   startWarmUp(): Promise<void> {
     if (!this.warmUpPromise) {
@@ -695,11 +716,11 @@ export class OpcuaTools {
 
   /** Wait for the startup warm-up, but never past `warmUpWaitMs` from its start.
    *
-   * Against a plant that is up the warm-up finishes well inside the window, so
-   * the first `tools/list` carries the whole catalogue and the first status is a
-   * connected one. Against a plant that is down it can take the whole round, and
-   * a server that is to be diagnosable has to answer before then — from what it
-   * knows. The Python server's `ServerState.await_warm_up` is the same wait.
+   * For `get_server_status`. Against a plant that is up the warm-up finishes
+   * well inside the window, so the first status is a connected one. Against a
+   * plant that is down it can take the whole round, and a server that is to be
+   * diagnosable has to answer before then — from what it knows. The Python
+   * server's `ServerState.await_warm_up` is the same wait.
    */
   private async awaitWarmUp(): Promise<void> {
     const remaining = this.warmUpDeadline - Date.now();
@@ -736,144 +757,122 @@ export class OpcuaTools {
     return this.conn.ensureConnection();
   }
 
-  private serverCapabilitiesAggregateFunctions(on?: ClientSession): Promise<string[]> {
-    return this.conn.serverCapabilitiesAggregateFunctions(on);
-  }
-
-  private accessHistoryDataCapability(on?: ClientSession): Promise<boolean> {
-    return this.conn.accessHistoryDataCapability(on);
-  }
-
-  private accessHistoryEventsCapability(on?: ClientSession): Promise<boolean> {
-    return this.conn.accessHistoryEventsCapability(on);
-  }
-
   /** Read what the connected OPC UA server can do, off the session we already have.
    *
-   * Never connects. Both probes run against a live session or not at all, so a
-   * failure is not fatal — the core tools are offered regardless, and the
-   * optional ones appear once a session exists and has been probed.
+   * Never connects: `on`, or the session held, or nothing. The answers are
+   * stamped with the generation of the session they were read on, captured
+   * before asking — so an answer that arrives after the session has been
+   * replaced is already stale when it is stored, and the next call asks again.
    */
-  private async probeCapabilities(on?: ClientSession): Promise<Set<string>> {
-    const available = new Set<string>();
+  private async probeCapabilities(on?: ClientSession): Promise<CapabilityAnswers> {
     const session = on ?? this.session;
-    if (!session) {
-      // Deliberately not cached. "No session yet" is not "this server supports
-      // nothing", and caching it as though it were is what made a request served
-      // during the warm-up poison the answer for the rest of the process.
-      this.aggregateFunctions = [];
-      return available;
-    }
-    const historyOk = await this.accessHistoryDataCapability(session);
-    const historyEventsOk = await this.accessHistoryEventsCapability(session);
+    // Deliberately not cached. "No session yet" is not "this server supports
+    // nothing", and caching it as though it were is what made a request served
+    // during the warm-up poison the answer for the rest of the process.
+    if (!session) return this.capabilities;
+    const generation = this.conn.sessionGeneration;
+    const history = await this.conn.accessHistoryDataCapability(session);
+    const historyEvents = await this.conn.accessHistoryEventsCapability(session);
     // Read with the capabilities because it changes when they do — on a new
     // session — and a tool that needs it can then use it without a round trip.
     this.serverLimits = await readOperationLimits(session);
     this.metadata.serverLimits = this.serverLimits;
-    this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions(session);
-
-    // A tool gated on capabilities is offered when the server reports *any* of
-    // them. `read_opcua_history` lists both: a server with only aggregates can
-    // still answer an aggregate read, and gating it on `history` alone would
-    // hide the one thing such a server is good at.
-    if (historyOk) available.add("history");
-    if (historyEventsOk) available.add("historyEvents");
-    if (this.aggregateFunctions.length > 0) available.add("aggregate");
-    this.capabilities = available;
-    return available;
+    const aggregate = await this.conn.serverCapabilitiesAggregateFunctions(session);
+    this.capabilities = answersFrom(
+      generation,
+      new Date().toISOString(),
+      { history, historyEvents, aggregate },
+      aggregate.functions
+    );
+    return this.capabilities;
   }
 
   /** The server's stated operation limits, probing once if need be.
    *
    * Every tool that sends a batch asks here rather than reading the field, for
-   * the reason `capabilitiesMet` probes: a process that started while the plant
-   * was down has not asked yet, and "not asked" must not be read as "no limit".
+   * the reason `ensureCapabilities` asks again: a process that started while
+   * the plant was down, or whose session has since been replaced, has not asked
+   * *this* session yet, and "not asked" must not be read as "no limit".
    */
   private async operationLimits(): Promise<ServerOperationLimits> {
-    if (!this.capabilities) await this.probeCapabilities();
+    if (this.capabilities.generation !== this.conn.sessionGeneration) {
+      await this.probeCapabilities();
+    }
     return this.serverLimits;
   }
 
-  /** Whether a tool's capability gate is satisfied, probing once if need be.
+  /** Ask the live server again, rebuilding the session first if it has died.
    *
-   * Called from `callTool` as well as from `listTools`, because catalog
-   * filtering is not enforcement: a client may hold a tools/list from when the
-   * server still reported HistoricalAccess, and this runtime used to let that
-   * call straight through to node-opcua while the Python one refused it by name.
-   * By the time `callTool` asks, a session has been ensured, so a cold cache
-   * here probes rather than guesses.
+   * What a refusal is decided on. A refusal taken from the cache touches
+   * nothing, so it could never notice that the session behind it had gone and
+   * the server come back with the feature. A probe that lost its session is
+   * therefore followed by the same rebuild a tool call would do, and the probes
+   * asked once more on the new session. The Python server's
+   * `_fresh_capabilities` does the same through `OpcuaConnection.run`.
    */
-  private async capabilitiesMet(tool: ToolSpec): Promise<boolean> {
-    if (tool.capabilities.length === 0) return true;
-    const available = this.capabilities ?? (await this.probeCapabilities());
-    return tool.capabilities.some((capability) => available.has(capability));
+  private async freshCapabilities(): Promise<CapabilityAnswers> {
+    const session = this.conn.sessionId;
+    const answers = await this.probeCapabilities();
+    if (!answers.connectionLost) return answers;
+    try {
+      await this.conn.reconnect(session);
+    } catch (error) {
+      throw new ContractRefusal(notConnectedMessage(this.conn.endpointUrl, describeError(error)));
+    }
+    return await this.probeCapabilities();
   }
 
-  /** The advertised tool list: the contract, gated by runtime capabilities.
+  /** Refuse a call the connected server cannot serve, before anything is sent.
    *
-   * Deliberately does no network I/O. This used to call `ensureConnection()`
-   * before probing, so against an unreachable plant every tools/list sat through
-   * node-opcua's whole `connectionStrategy` backoff — and clients list at
-   * session start, which is exactly when a plant that is down is most likely to
-   * be down.
+   * Called with a live session in hand, so it can ask rather than guess. A
+   * cached "yes" is trusted for the session generation it was read on: if it
+   * has gone stale, the server's own refusal of the request says so. Nothing
+   * else is taken from the cache. An answer from an older generation, an
+   * `unknown`, and above all a "no" are asked again first — a "no" refuses
+   * without touching the network, so taken from the cache it could never find
+   * out that the server had come back with the feature. What is left is the
+   * server's own answer, and a refusal worded from the contract that says which
+   * capability, which session, and what to do instead (#140). The Python
+   * server's `_ensure_capabilities` decides the same way.
+   */
+  private async ensureCapabilities(spec: ToolSpec, args: Record<string, unknown>): Promise<void> {
+    const groups = requirements(spec, args);
+    if (groups.length === 0) return;
+    let answers = this.capabilities;
+    let decided = verdict(groups, answers.support);
+    if (answers.generation !== this.conn.sessionGeneration || decided.outcome !== "allowed") {
+      answers = await this.freshCapabilities();
+      decided = verdict(groups, answers.support);
+    }
+    if (decided.outcome === "allowed") return;
+    throw new ContractRefusal(refusal(spec.name, decided, answers, this.conn.endpointUrl));
+  }
+
+  /** The advertised tool list: the contract, filtered by deployment policy only.
    *
-   * The capabilities are probed where they can change instead: on every
-   * (re)connect, through `onSessionReplaced`. Convergence is unchanged — a
-   * client that listed while the plant was down sees the core tools, any tool
-   * call brings the connection up and re-probes, and the next tools/list carries
-   * the full catalogue. What is gone is only the waiting.
+   * No network I/O, no waiting, and the same answer for the life of the process
+   * whatever the plant is doing (#140). It used to depend on the capabilities
+   * of the session held — `read_event_history` absent, `aggregate_function`
+   * withheld — so a process started while the plant was down advertised less
+   * than one started while it was up, and nothing portable told a client that
+   * had listed once to list again. Clients and models cache tool definitions
+   * for the life of a session; what they cache now stays true. A capability the
+   * server lacks is reported by the call that needs it (`ensureCapabilities`)
+   * and by `get_server_status`.
    *
-   * No `notifications/tools/list_changed` is sent, here or on the Python
-   * runtime, for the same reason no `notifications/resources/updated` is — see
-   * docs/architecture.md.
+   * The policy is configuration, fixed when the process starts, so filtering
+   * on it does not make the catalogue move. No `notifications/tools/list_changed`
+   * is sent, here or on the Python runtime — see docs/architecture.md — and
+   * nothing depends on one.
    */
   async listTools(): Promise<Tool[]> {
-    // The one wait this does, and it is on the startup warm-up, bounded — never
-    // on a connection of its own.
-    await this.awaitWarmUp();
-    const available = this.capabilities ?? new Set<string>();
-    const aggregateOk = available.has("aggregate");
-
-    const tools = this.policy
-      .visibleTools(CONTRACT.tools)
-      .filter(
-        (tool) =>
-          tool.capabilities.length === 0 ||
-          tool.capabilities.some((capability) => available.has(capability))
-      )
-      .map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: this.advertisedSchema(tool, aggregateOk),
-        annotations: tool.annotations,
-        outputSchema: outputSchema(tool),
-      })) satisfies Tool[];
-
-    return tools;
-  }
-
-  /** A tool's input schema as advertised, with capability-gated properties removed.
-   *
-   * Capability gating moved down a level when the history and aggregate tools
-   * merged: `read_opcua_history` is advertised whenever the server reports
-   * HistoricalAccess, and its `aggregate_function` argument appears only if the
-   * server also advertises aggregates — with that server's *own* function list
-   * named in the description. An argument the server cannot honour is therefore
-   * not merely documented as unsupported; it is not offered, which is the same
-   * property tool-level gating had and strictly more informative, because the
-   * list is the live one.
-   */
-  private advertisedSchema(tool: ToolSpec, aggregateOk: boolean): Tool["inputSchema"] {
-    if (!tool.inputSchema?.properties?.aggregate_function) return tool.inputSchema;
-
-    const schema = JSON.parse(JSON.stringify(tool.inputSchema));
-    if (!aggregateOk) {
-      delete schema.properties.aggregate_function;
-      delete schema.properties.processing_interval;
-      return schema;
-    }
-    schema.properties.aggregate_function.description += `, one of: ${this.aggregateFunctions.join(", ")}`;
-    return schema;
+    return this.policy.visibleTools(CONTRACT.tools).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      annotations: tool.annotations,
+      outputSchema: outputSchema(tool),
+    })) satisfies Tool[];
   }
 
   /** The advertised resource list: taken straight from the contract. */
@@ -989,12 +988,11 @@ export class OpcuaTools {
       // simply not there is reported as that rather than as a puzzling failure
       // from whichever tool happened to be called first.
       //
-      // And before the capability gate, not after. The capability answers are
-      // filled in by the reconnect callback, so a process that started while the
-      // plant was unreachable still holds its startup defaults — and checking
-      // them first refused `read_opcua_history` as "the server advertises none
-      // of: history" without ever asking the server. Unknown is not absent
-      // (issue #108).
+      // And before the capability gate, not after. A process that started while
+      // the plant was unreachable has asked no session anything, and checking
+      // first refused `read_opcua_history` as unsupported without ever asking
+      // the server. Unknown is not absent (issue #108) — and an unreachable
+      // server is `endpoint_offline`, not a capability answer (#140).
       try {
         await this.ensureConnection();
       } catch (error) {
@@ -1008,11 +1006,7 @@ export class OpcuaTools {
 
       session = this.conn.sessionId;
 
-      if (!(await this.capabilitiesMet(spec))) {
-        throw new Error(
-          message("capabilityMissing", { capabilities: spec.capabilities.join(", ") })
-        );
-      }
+      await this.ensureCapabilities(spec, args);
 
       let result;
       try {
@@ -1153,6 +1147,12 @@ export class OpcuaTools {
       throw refusal;
     }
 
+    // And re-check what the server can do, for the same reason: the session the
+    // first attempt was checked against is gone, and the one this attempt rides
+    // on may be a restarted server that no longer keeps history. Only a `resend`
+    // tool gets here, and every capability-gated tool is one (#140).
+    await this.ensureCapabilities(spec, args);
+
     return await this.dispatch(spec.name, args);
   }
 
@@ -1271,8 +1271,18 @@ export class OpcuaTools {
    * also the cheapest way to bring a dropped connection back. A failure to
    * connect is the answer, not an error — "not connected, and here is why" is
    * exactly what the caller asked for.
+   *
+   * `capabilities` is appended after the read, because the read may have
+   * re-established the session and re-read them. It is the cache as it stands,
+   * never a probe of its own: it says which session generation it was read on
+   * and when, which is what makes a stale answer recognisable as one (#140).
    */
-  private async getServerStatus(): Promise<ServerStatusRecord> {
+  private async getServerStatus(): Promise<ServerStatusReport> {
+    const status = await this.readStatus();
+    return { ...status, capabilities: capabilityStatus(this.capabilities) };
+  }
+
+  private async readStatus(): Promise<ServerStatusRecord> {
     const endpoint = this.conn.endpointUrl;
     const security = describeSecurity(securityConfig());
     const identity = serverIdentityRecord(this.policy.config);
@@ -1437,16 +1447,14 @@ export class OpcuaTools {
         );
       }
 
-      // Don't depend on a prior tools/list having populated the cache: a client
-      // may call this tool directly after connecting. Recompute on demand.
-      if (this.aggregateFunctions.length === 0) {
-        this.aggregateFunctions = await this.serverCapabilitiesAggregateFunctions();
-      }
-      if (!this.aggregateFunctions.includes(aggregateFunction)) {
+      // `ensureCapabilities` has already refused a server that offers none, on
+      // answers read on this very session; what is left is a name it does not.
+      const offered = this.capabilities.aggregateFunctions;
+      if (!offered.includes(aggregateFunction)) {
         throw new Error(
-          this.aggregateFunctions.length === 0
+          offered.length === 0
             ? "Server does not advertise any aggregate functions"
-            : `Invalid aggregate function. Supported: ${this.aggregateFunctions.join(", ")}`
+            : `Invalid aggregate function. Supported: ${offered.join(", ")}`
         );
       }
 

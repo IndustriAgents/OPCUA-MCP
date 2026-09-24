@@ -35,11 +35,26 @@ export interface ToolGuard {
   auditPaths?: string[];
 }
 
+/** One optional OPC UA server feature, as `contract/tools.json` declares it. */
+export interface CapabilitySpec {
+  /** What it is called in a refusal: "historical data access". */
+  label: string;
+  /** What a refused caller can do instead, quoted in the refusal. */
+  remediation: string;
+  nodeId: string;
+  browseName: string;
+  check: "readBooleanTrue" | "browseNonEmpty";
+}
+
 export interface ToolSpec {
   name: string;
   accessClass: AccessClass;
-  /** Capabilities of which the server must report at least one; empty means always. */
+  /** Capabilities of which the server must report at least one for a call to be
+   *  served; empty means always. They never hide the tool (#140). */
   capabilities: string[];
+  /** Arguments that need more than the tool does, when given: each names
+   *  capabilities of which the server must report at least one. */
+  argumentCapabilities?: Record<string, string[]>;
   description: string;
   inputSchema: any;
   resultShape?: string;
@@ -64,7 +79,9 @@ export interface ToolSpec {
 
 export const CONTRACT: {
   resultShapes: Record<string, any>;
-  capabilities: Record<string, { nodeId: string; browseName: string; check: string }>;
+  /** Optional server features, keyed by name; `$`-prefixed keys are prose. See
+   *  capabilities.ts. */
+  capabilities: Record<string, CapabilitySpec>;
   /** Prose for each `ToolSpec.retryPolicy` value; the tools name one of its keys. */
   retryPolicies: Record<string, string>;
   /** What tells a failure of the connection from a failure of the request;

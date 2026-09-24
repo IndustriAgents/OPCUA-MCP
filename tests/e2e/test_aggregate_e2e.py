@@ -5,11 +5,11 @@ These run against the aggregate-capable mock (`packages/mock-server-aggregate`,
 functions.
 
 Since the history and aggregate tools merged, the capability gates an *argument*
-rather than a tool: `read_opcua_history` is offered wherever the server reports
-HistoricalAccess, and `aggregate_function` appears on it only where the server
-also advertises aggregates — with that server's own function list named in the
-description. The negative case, where the argument is withheld, is asserted
-against the main mock in ``test_contract_parity.py``.
+rather than a tool, and since #140 it gates the *call* rather than the catalogue:
+`aggregate_function` is always listed, and a server that offers no aggregates
+refuses it with `capability_not_supported` — asserted against the main mock in
+``test_mcp_e2e.py``. The functions this server offers are reported by
+`get_server_status`, checked below.
 
 The mock ramps its Temperature node at a known rate, so aggregate output is
 checked arithmetically rather than merely for non-emptiness: with a +1.0/second
@@ -95,11 +95,15 @@ async def read_average(session, *, window_seconds, interval_ms, end_time="explic
 
 
 async def test_aggregate_tool_exposed_when_supported(agg_server):
-    """The mock advertises aggregate functions, so both servers must expose the tool."""
+    """The mock advertises aggregate functions, and the status report names them."""
     impl, params = agg_server
     async with connect(params) as session:
         names = await tool_names(session)
+        status = await session.call_tool("get_server_status", {})
     assert AGGREGATE_TOOL in names, f"{impl}: aggregate tool missing despite server support"
+    capabilities = status.structured_content["result"]["capabilities"]
+    assert capabilities["support"]["aggregate"] == "supported", f"{impl}: {capabilities}"
+    assert "Average" in capabilities["aggregate_functions"], f"{impl}: {capabilities}"
 
 
 async def test_aggregate_average_values_are_correct(agg_server):

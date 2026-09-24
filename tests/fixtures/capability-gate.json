@@ -1,0 +1,426 @@
+{
+  "$comment": "What a call that needs an optional OPC UA server feature is told, on both runtimes (issue #140). The catalogue no longer depends on the connected server: every tool is advertised with its contract schema, and the capability is checked on the call against what the current session was found to support. `decisions` pins which calls are allowed from a set of answers ('supported', 'not_supported', 'unknown' per contract capability) and which requirement group refuses the rest; `messages` pins the refusal text byte for byte, worded from contract errors.capabilityNotSupported / capabilityUnknown and each capability's label and remediation (`answers.reasons: null` means the defaults of a server nobody has asked); `status` pins get_server_status's `capabilities` record. Driven by tests/unit/test_capability_gate.py and packages/server-node/test/capability-gate.test.mjs.",
+  "decisions": [
+    {
+      "name": "an ungated tool needs nothing, even of a server nobody has asked",
+      "tool": "read_opcua_nodes",
+      "arguments": {
+        "node_ids": [
+          "ns=2;i=2"
+        ]
+      },
+      "support": {
+        "history": "unknown",
+        "historyEvents": "unknown",
+        "aggregate": "unknown"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "a raw history read against a server that keeps history",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2"
+      },
+      "support": {
+        "history": "supported",
+        "historyEvents": "not_supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "a raw history read against an aggregate-only server is the server's to refuse, as before",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2"
+      },
+      "support": {
+        "history": "not_supported",
+        "historyEvents": "not_supported",
+        "aggregate": "supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "a history read against a server with neither history nor aggregates",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2"
+      },
+      "support": {
+        "history": "not_supported",
+        "historyEvents": "supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "history",
+          "aggregate"
+        ]
+      }
+    },
+    {
+      "name": "unknown is not absent: a probe that could not finish refuses as unknown",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2"
+      },
+      "support": {
+        "history": "unknown",
+        "historyEvents": "not_supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "capability_unknown",
+        "capabilities": [
+          "history",
+          "aggregate"
+        ]
+      }
+    },
+    {
+      "name": "aggregate_function needs aggregates, even where raw history is kept",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2",
+        "start_time": "2026-09-24T00:00:00Z",
+        "aggregate_function": "Average"
+      },
+      "support": {
+        "history": "supported",
+        "historyEvents": "supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "aggregate"
+        ]
+      }
+    },
+    {
+      "name": "aggregate_function against an aggregate-only server",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2",
+        "start_time": "2026-09-24T00:00:00Z",
+        "aggregate_function": "Average"
+      },
+      "support": {
+        "history": "not_supported",
+        "historyEvents": "not_supported",
+        "aggregate": "supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "aggregate_function where the aggregate probe could not finish",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2",
+        "start_time": "2026-09-24T00:00:00Z",
+        "aggregate_function": "Average"
+      },
+      "support": {
+        "history": "supported",
+        "historyEvents": "supported",
+        "aggregate": "unknown"
+      },
+      "expected": {
+        "outcome": "capability_unknown",
+        "capabilities": [
+          "aggregate"
+        ]
+      }
+    },
+    {
+      "name": "processing_interval alone gates nothing: it is ignored without aggregate_function",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2",
+        "processing_interval": 60000
+      },
+      "support": {
+        "history": "supported",
+        "historyEvents": "not_supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "an explicit null is an argument not given",
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=2",
+        "aggregate_function": null
+      },
+      "support": {
+        "history": "supported",
+        "historyEvents": "not_supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "event history against a server without an event archive",
+      "tool": "read_event_history",
+      "arguments": {},
+      "support": {
+        "history": "supported",
+        "historyEvents": "not_supported",
+        "aggregate": "supported"
+      },
+      "expected": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "historyEvents"
+        ]
+      }
+    },
+    {
+      "name": "event history against a server that keeps events",
+      "tool": "read_event_history",
+      "arguments": {},
+      "support": {
+        "history": "not_supported",
+        "historyEvents": "supported",
+        "aggregate": "not_supported"
+      },
+      "expected": {
+        "outcome": "allowed",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "event history before any session has been asked",
+      "tool": "read_event_history",
+      "arguments": {},
+      "support": {
+        "history": "unknown",
+        "historyEvents": "unknown",
+        "aggregate": "unknown"
+      },
+      "expected": {
+        "outcome": "capability_unknown",
+        "capabilities": [
+          "historyEvents"
+        ]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "name": "no event archive",
+      "tool": "read_event_history",
+      "verdict": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "historyEvents"
+        ]
+      },
+      "answers": {
+        "generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "not_supported",
+          "aggregate": "not_supported"
+        },
+        "reasons": {}
+      },
+      "url": "opc.tcp://plc:4840",
+      "expected": "capability_not_supported: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11194), and the OPC UA server at opc.tcp://plc:4840 does not offer it (determined on session generation 3 at 2026-09-24T10:00:00.000Z). Nothing was sent. This server keeps no event archive, so past events cannot be read back. Capture events from now on with subscribe_events and read_events, or list the alarms that are active now with list_active_alarms; to keep events, enable event historizing on the OPC UA server."
+    },
+    {
+      "name": "neither history nor aggregates: the advice is history's",
+      "tool": "read_opcua_history",
+      "verdict": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "history",
+          "aggregate"
+        ]
+      },
+      "answers": {
+        "generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "not_supported",
+          "historyEvents": "not_supported",
+          "aggregate": "not_supported"
+        },
+        "reasons": {}
+      },
+      "url": "opc.tcp://plc:4840",
+      "expected": "capability_not_supported: read_opcua_history needs historical data access (AccessHistoryDataCapability, ns=0;i=11193) or aggregate functions (AggregateFunctions, ns=0;i=2997), and the OPC UA server at opc.tcp://plc:4840 does not offer it (determined on session generation 3 at 2026-09-24T10:00:00.000Z). Nothing was sent. This server keeps no value history that can be read back. Read the current value with read_opcua_nodes, or watch it from now on with subscribe_opcua_nodes; to keep history, enable historizing for the node on the OPC UA server."
+    },
+    {
+      "name": "no aggregates",
+      "tool": "read_opcua_history",
+      "verdict": {
+        "outcome": "capability_not_supported",
+        "capabilities": [
+          "aggregate"
+        ]
+      },
+      "answers": {
+        "generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "supported",
+          "aggregate": "not_supported"
+        },
+        "reasons": {}
+      },
+      "url": "opc.tcp://plc:4840",
+      "expected": "capability_not_supported: read_opcua_history needs aggregate functions (AggregateFunctions, ns=0;i=2997), and the OPC UA server at opc.tcp://plc:4840 does not offer it (determined on session generation 3 at 2026-09-24T10:00:00.000Z). Nothing was sent. Call read_opcua_history without aggregate_function for the raw readings and summarise them yourself, over a range short enough to stay under the per-call maximum."
+    },
+    {
+      "name": "a probe that could not finish quotes why",
+      "tool": "read_opcua_history",
+      "verdict": {
+        "outcome": "capability_unknown",
+        "capabilities": [
+          "history",
+          "aggregate"
+        ]
+      },
+      "answers": {
+        "generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "unknown",
+          "historyEvents": "supported",
+          "aggregate": "not_supported"
+        },
+        "reasons": {
+          "history": "reading AccessHistoryDataCapability failed: BadTimeout"
+        }
+      },
+      "url": "opc.tcp://plc:4840",
+      "expected": "capability_unknown: read_opcua_history needs historical data access (AccessHistoryDataCapability, ns=0;i=11193) or aggregate functions (AggregateFunctions, ns=0;i=2997), and whether the OPC UA server at opc.tcp://plc:4840 offers it could not be determined on session generation 3 (reading AccessHistoryDataCapability failed: BadTimeout). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities."
+    },
+    {
+      "name": "nothing asked yet",
+      "tool": "read_event_history",
+      "verdict": {
+        "outcome": "capability_unknown",
+        "capabilities": [
+          "historyEvents"
+        ]
+      },
+      "answers": {
+        "generation": null,
+        "checked_at": null,
+        "support": {
+          "history": "unknown",
+          "historyEvents": "unknown",
+          "aggregate": "unknown"
+        },
+        "reasons": null
+      },
+      "url": "opc.tcp://plc:4840",
+      "expected": "capability_unknown: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11194), and whether the OPC UA server at opc.tcp://plc:4840 offers it could not be determined on session generation none (not yet asked: no OPC UA session has been established). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities."
+    }
+  ],
+  "status": [
+    {
+      "name": "before any session",
+      "answers": {
+        "generation": null,
+        "checked_at": null,
+        "support": {
+          "history": "unknown",
+          "historyEvents": "unknown",
+          "aggregate": "unknown"
+        },
+        "aggregate_functions": []
+      },
+      "expected": {
+        "session_generation": null,
+        "checked_at": null,
+        "support": {
+          "history": "unknown",
+          "historyEvents": "unknown",
+          "aggregate": "unknown"
+        },
+        "aggregate_functions": []
+      }
+    },
+    {
+      "name": "the bundled mock",
+      "answers": {
+        "generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "supported",
+          "aggregate": "not_supported"
+        },
+        "aggregate_functions": []
+      },
+      "expected": {
+        "session_generation": 3,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "supported",
+          "aggregate": "not_supported"
+        },
+        "aggregate_functions": []
+      }
+    },
+    {
+      "name": "the aggregate mock",
+      "answers": {
+        "generation": 1,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "not_supported",
+          "aggregate": "supported"
+        },
+        "aggregate_functions": [
+          "Average",
+          "Minimum",
+          "Maximum"
+        ]
+      },
+      "expected": {
+        "session_generation": 1,
+        "checked_at": "2026-09-24T10:00:00.000Z",
+        "support": {
+          "history": "supported",
+          "historyEvents": "not_supported",
+          "aggregate": "supported"
+        },
+        "aggregate_functions": [
+          "Average",
+          "Minimum",
+          "Maximum"
+        ]
+      }
+    }
+  ]
+}

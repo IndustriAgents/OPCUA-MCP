@@ -123,6 +123,11 @@ uv run opcua-mock-server --endpoint opc.tcp://127.0.0.1:14840/freeopcua/server/
 
 The e2e suite uses this to give every test session a mock on a port of its own.
 
+`--no-history` starts the same plant with no value or event history, and says
+so: `AccessHistoryDataCapability` stays false and `AccessHistoryEventsCapability`
+is never created. The suite restarts a mock with and without it to change what
+the server supports under an MCP server that is already running.
+
 ### Connecting with OPC UA Clients
 
 You can connect to the server using any OPC UA client:

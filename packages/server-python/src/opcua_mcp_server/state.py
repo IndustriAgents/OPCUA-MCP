@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import Any
 
 from .audit import AuditSink
+from .capabilities import CapabilityAnswers
 from .config import SERVER_URL, WARM_UP_WAIT_MS
 from .connection import OpcuaConnection
 from .events import EventSubscriptions
@@ -47,8 +47,7 @@ class ServerState:
     """One server's connection, capability answers, managers and audit sink.
 
     Constructed before the lifespan runs, because ``list_tools`` may be answered
-    before any connection exists and has to say "the core tools" rather than
-    fail. The lifespan fills in :attr:`connection`.
+    before any connection exists. The lifespan fills in :attr:`connection`.
     """
 
     def __init__(
@@ -67,14 +66,12 @@ class ServerState:
         #: Set by the lifespan, and None before it and after it.
         self.connection: OpcuaConnection | None = None
 
-        #: What the connected server said it can do. Answered by the capability
-        #: probes on every (re)connect, and forgotten when the session goes: a
-        #: restarted server may not be the same server.
-        self.capabilities: dict[str, Any] = {
-            "history": False,
-            "history_events": False,
-            "aggregate_functions": {},
-        }
+        #: What the server was found to support, and on which session
+        #: generation. Read on every (re)connect and never trusted across a
+        #: generation — a restarted server may not be the same server — and
+        #: never consulted by ``list_tools`` (#140). Replaced whole, never
+        #: mutated; see :class:`~.capabilities.CapabilityAnswers`.
+        self.capabilities = CapabilityAnswers()
         #: What the connected server says one service call may carry — see
         #: operation_limits.py. Probed and forgotten with the capabilities.
         self.operation_limits: dict[str, int | None] = dict(UNSTATED)
@@ -128,14 +125,15 @@ class ServerState:
     async def await_warm_up(self) -> None:
         """Wait for the startup warm-up, but never past ``warm_up_wait_ms`` from its start.
 
-        For ``tools/list`` and ``get_server_status``, the two requests that report
-        what the server knows about the connection. Against a plant that is up
-        the warm-up finishes well inside the window, so the first catalogue
-        carries the whole surface and the first status is a connected one — the
-        reason the warm-up used to run before any request was served. Against a
-        plant that is down it can take the whole round, and a server that is to
-        be diagnosable has to answer before then, from what it knows. The Node
-        server's ``OpcuaTools.awaitWarmUp`` is the same wait.
+        For ``get_server_status``, which reports what the server knows about the
+        connection. Against a plant that is up the warm-up finishes well inside
+        the window, so the first status is a connected one — the reason the
+        warm-up used to run before any request was served. Against a plant that
+        is down it can take the whole round, and a server that is to be
+        diagnosable has to answer before then, from what it knows. ``tools/list``
+        does not wait: since #140 there is nothing in the catalogue for the
+        warm-up to change. The Node server's ``OpcuaTools.awaitWarmUp`` is the
+        same wait.
         """
         warm_up = self.warm_up
         if warm_up is None or warm_up.done():
@@ -171,31 +169,6 @@ class ServerState:
 
     def forget_capabilities(self) -> None:
         """Drop what was probed, because the session it was true of is gone."""
-        self.capabilities["history"] = False
-        self.capabilities["history_events"] = False
-        self.capabilities["aggregate_functions"] = {}
+        self.capabilities = CapabilityAnswers()
         self.operation_limits = dict(UNSTATED)
         self.node_metadata.server_limits = dict(UNSTATED)
-
-    def available_capabilities(self) -> set[str]:
-        """What the connected OPC UA server reports it can do."""
-        available = set()
-        if self.capabilities["history"]:
-            available.add("history")
-        if self.capabilities["history_events"]:
-            available.add("historyEvents")
-        if self.capabilities["aggregate_functions"]:
-            available.add("aggregate")
-        return available
-
-    def capabilities_met(self, spec: dict) -> bool:
-        """Whether a tool's capability gate is satisfied.
-
-        A tool gated on capabilities is offered when the server reports *any* of
-        them. ``read_opcua_history`` lists both ``history`` and ``aggregate``: a
-        server with only aggregates can still answer an aggregate read, and
-        gating it on ``history`` alone would hide the one thing such a server is
-        good at.
-        """
-        required = spec.get("capabilities") or []
-        return not required or bool(set(required) & self.available_capabilities())

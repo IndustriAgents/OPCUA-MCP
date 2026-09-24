@@ -56,8 +56,12 @@ function harness({ env = {}, outcomes = [], connected = true } = {}) {
     // restarted server may have loaded its namespaces in a different order.
     if (state.namespaces) policy.bindNamespaces(state.namespaces);
   };
-  conn.accessHistoryDataCapability = async () => false;
-  conn.serverCapabilitiesAggregateFunctions = async () => [];
+  conn.accessHistoryDataCapability = async () => ({ support: "not_supported", reason: null });
+  conn.serverCapabilitiesAggregateFunctions = async () => ({
+    support: "not_supported",
+    reason: null,
+    functions: [],
+  });
 
   const policy = new ToolPolicy(parsePolicyConfig(env));
   const tools = new OpcuaTools(conn, policy);
@@ -342,10 +346,10 @@ describe("authorization across the retry", () => {
 });
 
 describe("the capability gate", () => {
-  // #108: the capability map is filled in by the reconnect callback, so on a
-  // process that started while the plant was unreachable it still holds its
-  // startup defaults. Checking it before connecting refused the tool without
-  // ever asking the server.
+  // #108: the capability answers are read off a session, so a process that
+  // started while the plant was unreachable has none. Checking them before
+  // connecting refused the tool without ever asking the server — and an
+  // unreachable server is `endpoint_offline`, not a capability answer (#140).
   it("is checked after the connection, not before it", async () => {
     const { tools, state } = harness({ connected: false });
 
@@ -355,9 +359,9 @@ describe("the capability gate", () => {
 
     assert.equal(state.connects, 1, "the server must be asked before it is judged");
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Not connected to the OPC UA server/);
+    assert.match(result.content[0].text, /^endpoint_offline: Not connected to the OPC UA server/);
     assert.equal(
-      result.content[0].text.includes("advertises none of"),
+      result.content[0].text.includes("capability_"),
       false,
       "a plant that could not be reached is not a plant that lacks the capability"
     );

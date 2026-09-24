@@ -24,7 +24,7 @@ import tempfile
 import pytest
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
-from test_contract_parity import CONTRACT
+from test_contract_parity import CONTRACT, normalized_catalogue
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, records_of, text_of
 
 # Retry settings for these tests: the defaults are tuned for a plant (seconds of
@@ -280,10 +280,11 @@ SLOW_RETRY = {
     "OPCUA_RECONNECT_MAX_RETRY": "3",
 }
 
-#: What a catalogue request is allowed to cost with the plant unreachable. Two
-#: orders of magnitude below the backoff budget above, and far above what
-#: answering from the contract actually takes.
-LIST_TOOLS_BUDGET_SECONDS = 5.0
+#: What two catalogue requests are allowed to cost with the plant unreachable.
+#: An order of magnitude below the backoff budget above, below the 3s warm-up
+#: window `tools/list` used to wait out (#140), and far above what answering from
+#: the contract actually takes.
+LIST_TOOLS_BUDGET_SECONDS = 2.0
 
 
 async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
@@ -296,9 +297,9 @@ async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
     is down is most likely to be down.
 
     The startup warm-up is where the waiting now happens, once, and beside the
-    requests rather than in front of them (#136). A catalogue request waits for it
-    only up to the shared warm-up window, measured from its start, so the second
-    of these does not wait at all.
+    requests rather than in front of them (#136) — and since #140 a catalogue
+    request does not wait for it at all, not even for the bounded window it used
+    to: the catalogue is the contract, so there is nothing for it to wait for.
     """
     params = _server_params(impl, "opc.tcp://127.0.0.1:1/unreachable")
     params.env.update(SLOW_RETRY)
@@ -314,10 +315,9 @@ async def test_listing_tools_does_not_wait_for_an_unreachable_server(impl):
         f"{impl}: two tools/list against an unreachable server took {elapsed:.1f}s; "
         f"the catalogue is waiting on the network again"
     )
-    # Still a usable catalogue: the core tools do not depend on a connection.
-    names = {tool.name for tool in listed.tools}
-    assert "get_server_status" in names, f"{impl}: {sorted(names)}"
-    assert "read_opcua_nodes" in names, f"{impl}: {sorted(names)}"
+    # The whole catalogue, not a reduced one: nothing in it depends on the plant.
+    names = [tool.name for tool in listed.tools]
+    assert names == [tool["name"] for tool in CONTRACT["tools"]], f"{impl}: {names}"
 
 
 # --- MCP comes up whatever the plant is doing (issue #136) -------------------------
@@ -403,22 +403,140 @@ async def test_mcp_starts_and_stays_diagnosable_while_the_endpoint_is_offline(
         assert status_of(await session.call_tool("get_server_status", {}))["connected"] is True
 
 
-async def test_the_catalogue_gains_the_optional_tools_once_the_server_is_reachable(
+# --- the catalogue does not move with the plant (issue #140) -----------------------
+
+
+async def _catalogue(params) -> str:
+    async with connect(params) as session:
+        return normalized_catalogue(await session.list_tools())
+
+
+async def test_offline_online_and_capability_less_startups_advertise_one_catalogue(
     impl, restartable_opcua_server
 ):
-    """Convergence without a notification, which is what both runtimes promise.
+    """Names and schemas, compared whole: down, up, and up without history.
 
-    No `notifications/tools/list_changed` is sent — see docs/architecture.md for
-    why neither runtime offers one. What is promised instead is that the
-    catalogue is *correct when asked*: the capabilities are re-probed on every
-    (re)connect, so a client that listed too early and lists again gets the whole
-    surface.
+    Before #140 these were three catalogues. Offline had neither history tool,
+    the bundled mock had both but no `aggregate_function`, and a server without
+    history had neither again — so what a client was told depended on when it
+    listed, and a client that listed once kept whatever that was.
     """
-    async with connect(params_for(impl, restartable_opcua_server.url)) as session:
-        listed = await session.list_tools()
-        assert "read_opcua_history" in {tool.name for tool in listed.tools}, (
-            f"{impl}: the mock advertises HistoricalAccess, so the history tool must be offered"
+    server = restartable_opcua_server
+    online = await _catalogue(params_for(impl, server.url))
+    server.restart("--no-history")
+    without_history = await _catalogue(params_for(impl, server.url))
+    server.stop()
+    params = _server_params(impl, server.url)
+    params.env.update(SLOW_RETRY)
+    offline = await _catalogue(params)
+
+    assert online == offline, f"{impl}: the catalogue changed with the plant offline"
+    assert online == without_history, f"{impl}: the catalogue changed with the server's features"
+
+
+async def test_a_client_that_lists_once_can_use_everything_once_the_plant_is_back(
+    impl, restartable_opcua_server
+):
+    """The client this issue is about: it lists at session start and never again.
+
+    It starts while the plant is down, so under the old catalogue it would have
+    been told there is no history tool and never learned otherwise — no portable
+    notification exists to tell it. Now it is told everything at once; a history
+    read while the plant is down is refused as the outage it is; and once the
+    plant is back, the tools from that one list simply work.
+    """
+    server = restartable_opcua_server
+    server.stop()
+    async with connect(params_for(impl, server.url)) as session:
+        listed = {tool.name: tool for tool in (await session.list_tools()).tools}
+        assert {"read_opcua_history", "read_event_history"} <= set(listed), f"{impl}: {listed}"
+        assert "aggregate_function" in listed["read_opcua_history"].input_schema["properties"]
+
+        during = await asyncio.wait_for(
+            session.call_tool("read_opcua_history", {"node_id": NODE["Temperature"]}), 30
         )
+        assert during.is_error, f"{impl}: a history read against a server that is down succeeded"
+        assert text_of(during).startswith("endpoint_offline: "), (
+            f"{impl}: an outage must not read as a missing capability: {text_of(during)}"
+        )
+
+        server.start()
+        history = None
+        for _ in range(30):
+            history = await session.call_tool(
+                "read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 3}
+            )
+            if not history.is_error:
+                break
+            await asyncio.sleep(1.0)
+        assert not history.is_error, f"{impl}: never recovered: {text_of(history)}"
+        events = await session.call_tool("read_event_history", {"num_values": 3})
+        assert not events.is_error, f"{impl}: {text_of(events)}"
+
+
+async def _status_capabilities(session) -> dict:
+    status = await session.call_tool("get_server_status", {})
+    return status.structured_content["result"]["capabilities"]
+
+
+async def _history_until(session, done, attempts: int = 30):
+    """Call `read_opcua_history` until `done(result)`, riding out the restart.
+
+    A call that lands mid-restart may fail as the outage, or be served by the
+    old answers before the new session has been noticed. What is promised is what
+    the next calls say once it has, which is what this waits for.
+    """
+    result = None
+    for _ in range(attempts):
+        result = await session.call_tool(
+            "read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 3}
+        )
+        if done(result):
+            return result
+        await asyncio.sleep(1.0)
+    return result
+
+
+async def test_a_restart_with_different_capabilities_invalidates_the_answers(
+    impl, restartable_opcua_server
+):
+    """The answers belong to a session, and a restarted server may not be the same one.
+
+    The server comes back without history, and then with it again, under one
+    MCP session that never lists again. Each time the next calls must be decided
+    by what the *new* server says — a stale yes would send a request the server
+    cannot serve, a stale no would refuse one it can — and `get_server_status`
+    must say which session its answers are from.
+    """
+    server = restartable_opcua_server
+
+    def refused(result) -> bool:
+        return result.is_error and text_of(result).startswith("capability_not_supported: ")
+
+    async with connect(params_for(impl, server.url)) as session:
+        first = await session.call_tool(
+            "read_opcua_history", {"node_id": NODE["Temperature"], "num_values": 3}
+        )
+        assert not first.is_error, f"{impl}: {text_of(first)}"
+        before = await _status_capabilities(session)
+        assert before["support"]["history"] == "supported", f"{impl}: {before}"
+
+        server.restart("--no-history")
+        without = await _history_until(session, refused)
+        assert refused(without), f"{impl}: never refused as unsupported: {text_of(without)}"
+        assert "historical data access (AccessHistoryDataCapability" in text_of(without)
+        after = await _status_capabilities(session)
+        assert after["support"]["history"] == "not_supported", f"{impl}: {after}"
+        assert after["session_generation"] > before["session_generation"], (
+            f"{impl}: the answers did not move to a new session: {before} -> {after}"
+        )
+
+        server.restart()
+        back = await _history_until(session, lambda result: not result.is_error)
+        assert not back.is_error, f"{impl}: a stale no outlived the restart: {text_of(back)}"
+        again = await _status_capabilities(session)
+        assert again["support"]["history"] == "supported", f"{impl}: {again}"
+        assert again["session_generation"] > after["session_generation"], f"{impl}: {again}"
 
 
 async def test_a_call_that_dies_mid_request_is_recognised_and_recovered(

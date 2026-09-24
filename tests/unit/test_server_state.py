@@ -22,6 +22,7 @@ import threading
 import pytest
 from conftest import ROOT
 from opcua_mcp_server import server as server_module
+from opcua_mcp_server.capabilities import CAPABILITY_NAMES, Probe, answers_from
 from opcua_mcp_server.server import TOOL_NAMES, create_server
 from opcua_mcp_server.state import ServerState
 
@@ -102,18 +103,24 @@ def test_a_state_can_be_given_its_own_endpoint():
 
 
 def test_forgetting_capabilities_forgets_all_of_them():
-    """A session's answers do not outlive the session that gave them."""
+    """A session's answers do not outlive the session that gave them.
+
+    Forgotten is *unknown*, not *unsupported*: nobody has asked the next session
+    anything yet, and a refusal must not claim otherwise (#108, #140).
+    """
     state = ServerState()
-    state.capabilities.update(
-        history=True, history_events=True, aggregate_functions={"Average": object()}
+    state.capabilities = answers_from(
+        4,
+        "2026-09-24T10:00:00.000Z",
+        {name: Probe("supported") for name in CAPABILITY_NAMES},
+        {"Average": object()},
     )
-    assert state.available_capabilities() == {"history", "historyEvents", "aggregate"}
 
     state.forget_capabilities()
 
-    assert state.available_capabilities() == set()
-    assert state.capabilities_met({"capabilities": ["history"]}) is False
-    assert state.capabilities_met({"capabilities": []}) is True
+    assert state.capabilities.generation is None
+    assert set(state.capabilities.support.values()) == {"unknown"}
+    assert state.capabilities.aggregate_functions == {}
 
 
 def test_the_module_holds_no_mutable_state():
@@ -169,7 +176,9 @@ async def test_the_lifespan_does_not_wait_for_the_warm_up(monkeypatch):
     So a lifespan that awaited the first connection round held the whole protocol
     back for it — the whole configured backoff against a plant that was down.
     The warm-up here never finishes on its own; the lifespan must yield anyway,
-    and a catalogue request must answer once the window has passed.
+    and a catalogue request must answer at once, and whole: since #140 it does
+    not wait for the warm-up even within the window, because there is nothing
+    in the catalogue for the warm-up to change.
     """
     release = threading.Event()
 
@@ -178,7 +187,7 @@ async def test_the_lifespan_does_not_wait_for_the_warm_up(monkeypatch):
 
     monkeypatch.setattr(server_module, "_connect_and_probe", never_connects)
     mcp = create_server(ServerState(url="opc.tcp://127.0.0.1:1/none"))
-    mcp.state.warm_up_wait_ms = 200
+    mcp.state.warm_up_wait_ms = 5000
     loop = asyncio.get_running_loop()
 
     began = loop.time()
@@ -186,19 +195,22 @@ async def test_the_lifespan_does_not_wait_for_the_warm_up(monkeypatch):
         assert loop.time() - began < 1, "the lifespan waited for the warm-up"
         assert not mcp.state.warm_up.done()
 
+        listing = loop.time()
         listed = await mcp.list_tools()
-        assert loop.time() - began < 2, "tools/list waited past the warm-up window"
-        assert "get_server_status" in {tool.name for tool in listed}
+        assert loop.time() - listing < 0.5, "tools/list waited for the warm-up"
+        assert [tool.name for tool in listed] == [
+            tool["name"] for tool in CONTRACT["tools"] if mcp.state.policy.is_visible(tool)
+        ]
         release.set()
 
     assert mcp.state.warm_up is None
 
 
 async def test_a_request_waits_for_a_warm_up_that_finishes_in_time():
-    """Against a plant that is up, the first catalogue is the whole catalogue.
+    """Against a plant that is up, the first status is a connected one.
 
     That was the reason the warm-up ran before any request was served; waiting
-    for it within the window keeps it.
+    for it within the window keeps it, for `get_server_status`.
     """
     state = ServerState(url="opc.tcp://127.0.0.1:1/none")
     state.warm_up_wait_ms = 5000
@@ -214,7 +226,7 @@ async def test_a_request_waits_for_a_warm_up_that_finishes_in_time():
 
 
 async def test_the_wait_is_measured_from_the_start_of_the_warm_up():
-    """Not per request: a second catalogue request must not wait all over again."""
+    """Not per request: a second status request must not wait all over again."""
     state = ServerState(url="opc.tcp://127.0.0.1:1/none")
     state.warm_up_wait_ms = 200
     state.start_warm_up(asyncio.sleep(30))

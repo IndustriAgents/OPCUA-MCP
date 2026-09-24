@@ -19,7 +19,7 @@ from opcua_mcp_server.contract import contract_candidates, load_contract
 
 CONTRACT = json.loads((ROOT / "contract" / "tools.json").read_text(encoding="utf-8"))
 TOOLS = CONTRACT["tools"]
-CAPABILITIES = CONTRACT["capabilities"]
+CAPABILITIES = {k: v for k, v in CONTRACT["capabilities"].items() if not k.startswith("$")}
 RESOURCES = CONTRACT["resources"]
 RESULT_SHAPES = {k: v for k, v in CONTRACT["resultShapes"].items() if not k.startswith("$")}
 EVENTS = CONTRACT["events"]
@@ -84,6 +84,27 @@ def test_capability_is_declared(tool):
 
 
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)
+def test_argument_capabilities_name_real_arguments_and_capabilities(tool):
+    """An argument gate is how a capability gates *part* of a tool (#140).
+
+    It used to be done by withholding the argument from the advertised schema,
+    which made the schema a client cached depend on when it listed. The gate is
+    now declared here and checked on the call, so it has to name an argument the
+    tool really takes and a capability the contract really probes.
+    """
+    gates = tool.get("argumentCapabilities", {})
+    properties = tool["inputSchema"].get("properties", {})
+    for argument, needs in gates.items():
+        assert argument in properties, f"{tool['name']} gates unknown argument {argument!r}"
+        assert argument not in tool["inputSchema"].get("required", []), (
+            f"{tool['name']}.{argument} is required, so gating it gates the whole tool"
+        )
+        assert needs and set(needs) <= set(CAPABILITIES), (
+            f"{tool['name']}.{argument} gated on {needs}; known: {sorted(CAPABILITIES)}"
+        )
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=TOOL_IDS)
 def test_input_schema_is_coherent(tool):
     schema = tool["inputSchema"]
     assert schema.get("type") == "object", f"{tool['name']} inputSchema must be an object"
@@ -99,11 +120,24 @@ def test_input_schema_is_coherent(tool):
 @pytest.mark.parametrize("name", sorted(CAPABILITIES), ids=sorted(CAPABILITIES))
 def test_capability_probe_is_well_formed(name):
     probe = CAPABILITIES[name]
-    for field in ("nodeId", "browseName", "check"):
+    # `label` and `remediation` are what a refused call is told (#140).
+    for field in ("nodeId", "browseName", "check", "label", "remediation"):
         assert probe.get(field), f"capability {name} is missing {field!r}"
     assert probe["check"] in {"readBooleanTrue", "browseNonEmpty"}, (
         f"capability {name} has unknown check {probe['check']!r}"
     )
+
+
+def test_the_status_report_has_an_answer_for_every_capability():
+    """`get_server_status` reports one answer per capability the contract probes.
+
+    Written out in the shape rather than derived, because the shape is what a
+    client reads — so a capability added to the contract and not to the report
+    is caught here rather than by a client finding it missing.
+    """
+    support = RESULT_SHAPES["serverStatus"]["properties"]["capabilities"]["properties"]["support"]
+    assert set(support["properties"]) == set(CAPABILITIES)
+    assert set(support["required"]) == set(CAPABILITIES)
 
 
 def test_python_server_sources_every_description_from_the_contract():

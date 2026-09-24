@@ -138,15 +138,16 @@ class OPCUAMCPServer {
     // runtime state, reported by `get_server_status`; it does not gate the
     // protocol.
     //
-    // It had been moved in front of the transport for a reason that still holds:
-    // requests served *during* the warm-up used to see no session and answer as
-    // though the server supported nothing. `tools/list` and `get_server_status`
-    // therefore wait for it — bounded, see `OpcuaTools.awaitWarmUp` — and a tool
-    // call that needs a session joins its connection round. The Python runtime
-    // starts its warm-up the same way, from its lifespan.
+    // It had been moved in front of the transport because a status read served
+    // *during* the warm-up said "not connected" against a plant that was up, so
+    // `get_server_status` waits for it — bounded, see `OpcuaTools.awaitWarmUp` —
+    // and a tool call that needs a session joins its connection round.
+    // `tools/list` does not: the catalogue is the contract whatever the plant is
+    // doing (#140). The Python runtime starts its warm-up the same way, from its
+    // lifespan.
     //
-    // Never fatal: a plant that is unreachable simply means the optional tools
-    // appear once a tool call has brought the connection up.
+    // Never fatal: a plant that is unreachable is reported by the calls that
+    // need it and by `get_server_status`, until a call brings it back.
     void this.tools.startWarmUp();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);

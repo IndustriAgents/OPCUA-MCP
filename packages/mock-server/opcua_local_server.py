@@ -243,7 +243,7 @@ class IndustrialControlSystem:
 
         logging.info("historize completed")
 
-    def setup_events(self):
+    def setup_events(self, keep_history: bool = True):
         """Announce alarm transitions as OPC UA events.
 
         Emitted from the **Server** object (`ns=0;i=2253`) rather than from the
@@ -264,7 +264,8 @@ class IndustrialControlSystem:
         plant = self.server.get_objects_node().get_child("2:IndustrialControlSystem")
         self.event_generator.event.SourceNode = plant.nodeid
         self.event_generator.event.SourceName = "IndustrialControlSystem"
-        self._historize_events()
+        if keep_history:
+            self._historize_events()
         logging.info("event generator ready")
 
     def _historize_events(self):
@@ -821,6 +822,16 @@ def main():
             "passes an ephemeral port so parallel checkouts never share a server."
         ),
     )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help=(
+            "Keep no value or event history, and say so: AccessHistoryDataCapability "
+            "stays false and AccessHistoryEventsCapability is never created. The test "
+            "suite restarts the mock with and without it to change what the server "
+            "supports under an MCP server that is already running (issue #140)."
+        ),
+    )
     args = parser.parse_args()
 
     # Setup logging
@@ -856,8 +867,9 @@ def main():
         # Start the server
         server.start()
         industrial_system.advertise_operation_limits()
-        industrial_system.historize()
-        industrial_system.setup_events()
+        if not args.no_history:
+            industrial_system.historize()
+        industrial_system.setup_events(keep_history=not args.no_history)
         logging.info(f"OPC UA Server started at {args.endpoint}")
         logging.info("Server is running and ready for connections")
 

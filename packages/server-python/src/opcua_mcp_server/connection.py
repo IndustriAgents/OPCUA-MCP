@@ -278,7 +278,10 @@ class OpcuaConnection:
 
         The random :attr:`session_id` says two records rode *different*
         sessions; this says in which order, and how many were lost in between,
-        without anyone having to reassemble the connect log (#146).
+        without anyone having to reassemble the connect log (#146). It is also
+        what the capability answers are keyed on: an answer read on generation 2
+        says nothing about generation 3, which may be a restarted server with
+        different features (#140).
         """
         return self._generation if self._session is not None else None
 

@@ -47,9 +47,9 @@ Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action
 | [`write_opcua_nodes`](#write_opcua_nodes) | control | destructive, idempotent | Write a value to one or more OPC UA nodes. |
 | [`call_opcua_method`](#call_opcua_method) | control | destructive | Call a method on an OPC UA object. |
 
-**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool annotations each tool advertises.
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are the MCP tool annotations each tool advertises.
 
-† **Capability-gated**: listed only when the connected server advertises what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
+† **Needs a server feature**: always listed, and refused at call time with `capability_not_supported` or `capability_unknown` when the connected server does not advertise what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
 
 <!-- END GENERATED: tool-index -->
 
@@ -393,10 +393,21 @@ when another tool fails.
     { "index": 2, "uri": "http://examples.freeopcua.github.io" }
   ],
   "diagnostics": null,
-  "error": null
+  "error": null,
+  "capabilities": {
+    "session_generation": 1,
+    "checked_at": "2026-09-17T13:06:12.104Z",
+    "support": { "history": "supported", "historyEvents": "supported", "aggregate": "not_supported" },
+    "aggregate_functions": []
+  }
 }
 ```
 > Prompt: *"Are we actually connected, and is the PLC healthy?"*
+
+`capabilities` answers "why was that history read refused?": what the server was
+found to offer, on which of this process's sessions and when. Every tool is
+listed whatever it says; a call that needs something `not_supported` is refused
+with `capability_not_supported` and what to use instead.
 
 `server_identity` answers "why can't it write?" before anyone asks. Encrypted and
 authenticated are separate properties: `channel_secured` is a security policy
@@ -478,13 +489,15 @@ Calling it is also what re-establishes a dropped connection, so it doubles as
 
 ## History and aggregates
 
-One tool, capability-gated. The mock server enables history and advertises no
-aggregate functions, so against it `read_opcua_history` appears *without* its
-`aggregate_function` argument.
+One tool, always listed with every argument. It needs a server that keeps
+history or computes aggregates, and a call the connected server cannot serve is
+refused with `capability_not_supported` before anything is sent. The mock server
+enables history and advertises no aggregate functions, so against it a raw read
+works and an aggregate read is refused.
 
 ### `read_opcua_history` (both servers)
 Read a node's stored history — raw readings, or one server-computed summary per
-interval. Offered when the server advertises historical access
+interval. Served when the server advertises historical access
 (`AccessHistoryDataCapability`) *or* aggregates.
 
 ```json
@@ -542,12 +555,19 @@ ask about a week of data without transferring a week of data.
   "aggregate_function": "Average", "processing_interval": 60000 }
 ```
 
-**The argument only appears when the server advertises aggregates**, and its
-description then lists the functions that server actually offers. The bundled
-mock advertises none, so against it `read_opcua_history` is offered *without*
-`aggregate_function` — capability gating applied to the argument rather than to
-the whole tool, which is strictly more informative: you are told what this server
-can do, not merely that a tool is missing.
+**The argument is always listed; the server decides whether it can be used.**
+Which functions a server offers is its own choice: `get_server_status` →
+`capabilities.aggregate_functions` lists them, and an unknown name is refused
+with that list. The bundled mock offers none, so against it the call is refused
+before anything is sent:
+
+```text
+capability_not_supported: read_opcua_history needs aggregate functions (AggregateFunctions, ns=0;i=2997), and the OPC UA server at opc.tcp://… does not offer it (determined on session generation 1 at 2026-09-24T10:00:00.000Z). Nothing was sent. Call read_opcua_history without aggregate_function for the raw readings and summarise them yourself, over a range short enough to stay under the per-call maximum.
+```
+
+The catalogue used to hide the argument on such a server instead, which made the
+schema a client cached depend on which server it had listed against, and when
+(#140).
 
 The result uses the same record shape as the raw read above, one record per
 interval:
@@ -766,9 +786,10 @@ asking for all of them is a request that never returns. `completeness` says when
 the cap, `num_values` or the server stopped the read, and gives the `start_time`
 to continue from.
 
-Offered only when the server advertises `AccessHistoryEventsCapability`
-(`ns=0;i=11194`). That is a different node and a different answer from the one
-`read_opcua_history` is gated on: OPC UA Part 11 §5.4 lets a server keep values
+Served only when the server advertises `AccessHistoryEventsCapability`
+(`ns=0;i=11194`), and refused with `capability_not_supported` otherwise — listed
+either way. That is a different node and a different answer from the one
+`read_opcua_history` needs: OPC UA Part 11 §5.4 lets a server keep values
 without keeping events, and most do.
 > Prompt: *"Show me everything that happened between 2am and 3am."*
 

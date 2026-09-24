@@ -86,17 +86,25 @@ Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action
 | `write_opcua_nodes`       | control      | destructive, idempotent | Write a value to one or more OPC UA nodes.                                                                                                                                                                                                            |
 | `call_opcua_method`       | control      | destructive             | Call a method on an OPC UA object.                                                                                                                                                                                                                    |
 
-**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a secured channel unless `OPCUA_ALLOW_INSECURE_CONTROL` is set. **Hints** are the MCP tool annotations each tool advertises.
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are the MCP tool annotations each tool advertises.
 
-† **Capability-gated**: listed only when the connected server advertises what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
+† **Needs a server feature**: always listed, and refused at call time with `capability_not_supported` or `capability_unknown` when the connected server does not advertise what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
 
 <!-- END GENERATED: tool-reference -->
 
-A capability-gated tool is not on the menu of a server that cannot do it,
-rather than failing at call time. `read_opcua_history` is offered for either
-stored values or server-side aggregates (a non-empty `AggregateFunctions`
-folder), and `read_event_history` separately — keeping values and keeping events
-are different features, and a server commonly does one without the other.
+`read_opcua_history` needs
+historical access (`AccessHistoryDataCapability`) or aggregates (a non-empty
+`AggregateFunctions` folder), and its `aggregate_function` argument needs the
+latter. `read_event_history` needs `AccessHistoryEventsCapability` — keeping
+values and keeping events are different features and a server commonly does one
+without the other. Every tool is listed whatever the plant is doing, with the
+same schema, because MCP clients keep the first list they get and nothing tells
+them reliably to ask again. A call the connected server cannot serve is refused
+before anything is sent, with a code to act on — `capability_not_supported`,
+`capability_unknown`, or `endpoint_offline` when the server cannot be reached —
+and what to use instead. `get_server_status` → `capabilities` reports what the
+server was found to offer, including its aggregate function names, on which
+session and when.
 
 **One tool per operation, not one per arity.** Reading one node and reading fifty
 is the same request with a longer list, so it is one tool and one code path.

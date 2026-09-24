@@ -155,8 +155,8 @@ it again on the same endpoint. Neither MCP server needs restarting:
 | While the mock is down | `connected: false`, with the refused connection under `error` |
 | Once it is back | `connected: true`, and a `start_time` a few seconds old — a new session, not the old one |
 
-Other tools report `Not connected to the OPC UA server at …: … Call
-get_server_status for details.` while it is down, and start working again by
+Other tools report `endpoint_offline: Not connected to the OPC UA server at …:
+… Call get_server_status for details.` while it is down, and start working again by
 themselves. A `subscribe_opcua_nodes` made before the outage keeps its ID and
 resumes delivering. Tune how hard and how long the retrying goes with
 `OPCUA_RECONNECT_MAX_RETRY`, `OPCUA_RECONNECT_INITIAL_DELAY_MS`,

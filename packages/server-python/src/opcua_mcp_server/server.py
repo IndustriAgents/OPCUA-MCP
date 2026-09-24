@@ -34,9 +34,16 @@ from .audit import (
     parse_audit_config,
 )
 from .capabilities import (
+    CapabilityAnswers,
+    answers_from,
+    capability_status,
     client_aggregate_functions,
     client_supports_history,
     client_supports_history_events,
+    now_iso_utc,
+    refusal,
+    requirements,
+    verdict,
 )
 from .completeness import (
     buffer_completeness,
@@ -330,9 +337,9 @@ def _bind(state: ServerState, context: dict, client) -> None:
     this is what makes a tool that reads `lifespan_context["opcua_client"]` see
     the new session rather than the dead one.
 
-    Re-probing here is what lets `tools/list` stop waiting on the network: a new
-    session is the only moment the answer can have changed, so the catalogue is
-    recomputed exactly then rather than on every catalogue request.
+    Probing here, with the new client in hand, is so ``get_server_status`` has
+    an answer to report for the new session; a call that needs a capability
+    re-reads anything from an older generation itself (#140).
     """
     context["opcua_client"] = client
     state.subscriptions.reattach(client)
@@ -344,34 +351,71 @@ def _bind(state: ServerState, context: dict, client) -> None:
     # the nodes the old ids named. What each one said about its unit and its
     # range was true of the session that said it.
     state.node_metadata.forget()
-    _probe_capabilities(state, client)
+    _probe_capabilities(state, client, state.connection)
 
 
-def _probe_capabilities(state: ServerState, client) -> bool:
-    """Read the optional capabilities off a live client. True if they changed.
+def _probe_capabilities(
+    state: ServerState, client, connection: OpcuaConnection | None
+) -> CapabilityAnswers:
+    """Read what the server can do off a live client, and remember it.
 
-    Best-effort by design: any failure yields "not supported" rather than an
-    error, because an optional capability must never break `tools/list`.
+    Never raises: each probe reports what the server answered, or ``unknown``
+    with the reason when it could not be asked. The answers are stamped with the
+    generation of the session they were read on, captured before asking — so an
+    answer that arrives after the session has been replaced is already stale
+    when it is stored, and the next call asks again.
     """
-
-    capabilities = state.capabilities
-
-    def snapshot():
-        return (
-            capabilities["history"],
-            capabilities["history_events"],
-            tuple(sorted(capabilities["aggregate_functions"])),
-        )
-
-    before = snapshot()
-    capabilities["history"] = _probe(client_supports_history, client, False)
-    capabilities["history_events"] = _probe(client_supports_history_events, client, False)
-    capabilities["aggregate_functions"] = _probe(client_aggregate_functions, client, {})
+    generation = connection.session_generation if connection is not None else None
+    history = client_supports_history(client)
+    history_events = client_supports_history_events(client)
     # Read with the capabilities because it changes when they do — on a new
     # session — and a tool that needs it can then use it without a round trip.
     state.operation_limits = read_operation_limits(client)
     state.node_metadata.server_limits = dict(state.operation_limits)
-    return before != snapshot()
+    aggregate, functions = client_aggregate_functions(client)
+    for probe in (history, history_events, aggregate):
+        if probe.support == "unknown":
+            print(f"OPC UA capability probe failed: {probe.reason}", file=sys.stderr)
+    state.capabilities = answers_from(
+        generation,
+        now_iso_utc(),
+        {"history": history, "historyEvents": history_events, "aggregate": aggregate},
+        functions,
+    )
+    return state.capabilities
+
+
+def _fresh_capabilities(state: ServerState, connection: OpcuaConnection) -> CapabilityAnswers:
+    """Ask the live server again, rebuilding the session first if it has died.
+
+    What a refusal is decided on. python-opcua cannot tell a dead socket from a
+    live one short of using it, and a refusal taken from the cache uses nothing:
+    a server that restarted *with* history behind a cached "no" would go on being
+    refused, on a session nobody noticed was gone, for as long as the client kept
+    asking. So the probes go through :meth:`OpcuaConnection.run`, the same
+    liveness check ``get_server_status`` relies on — a probe that lost the
+    session raises its error, the session is rebuilt (which re-reads the answers
+    for the new generation) and the probes are asked once more.
+    """
+
+    def ask() -> CapabilityAnswers:
+        client = connection.client
+        if client is None:
+            raise RuntimeError("No OPC UA session available")
+        answers = _probe_capabilities(state, client, connection)
+        lost = next(
+            (
+                probe.error
+                for probe in answers.probes.values()
+                if probe.error is not None and is_connection_error(probe.error)
+            ),
+            None,
+        )
+        if lost is not None:
+            raise lost
+        return answers
+
+    return connection.run(ask)
 
 
 def _connect_and_probe(state: ServerState, connection: OpcuaConnection) -> None:
@@ -382,8 +426,8 @@ def _connect_and_probe(state: ServerState, connection: OpcuaConnection) -> None:
     own. `_bind` does the probing, through `on_client_replaced`.
 
     Called from the lifespan, and never from `tools/list` — see
-    :meth:`PolicyMCPServer.list_tools` for why a catalogue request must not wait
-    on a socket.
+    :meth:`PolicyMCPServer.list_tools` for why the catalogue does not depend on
+    the connection at all.
     """
     state.forget_capabilities()
     try:
@@ -391,25 +435,15 @@ def _connect_and_probe(state: ServerState, connection: OpcuaConnection) -> None:
     except Exception:
         # Deliberately not fatal. An MCP client starts this server when *it*
         # starts, which may be long before the plant network is reachable; dying
-        # here would mean a restart of the MCP client for every OPC UA outage. A
-        # server that is down simply advertises the core tools until it comes
-        # back, at which point `on_client_replaced` re-probes. Every tool call
-        # retries the connection, and `get_server_status` reports what is wrong
-        # in the meantime.
+        # here would mean a restart of the MCP client for every OPC UA outage.
+        # The catalogue is the same either way (#140); every tool call retries
+        # the connection, and `get_server_status` reports what is wrong in the
+        # meantime.
         print(
             f"Starting without an OPC UA connection: {connection.last_error}. "
             f"Tools will retry on each call.",
             file=sys.stderr,
         )
-
-
-def _probe(read, client, fallback):
-    """Run one capability probe, yielding ``fallback`` on any failure."""
-    try:
-        return read(client)
-    except Exception as error:
-        print(f"OPC UA capability probe failed: {describe_error(error)}", file=sys.stderr)
-        return fallback
 
 
 # Manage the lifecycle of the OPC UA client connection
@@ -446,9 +480,10 @@ async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     # for a full connection round against a plant that was down (#136). Plant
     # connectivity is runtime state, reported by `get_server_status`; it does not
     # gate the protocol. What awaiting it bought is kept within a bound:
-    # `tools/list` and `get_server_status` wait for it (`ServerState.await_warm_up`),
-    # and a tool call that needs a session joins its round through
-    # `ensure_connected`. The Node runtime starts its warm-up the same way.
+    # `get_server_status` waits for it (`ServerState.await_warm_up`), and a tool
+    # call that needs a session joins its round through `ensure_connected`.
+    # `tools/list` does not: the catalogue is the contract whatever the plant is
+    # doing (#140). The Node runtime starts its warm-up the same way.
     warm_up = state.start_warm_up(asyncio.to_thread(_connect_and_probe, state, connection))
 
     try:
@@ -530,8 +565,8 @@ def _exit_on_signal(state: ServerState) -> None:
         signal.signal(signum, handle)
 
 
-def _advertised_schema(state: ServerState, spec: dict) -> dict:
-    """A tool's input schema as advertised: the contract's own, capability-gated.
+def _advertised_tool(tool, spec: dict):
+    """One tool as advertised: the contract's own definition, never the derived one.
 
     The contract's schema, not the one ``MCPServer`` derives from the function
     signature. The derived one carries no per-argument descriptions at all and
@@ -546,26 +581,33 @@ def _advertised_schema(state: ServerState, spec: dict) -> dict:
     it is strictly looser than this one, and :func:`validation.validate_arguments`
     applies the contract's own constraints before either of them sees the call.
 
-    Capability gating then removes what this particular server cannot honour:
-    ``read_opcua_history`` is advertised whenever the server reports
-    HistoricalAccess, and its ``aggregate_function`` argument appears only if the
-    server also advertises aggregates — carrying that server's *own* function
-    list in its description, which is strictly more informative than documenting
-    the argument as unsupported, because the list is the live one.
+    Nothing about the connected server is folded in (#140). ``aggregate_function``
+    used to be withheld from a server without aggregates and to carry the live
+    function list otherwise, so the schema a client cached depended on when it
+    listed; the server's own functions are reported by ``get_server_status``.
     """
-    schema = copy.deepcopy(spec["inputSchema"])
-    properties = schema.get("properties") or {}
-    if "aggregate_function" not in properties:
-        return schema
-
-    functions = state.capabilities["aggregate_functions"]
-    if not functions:
-        properties.pop("aggregate_function", None)
-        properties.pop("processing_interval", None)
-        return schema
-
-    properties["aggregate_function"]["description"] += f", one of: {', '.join(functions)}"
-    return schema
+    output_schema = None
+    if shape_name := spec.get("resultShape"):
+        output_schema = {
+            "type": "object",
+            "properties": {"result": CONTRACT["resultShapes"][shape_name]},
+            "required": ["result"],
+            "additionalProperties": False,
+        }
+        # Beside `result`, for a tool that can return fewer records than it was
+        # asked for (issue #137). `outputSchema` in tools.ts builds the same object.
+        if spec.get("reportsCompleteness"):
+            output_schema["properties"]["completeness"] = CONTRACT["completeness"]["schema"]
+            output_schema["required"] = ["result", "completeness"]
+    return tool.model_copy(
+        update={
+            "annotations": ToolAnnotations(**spec["annotations"]),
+            "output_schema": output_schema,
+            # A copy: the contract is shared by every request, and nothing a
+            # caller does to what it was handed may change the next catalogue.
+            "input_schema": copy.deepcopy(spec["inputSchema"]),
+        }
+    )
 
 
 class PolicyMCPServer(MCPServer):
@@ -582,65 +624,63 @@ class PolicyMCPServer(MCPServer):
         self.state = state if state is not None else ServerState()
 
     async def list_tools(self):
-        """The catalogue, from what the *current* session was found to support.
+        """The catalogue: the contract, filtered by deployment policy only.
 
-        Deliberately does no network I/O. This used to open a connection before
-        answering, and `OpcuaConnection.connect` holds its lock across the whole
-        backoff loop — so against an unreachable plant every `tools/list` paid
-        the full reconnect budget (7s by default, 32s with
-        `OPCUA_RECONNECT_MAX_RETRY=-1`) and serialised every concurrent tool call
-        behind it. Clients list at session start, which is exactly when a plant
-        that is down is most likely to be down.
+        No network I/O, no waiting, and the same answer for the life of the
+        process whatever the plant is doing (#140). It used to depend on the
+        capabilities of the session held — ``read_event_history`` absent,
+        ``aggregate_function`` withheld — so a process started while the plant
+        was down advertised less than one started while it was up, and nothing
+        portable told a client that had listed once to list again. Clients and
+        models cache tool definitions for the life of a session; what they cache
+        now stays true. A capability the server lacks is reported by the call
+        that needs it (:meth:`_ensure_capabilities`) and by ``get_server_status``.
 
-        The capabilities are probed where they can change instead — on every
-        (re)connect, in `_bind`. Convergence is unchanged: a client that listed
-        while the plant was down sees the core tools, any tool call brings the
-        connection up and re-probes, and the next `tools/list` carries the full
-        catalogue. What is gone is only the waiting.
-
-        No `notifications/tools/list_changed` is sent, on either runtime, for the
-        same reason no `notifications/resources/updated` is — see
-        docs/architecture.md. The catalogue is re-listable at any time and this
-        is what both runtimes can honestly promise.
+        The policy is configuration, fixed when the process starts, so filtering
+        on it does not make the catalogue move. No
+        ``notifications/tools/list_changed`` is sent, on either runtime — see
+        docs/architecture.md — and nothing depends on one.
         """
-        # The one wait this does, and it is on the startup warm-up, bounded —
-        # never on a connection of its own.
-        await self.state.await_warm_up()
         policy = self.state.policy
         specs = {tool["name"]: tool for tool in CONTRACT["tools"]}
         listed = await super().list_tools()
-        visible = []
-        for tool in listed:
-            spec = specs[tool.name]
-            if not policy.is_visible(spec):
-                continue
-            if not self.state.capabilities_met(spec):
-                continue
-            annotations = ToolAnnotations(**spec["annotations"])
-            output_schema = None
-            if shape_name := spec.get("resultShape"):
-                output_schema = {
-                    "type": "object",
-                    "properties": {"result": CONTRACT["resultShapes"][shape_name]},
-                    "required": ["result"],
-                    "additionalProperties": False,
-                }
-                # Beside `result`, for a tool that can return fewer records than
-                # it was asked for (issue #137). `outputSchema` in tools.ts builds
-                # the same object.
-                if spec.get("reportsCompleteness"):
-                    output_schema["properties"]["completeness"] = CONTRACT["completeness"]["schema"]
-                    output_schema["required"] = ["result", "completeness"]
-            visible.append(
-                tool.model_copy(
-                    update={
-                        "annotations": annotations,
-                        "output_schema": output_schema,
-                        "input_schema": _advertised_schema(self.state, spec),
-                    }
-                )
-            )
-        return visible
+        return [
+            _advertised_tool(tool, specs[tool.name])
+            for tool in listed
+            if policy.is_visible(specs[tool.name])
+        ]
+
+    async def _ensure_capabilities(
+        self, spec: dict, arguments: dict, connection: OpcuaConnection
+    ) -> None:
+        """Refuse a call the connected server cannot serve, before anything is sent.
+
+        Called with a live session in hand, so it can ask rather than guess. A
+        cached "yes" is trusted for the session generation it was read on: if it
+        has gone stale, the server's own refusal of the request says so. Nothing
+        else is taken from the cache. An answer from an older generation, an
+        ``unknown``, and above all a "no" are asked again first — a "no" refuses
+        without touching the network, so taken from the cache it could never find
+        out that the server had come back with the feature. What is left is the
+        server's own answer, and a refusal worded from the contract that says
+        which capability, which session, and what to do instead (#140). The Node
+        server's ``ensureCapabilities`` decides the same way.
+        """
+        groups = requirements(spec, arguments)
+        if not groups:
+            return
+        answers = self.state.capabilities
+        decided = verdict(groups, answers.support)
+        if answers.generation != connection.session_generation or decided.outcome != "allowed":
+            try:
+                answers = await asyncio.to_thread(_fresh_capabilities, self.state, connection)
+            except Exception as error:
+                raise ToolError(
+                    not_connected_message(connection.url, describe_error(error))
+                ) from error
+            decided = verdict(groups, answers.support)
+        if decided.outcome != "allowed":
+            raise ToolError(refusal(spec["name"], decided, answers, connection.url))
 
     async def call_tool(self, name, arguments, context=None):
         arguments = arguments or {}
@@ -712,12 +752,11 @@ class PolicyMCPServer(MCPServer):
             await self.state.await_warm_up()
             return await super().call_tool(name, arguments, context)
 
-        # Connect *before* the capability gate, not after. The capability map is
-        # filled in by the reconnect callback, so on a process that started while
-        # the plant was unreachable it still holds its startup defaults — and
-        # checking it first refused `read_opcua_history` as "the server advertises
-        # none of: history" without ever asking the server. Unknown is not absent
-        # (issue #108).
+        # Connect *before* the capability gate, not after. A process that started
+        # while the plant was unreachable has asked no session anything, and
+        # checking first refused `read_opcua_history` as unsupported without ever
+        # asking the server. Unknown is not absent (issue #108) — and an
+        # unreachable server is `endpoint_offline`, not a capability answer (#140).
         try:
             await asyncio.to_thread(connection.ensure_connected)
         except Exception as error:
@@ -726,12 +765,7 @@ class PolicyMCPServer(MCPServer):
         # session died" from "someone else already replaced it".
         call.session = connection.session_id
 
-        if not self.state.capabilities_met(call.spec):
-            raise ToolError(
-                error_message(
-                    "capabilityMissing", capabilities=", ".join(call.spec["capabilities"])
-                )
-            )
+        await self._ensure_capabilities(call.spec, arguments, connection)
 
         try:
             return await super().call_tool(name, arguments, context)
@@ -814,6 +848,12 @@ class PolicyMCPServer(MCPServer):
             # more: a `failed` line would read as though the plant had answered.
             call.denied = True
             raise
+
+        # And re-check what the server can do, for the same reason: the session
+        # the first attempt was checked against is gone, and the one this attempt
+        # rides on may be a restarted server that no longer keeps history. Only a
+        # `resend` tool gets here, and every capability-gated tool is one (#140).
+        await self._ensure_capabilities(call.spec, arguments, connection)
 
         return await super().call_tool(name, arguments, context)
 
@@ -1069,7 +1109,9 @@ def read_opcua_history(
     if start_time is None:
         raise ToolError(error_message("aggregateNeedsStart"))
 
-    aggregate_functions = _state(ctx).capabilities["aggregate_functions"]
+    # `_ensure_capabilities` has already refused a server that offers none, on
+    # answers read on this very session; what is left is a name it does not.
+    aggregate_functions = _state(ctx).capabilities.aggregate_functions
     # Both runtimes reject an unsupported function with the same sentence, so the
     # message is part of the contract and must reach the client rather than be
     # masked as a crash — hence ToolError. See `validate_aggregate_function`.
@@ -1141,9 +1183,8 @@ def read_opcua_history(
         ) from e
 
 
-# Registered once; tools/list gates it using the capabilities read from the
-# lifecycle's active session. This avoids network I/O during import and prevents
-# startup from opening throwaway OPC UA sessions.
+# Registered and advertised always; a call is checked against the capabilities
+# of the session it rides on (#140). Nothing here touches the network at import.
 
 
 def read_event_history(
@@ -1212,10 +1253,22 @@ def get_server_status(ctx: Context) -> CallToolResult:
     the caller asked for, which is why this is the one tool that never raises a
     `ToolError` for a down server.
 
+    ``capabilities`` is appended after the read, because the read may have
+    re-established the session and re-read them. It is the cache as it stands,
+    never a probe of its own: it says which session generation it was read on
+    and when, which is what makes a stale answer recognisable as one (#140).
+
     Returns:
         CallToolResult: One record of the shared ``resultShapes.serverStatus``
             shape from ``contract/tools.json``, in text and structured form.
     """
+    state = _state(ctx)
+    status = _read_status(ctx)
+    return _object_result({**status, "capabilities": capability_status(state.capabilities)})
+
+
+def _read_status(ctx: Context) -> dict:
+    """The status record's connection and server fields; see :func:`get_server_status`."""
     connection = ctx.request_context.lifespan_context["opcua_connection"]
     security = describe_security(security_config())
     identity = server_identity_record(_state(ctx).policy.config)
@@ -1224,13 +1277,11 @@ def get_server_status(ctx: Context) -> CallToolResult:
     # connected — the one answer that must not wait for it (#136). The round
     # carries on; asking again reports how it ended.
     if connection.connecting:
-        return _object_result(
-            disconnected_status(
-                connection.url,
-                security,
-                identity,
-                still_connecting_message(connection.url, connection.last_error),
-            )
+        return disconnected_status(
+            connection.url,
+            security,
+            identity,
+            still_connecting_message(connection.url, connection.last_error),
         )
     try:
         # Through the same retry as every other read, so that asking for the
@@ -1243,7 +1294,7 @@ def get_server_status(ctx: Context) -> CallToolResult:
         )
     except Exception as error:
         status = disconnected_status(connection.url, security, identity, describe_error(error))
-    return _object_result(status)
+    return status
 
 
 # --- browsing --------------------------------------------------------------------

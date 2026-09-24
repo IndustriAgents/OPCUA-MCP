@@ -16,6 +16,11 @@ name: Dependency matrix
 # The locked set is ci.yml's job and runs on every PR. The policy these three
 # implement, with its cadence and response times, is docs/dependency-policy.md.
 #
+# The steps are spelled out rather than calling .github/actions/conformance,
+# which is the locked set by construction: it runs `npm ci` and a plain
+# `uv sync`, and either would put the lockfiles back under the suite. The
+# install steps are what differs here; the test steps match the action's.
+#
 # NOTE: not a required status check, and the job names below are free to change.
 # It runs on a schedule and on dependency PRs only, so requiring it would block
 # every PR that does not touch a manifest.

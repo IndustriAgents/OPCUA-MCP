@@ -305,7 +305,7 @@ at a simulator or an isolated lab, never at a running process.
   must carry a zone (`Z` or an offset); one without is refused on both.
 - Client configurations in [docs/install.md](install.md) are worked
   examples, not a per-client certification matrix. `--install claude-desktop`
-  is the only client integration with its own tests.
+  and `--install codex` are the only client integrations with their own tests.
 
 ## Runtime differences
 

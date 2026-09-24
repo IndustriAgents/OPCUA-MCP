@@ -61,12 +61,16 @@ Node, no Python, no JSON.
 
 ```bash
 npm install -g opcua-mcp-server      # or: uv tool install opcua-mcp-server
-opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840 --dry-run
 ```
 
-It writes absolute paths, because Claude Desktop does not inherit your shell's
-`PATH`. Add `--dry-run` to preview. Editing `claude_desktop_config.json` by hand
-and fixing a server that fails to start: [docs/install.md](docs/install.md).
+It checks the config with the server's own startup validation and writes absolute
+paths, because Claude Desktop does not inherit your shell's `PATH`. The profile
+defaults to read-only; encryption, a pinned server certificate, a control profile,
+a policy file and an audit file are all flags, and passwords are never taken as
+flags. Drop `--dry-run` to write. Every flag and safety rule, editing
+`claude_desktop_config.json` by hand, and fixing a server that fails to start:
+[docs/install.md](docs/install.md#3---install--let-the-server-write-the-config).
 
 </details>
 
@@ -96,6 +100,9 @@ command = "npx"
 args = ["-y", "opcua-mcp-server"]
 env = { OPCUA_SERVER_URL = "opc.tcp://localhost:4840" }
 ```
+
+Or let the server write that entry, with the same checks as for Claude Desktop:
+`opcua-mcp-server --install codex --url opc.tcp://localhost:4840 --dry-run`.
 
 </details>
 

@@ -376,6 +376,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract's. The PR template gains a regeneration item and a security-doc review
   item, which [docs/releasing.md](docs/releasing.md#security-doc-review) makes a
   release requirement.
+- **`--install` can write a secure configuration, and checks it before writing**
+  (#135). It used to record `OPCUA_SERVER_URL` and nothing else, so the easiest
+  setup path was the one least able to express encryption, a pinned server, a
+  profile, a policy file or an audit trail. Both installers now take a flag for
+  every setting `contract/config.json` offers the installer (`--security-policy`,
+  `--client-cert`, `--server-cert`, `--profile`, `--policy-file`, `--audit-file`,
+  …), generated from the schema rather than listed in code, and validated against
+  it: choices, minimums, files that must exist, paths made absolute. The result is
+  run through the server's own startup parsers, so the installer cannot write a
+  configuration the server would refuse. `--dry-run` prints the exact target file,
+  a redacted preview and a security summary on stderr, without touching the
+  network. **`--install codex`** registers with Codex (`$CODEX_HOME/config.toml`,
+  else `~/.codex/config.toml`), replacing only its own `[mcp_servers.opcua]`
+  tables. See [docs/install.md](docs/install.md#3---install--let-the-server-write-the-config).
+- **Installer safety rules, identical in both runtimes.** The profile defaults to
+  `observe` and is written explicitly; a control profile needs `--profile`. A
+  control profile for a remote endpoint with no pinned `--server-cert` is refused
+  unless `--allow-unverified-remote-control` is given. Insecure settings that are
+  allowed — no channel security or an unpinned server on a remote endpoint, the
+  insecure-control and out-of-range overrides, `full`, control without an audit
+  file — are written with a `WARNING [code]`. A password is never a flag and never
+  printed: Codex gets `env_vars = ["OPCUA_PASSWORD"]` pass-through, and Claude
+  Desktop, which has no such mechanism, is pointed at the `.mcpb` bundle's keychain
+  storage or X.509 user login unless `--store-password-in-config` explicitly copies
+  `$OPCUA_PASSWORD` into an owner-only file. Previews redact private-key paths and
+  every `env`/`headers` value of the *other* servers in the file, which routinely
+  hold API tokens. One table, `tests/fixtures/install-cases.json` (43 cases),
+  drives both command lines (`tests/unit/test_install_cases.py`) and the Node
+  planner (`test/install-cases.test.mjs`).
+
+### Changed — `--install` output (#135)
+- **`--install` output.** The generated entry now carries `OPCUA_PROFILE`
+  (`observe` by default) as well as the endpoint. The security summary and
+  warnings go to stderr, so stdout remains only the preview or the report. Errors
+  are printed as `Error [code]: …`, with exit code 1 for a refusal and 2 for a
+  usage error, as before.
 
 ### Documentation
 - **Release notes link the conformance matrix at their tag** (#147).

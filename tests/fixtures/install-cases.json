@@ -1,0 +1,476 @@
+{
+  "$comment": "One table of `--install` invocations and what each must produce, driven through BOTH runtimes (#135): tests/unit/test_install_cases.py runs every case through the Python and the Node command lines as subprocesses, with HOME redirected at a scratch directory, and packages/server-node/test/install-cases.test.mjs runs it through the Node parser and planner in-process. Two installers that pass the same table write the same configuration, refuse the same things and say the same warnings. `args` follow `--install <client> --dry-run`; `{pki}` is a scratch directory, also the working directory, holding server.pem, client.pem, client_key.pem, user.pem, user_key.pem, policy-operator.json (profile operator, one writable node), policy-bad.json (not JSON) and an empty audit/ directory. `env` is the installer's own environment. `expect.exit` is the exit code: 2 for a usage error, 1 for a refusal. `expect.error` is the code printed as `Error [code]:` (null for an argparse-level usage error, which prints no code). `expect.env` is the exact environment the entry carries, unredacted; `expect.envVars` the variables Codex passes through; `expect.warnings` the exact `WARNING [code]` sequence. `neverPrinted` are strings that must not appear in any output. `byRuntime` overrides `expect` for a runtime, and exists only for a difference declared in contract/runtime-differences.json.",
+  "cases": [
+    {
+      "name": "the default is a read-only profile on this machine, written explicitly",
+      "args": [],
+      "expect": {
+        "exit": 0,
+        "env": { "OPCUA_SERVER_URL": "opc.tcp://localhost:4840", "OPCUA_PROFILE": "observe" },
+        "warnings": []
+      }
+    },
+    {
+      "name": "--url is --server-url",
+      "args": ["--url", "opc.tcp://127.0.0.1:4840"],
+      "expect": {
+        "exit": 0,
+        "env": { "OPCUA_SERVER_URL": "opc.tcp://127.0.0.1:4840", "OPCUA_PROFILE": "observe" },
+        "warnings": []
+      }
+    },
+    {
+      "name": "a remote endpoint with no channel security is written, loudly",
+      "args": ["--server-url", "opc.tcp://plc.example:4840"],
+      "expect": {
+        "exit": 0,
+        "env": { "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840", "OPCUA_PROFILE": "observe" },
+        "warnings": ["no-channel-security"]
+      }
+    },
+    {
+      "name": "a remote endpoint encrypted to an unpinned server is written, with a warning",
+      "args": [
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_PROFILE": "observe"
+        },
+        "warnings": ["server-not-pinned"]
+      }
+    },
+    {
+      "name": "a read-only, certificate-verified configuration needs no JSON editing",
+      "args": [
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "basic256sha256",
+        "--security-mode", "signandencrypt",
+        "--client-cert", "client.pem",
+        "--client-key", "{pki}/client_key.pem",
+        "--server-cert", "server.pem",
+        "--profile", "read-only"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_SECURITY_MODE": "SignAndEncrypt",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_CERT": "{pki}/server.pem",
+          "OPCUA_PROFILE": "observe"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "a verified remote operator config with a policy file and an audit file",
+      "args": [
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--server-cert", "server.pem",
+        "--profile", "operator",
+        "--policy-file", "policy-operator.json",
+        "--audit-file", "audit/control.jsonl",
+        "--operator-id", "line-1"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_CERT": "{pki}/server.pem",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_POLICY_FILE": "{pki}/policy-operator.json",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl",
+          "OPCUA_OPERATOR_ID": "line-1"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "a policy file cannot choose a control profile on its own",
+      "args": ["--policy-file", "policy-operator.json"],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_PROFILE": "observe",
+          "OPCUA_POLICY_FILE": "{pki}/policy-operator.json"
+        },
+        "warnings": ["policy-file-profile-overridden"]
+      }
+    },
+    {
+      "name": "remote control over an encrypted but unverified channel is refused",
+      "args": [
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--profile", "operator",
+        "--allowed-write-nodes", "ns=2;i=5"
+      ],
+      "expect": { "exit": 1, "error": "unverified-remote-control" }
+    },
+    {
+      "name": "remote control over no channel security is refused, even with the insecure override",
+      "args": [
+        "--url", "opc.tcp://10.0.0.7:4840",
+        "--profile", "full",
+        "--allow-insecure-control"
+      ],
+      "expect": { "exit": 1, "error": "unverified-remote-control" }
+    },
+    {
+      "name": "a host that only starts with localhost is remote",
+      "args": [
+        "--url", "opc.tcp://localhost.attacker.example:4840",
+        "--profile", "operator",
+        "--allow-insecure-control"
+      ],
+      "expect": { "exit": 1, "error": "unverified-remote-control" }
+    },
+    {
+      "name": "remote unverified control is written only with the explicit dangerous override",
+      "args": [
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--profile", "operator",
+        "--audit-file", "audit/control.jsonl",
+        "--allow-unverified-remote-control"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": ["unverified-remote-control", "server-not-pinned", "no-control-tools"]
+      }
+    },
+    {
+      "name": "lab control on this machine is written, with the override named",
+      "args": [
+        "--profile", "operator",
+        "--allow-insecure-control",
+        "--allowed-write-nodes", " ns=2;i=5 , ns=2;i=6,",
+        "--allowed-methods", "ns=2;i=20|ns=2;i=31"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5,ns=2;i=6",
+          "OPCUA_ALLOWED_METHODS": "ns=2;i=20|ns=2;i=31",
+          "OPCUA_ALLOW_INSECURE_CONTROL": "true"
+        },
+        "warnings": ["insecure-control-override", "control-without-audit-file"]
+      }
+    },
+    {
+      "name": "an IPv6 loopback endpoint is this machine",
+      "args": [
+        "--url", "opc.tcp://[::1]:4840",
+        "--profile", "full",
+        "--allow-insecure-control",
+        "--audit-file", "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://[::1]:4840",
+          "OPCUA_PROFILE": "full",
+          "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": ["insecure-control-override", "full-profile"]
+      }
+    },
+    {
+      "name": "an operator profile that can do nothing says so",
+      "args": ["--profile", "Operator"],
+      "expect": {
+        "exit": 0,
+        "env": { "OPCUA_SERVER_URL": "opc.tcp://localhost:4840", "OPCUA_PROFILE": "operator" },
+        "warnings": ["control-without-audit-file", "no-control-tools"]
+      }
+    },
+    {
+      "name": "the out-of-range override is written, with a warning",
+      "args": ["--allow-out-of-range-writes"],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_PROFILE": "observe",
+          "OPCUA_ALLOW_OUT_OF_RANGE_WRITES": "true"
+        },
+        "warnings": ["out-of-range-writes"]
+      }
+    },
+    {
+      "name": "reconnection settings are validated against the schema minimum; -1 is a value",
+      "args": ["--reconnect-max-retry", "-1", "--session-timeout-ms", "30000"],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_PROFILE": "observe",
+          "OPCUA_RECONNECT_MAX_RETRY": "-1",
+          "OPCUA_SESSION_TIMEOUT_MS": "30000"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "X.509 user login on a verified channel",
+      "args": [
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--server-cert", "server.pem",
+        "--user-cert", "user.pem",
+        "--user-key", "user_key.pem"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_CERT": "{pki}/server.pem",
+          "OPCUA_USER_CERT": "{pki}/user.pem",
+          "OPCUA_USER_KEY": "{pki}/user_key.pem",
+          "OPCUA_PROFILE": "observe"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "an AES policy is Node-only (declared difference security-policies-aes)",
+      "args": [
+        "--security-policy", "Aes256_Sha256_RsaPss",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--server-cert", "server.pem"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_SECURITY_POLICY": "Aes256_Sha256_RsaPss",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_CERT": "{pki}/server.pem",
+          "OPCUA_PROFILE": "observe"
+        },
+        "warnings": []
+      },
+      "byRuntime": { "python": { "exit": 1, "error": "invalid-config" } }
+    },
+    {
+      "name": "an unknown profile is a usage error",
+      "args": ["--profile", "admin"],
+      "expect": { "exit": 2, "error": "invalid-value" }
+    },
+    {
+      "name": "a number below the schema minimum is a usage error",
+      "args": ["--session-timeout-ms", "10"],
+      "expect": { "exit": 2, "error": "invalid-value" }
+    },
+    {
+      "name": "a number that is not a number is a usage error",
+      "args": ["--reconnect-max-retry", "forever"],
+      "expect": { "exit": 2, "error": "invalid-value" }
+    },
+    {
+      "name": "a blank value is a usage error",
+      "args": ["--operator-id", " "],
+      "expect": { "exit": 2, "error": "invalid-value" }
+    },
+    {
+      "name": "an empty list is a usage error",
+      "args": ["--allowed-tools", ","],
+      "expect": { "exit": 2, "error": "invalid-value" }
+    },
+    {
+      "name": "an unknown flag is a usage error",
+      "args": ["--allow-insecure"],
+      "expect": { "exit": 2, "error": null }
+    },
+    {
+      "name": "a value on a boolean setting flag is a usage error",
+      "args": ["--allow-insecure-control=yes"],
+      "expect": { "exit": 2, "error": null }
+    },
+    {
+      "name": "a certificate that does not exist is refused before anything is written",
+      "args": [
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--server-cert", "missing-server.pem"
+      ],
+      "expect": { "exit": 1, "error": "file-missing" }
+    },
+    {
+      "name": "a missing private key is refused without naming the path",
+      "args": [
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "secret-name-of-key.pem"
+      ],
+      "expect": { "exit": 1, "error": "file-missing" },
+      "neverPrinted": ["secret-name-of-key"]
+    },
+    {
+      "name": "key material pasted into a path flag is refused and not echoed",
+      "args": ["--client-key=-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"],
+      "expect": { "exit": 2, "error": "key-material-on-command-line" },
+      "neverPrinted": ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"]
+    },
+    {
+      "name": "an audit file in a directory that does not exist is refused",
+      "args": ["--audit-file", "no-such-dir/audit.jsonl"],
+      "expect": { "exit": 1, "error": "file-missing" }
+    },
+    {
+      "name": "the server's own parser refuses a pinned certificate with no channel security",
+      "args": ["--server-cert", "server.pem"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses a mode without a policy",
+      "args": ["--security-mode", "Sign"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses a policy without a client certificate",
+      "args": ["--security-policy", "Basic256Sha256"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses a user certificate without its key",
+      "args": [
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--user-cert", "user.pem"
+      ],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses a policy file that is not JSON",
+      "args": ["--policy-file", "policy-bad.json"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses an unknown tool in the allowlist",
+      "args": ["--allowed-tools", "read_opcua_nodes,format_hard_drive"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "the server's own parser refuses a method entry without its object",
+      "args": ["--profile", "operator", "--allowed-methods", "ns=2;i=31"],
+      "expect": { "exit": 1, "error": "invalid-config" }
+    },
+    {
+      "name": "a password flag is refused, and its value is not echoed",
+      "args": ["--password", "hunter2-flag-value"],
+      "expect": { "exit": 2, "error": null },
+      "neverPrinted": ["hunter2-flag-value"]
+    },
+    {
+      "name": "a password flag is refused in its --flag=value form too",
+      "args": ["--password=hunter2-flag-value"],
+      "expect": { "exit": 2, "error": null },
+      "neverPrinted": ["hunter2-flag-value"]
+    },
+    {
+      "name": "Claude Desktop cannot pass a password through, so a username alone is refused",
+      "args": ["--username", "operator1"],
+      "env": { "OPCUA_PASSWORD": "env-password-value" },
+      "expect": { "exit": 1, "error": "password-needs-storage" },
+      "neverPrinted": ["env-password-value"]
+    },
+    {
+      "name": "Codex passes the password through from its own environment",
+      "client": "codex",
+      "args": [
+        "--username", "operator1",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--server-cert", "server.pem"
+      ],
+      "env": { "OPCUA_PASSWORD": "env-password-value" },
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_CERT": "{pki}/server.pem",
+          "OPCUA_USERNAME": "operator1",
+          "OPCUA_PROFILE": "observe"
+        },
+        "envVars": ["OPCUA_PASSWORD"],
+        "warnings": []
+      },
+      "neverPrinted": ["env-password-value"]
+    },
+    {
+      "name": "a password is written into the file only on explicit request, from the environment",
+      "args": ["--username", "operator1", "--store-password-in-config"],
+      "env": { "OPCUA_PASSWORD": "env-password-value" },
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://localhost:4840",
+          "OPCUA_USERNAME": "operator1",
+          "OPCUA_PASSWORD": "env-password-value",
+          "OPCUA_PROFILE": "observe"
+        },
+        "warnings": ["password-over-unencrypted-channel", "password-stored-in-config"]
+      },
+      "neverPrinted": ["env-password-value"]
+    },
+    {
+      "name": "storing a password that is not in the environment is refused",
+      "client": "codex",
+      "args": ["--username", "operator1", "--store-password-in-config"],
+      "expect": { "exit": 1, "error": "password-not-in-environment" }
+    },
+    {
+      "name": "storing a password with no username is a usage error",
+      "args": ["--store-password-in-config"],
+      "env": { "OPCUA_PASSWORD": "env-password-value" },
+      "expect": { "exit": 2, "error": "invalid-value" },
+      "neverPrinted": ["env-password-value"]
+    }
+  ]
+}

@@ -34,19 +34,29 @@ npm install -g opcua-mcp-server
 opcua-mcp-server
 ```
 
-### Registering with Claude Desktop
+### Registering with Claude Desktop or Codex
 
-Rather than editing `claude_desktop_config.json` by hand, let the server write it:
+Rather than editing `claude_desktop_config.json` (or Codex's `config.toml`) by
+hand, let the server write it:
 
 ```bash
-opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+opcua-mcp-server --install claude-desktop --dry-run \
+  --url opc.tcp://192.168.0.10:4840 \
+  --security-policy Basic256Sha256 \
+  --client-cert /etc/opcua/client.pem --client-key /etc/opcua/client_key.pem \
+  --server-cert /etc/opcua/server.pem
 ```
 
-It merges into the existing config, backs the old one up, and records absolute
-paths — Claude Desktop is launched from the GUI and does not inherit a login
-shell's `PATH`, so a bare `"command": "npx"` often works in a terminal and fails
-in the app. Add `--dry-run` to see the result first, `--force` to replace an
-existing `opcua` entry.
+`--dry-run` validates the files and the combination with the server's own
+startup parsers and prints a redacted preview and a security summary; drop it to
+write (`--install codex` for Codex). It merges into the existing config, backs the
+old one up, and records absolute paths — Claude Desktop is launched from the GUI
+and does not inherit a login shell's `PATH`, so a bare `"command": "npx"` often
+works in a terminal and fails in the app. The profile defaults to read-only; a
+control profile must be chosen with `--profile`, and for a remote endpoint needs a
+pinned `--server-cert`. Passwords are never accepted as flags. `--force` replaces
+an existing `opcua` entry. Every flag and rule is in
+[docs/install.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/install.md#3---install--let-the-server-write-the-config).
 
 There is also a **downloadable `.mcpb` bundle** for Claude Desktop and
 **single-file executables** that need no Node at all — see

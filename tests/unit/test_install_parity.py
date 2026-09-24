@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from conftest import ROOT
+from opcua_mcp_server.contract import load_config_schema
 
 NODE_BUILD = ROOT / "packages" / "server-node" / "build" / "index.js"
 
@@ -34,7 +35,9 @@ COMMANDS = {
 }
 
 
-def _run(impl: str, args: list[str], home) -> subprocess.CompletedProcess:
+def _run(
+    impl: str, args: list[str], home, extra_env: dict | None = None, cwd=None
+) -> subprocess.CompletedProcess:
     """Run one runtime's CLI with HOME redirected at a scratch directory.
 
     Both runtimes resolve the Claude Desktop config path from the home directory,
@@ -51,9 +54,13 @@ def _run(impl: str, args: list[str], home) -> subprocess.CompletedProcess:
         "APPDATA": str(home / "AppData" / "Roaming"),
         "XDG_CONFIG_HOME": str(home / ".config"),
     }
-    env.pop("OPCUA_SERVER_URL", None)  # the default must come from the code, not the shell
+    # The default must come from the code, not the shell; and Codex's location
+    # must come from HOME, not from a developer's CODEX_HOME.
+    for name in [n for n in env if n.startswith("OPCUA_")] + ["CODEX_HOME"]:
+        env.pop(name, None)
+    env.update(extra_env or {})
     return subprocess.run(
-        COMMANDS[impl] + args, capture_output=True, text=True, timeout=120, env=env
+        COMMANDS[impl] + args, capture_output=True, text=True, timeout=120, env=env, cwd=cwd
     )
 
 
@@ -85,7 +92,7 @@ def test_install_writes_a_launchable_entry(impl, tmp_path):
     endpoint in its environment — the thing Claude Desktop will actually spawn."""
     entry = _dry_run_config(impl, tmp_path, ["--url", URL])["mcpServers"]["opcua"]
 
-    assert entry["env"] == {"OPCUA_SERVER_URL": URL}
+    assert entry["env"] == {"OPCUA_SERVER_URL": URL, "OPCUA_PROFILE": "observe"}
     assert os.path.isabs(entry["command"]), (
         f"{impl} recorded a bare command ({entry['command']!r}); Claude Desktop is "
         "launched from the GUI and does not inherit a login shell's PATH"
@@ -235,3 +242,138 @@ def test_flag_equals_value_is_accepted(impl, tmp_path):
 def test_a_value_on_a_boolean_flag_is_rejected(impl, tmp_path):
     proc = _run(impl, ["--install=claude-desktop", "--force=yes"], tmp_path)
     assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+# --- #135: what the installer writes, where, and what it never prints -----------
+
+SECRET = "pa55-never-printed"
+
+
+def _pki(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    for name in ("server.pem", "client.pem", "client_key.pem"):
+        (root / name).write_text("placeholder\n", encoding="utf-8")
+    return Path(os.path.realpath(root))
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_codex_install_writes_config_toml_under_home(impl, tmp_path):
+    """Codex reads ~/.codex/config.toml. The install must land there — under the
+    scratch HOME, never the developer's — and leave the rest of the file alone."""
+    target = tmp_path / ".codex" / "config.toml"
+    target.parent.mkdir(parents=True)
+    existing = 'model = "o3"\n\n[mcp_servers.other]\ncommand = "other"\n'
+    target.write_text(existing, encoding="utf-8")
+
+    proc = _run(impl, ["--install", "codex", "--url", URL], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "Restart Codex" in proc.stdout
+
+    written = target.read_text(encoding="utf-8")
+    assert written.startswith(existing.rstrip("\n")), "other tables were rewritten"
+    assert "[mcp_servers.opcua]" in written
+    assert f'OPCUA_SERVER_URL = "{URL}"' in written
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        parsed = tomllib.loads(written)
+        assert parsed["model"] == "o3"
+        assert parsed["mcp_servers"]["other"] == {"command": "other"}
+        assert parsed["mcp_servers"]["opcua"]["env"]["OPCUA_PROFILE"] == "observe"
+    assert list(tmp_path.glob(".codex/config.toml.bak-*")), "no backup was taken"
+
+    again = _run(impl, ["--install", "codex"], tmp_path)
+    assert again.returncode == 1
+    assert "already configured" in again.stderr
+
+    other_url = "opc.tcp://localhost:4841"
+    forced = _run(impl, ["--install", "codex", "--force", "--url", other_url], tmp_path)
+    assert forced.returncode == 0, forced.stderr
+    rewritten = target.read_text(encoding="utf-8")
+    assert rewritten.count("[mcp_servers.opcua]") == 1
+    assert other_url in rewritten and URL not in rewritten
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_codex_home_is_honoured(impl, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    proc = _run(impl, ["--install", "codex", "--dry-run"], tmp_path, {"CODEX_HOME": str(elsewhere)})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines()[0] == f"Would write {elsewhere / 'config.toml'}:"
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_a_stored_password_reaches_only_the_file(impl, tmp_path):
+    """The password is read from the environment, never from argv; it is never
+    printed — not in the preview, the report, the summary or a warning — and the
+    file that does hold it is readable by its owner only."""
+    args = ["--install", "claude-desktop", "--username", "op", "--store-password-in-config"]
+    env = {"OPCUA_PASSWORD": SECRET}
+
+    preview = _run(impl, [*args, "--dry-run"], tmp_path, env)
+    assert preview.returncode == 0, preview.stderr
+    assert SECRET not in preview.stdout + preview.stderr
+    assert "<redacted>" in preview.stdout
+    assert "WARNING [password-stored-in-config]" in preview.stderr
+
+    target = _config_target(impl, tmp_path)
+    proc = _run(impl, args, tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert SECRET not in proc.stdout + proc.stderr
+
+    entry = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["opcua"]
+    assert entry["env"]["OPCUA_PASSWORD"] == SECRET
+    if os.name == "posix":
+        assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_the_preview_hides_other_servers_credentials(impl, tmp_path):
+    """A dry run prints the whole file, which holds other servers' tokens too.
+    We cannot tell which values are secret, so none of theirs is shown."""
+    target = _config_target(impl, tmp_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    other = {"command": "gh", "env": {"GITHUB_TOKEN": "ghp_" + "x" * 20}, "headers": {"A": "b"}}
+    target.write_text(json.dumps({"mcpServers": {"github": other}}), encoding="utf-8")
+
+    config = _dry_run_config(impl, tmp_path)
+    assert config["mcpServers"]["github"]["env"] == {"GITHUB_TOKEN": "<redacted>"}
+    assert config["mcpServers"]["github"]["headers"] == {"A": "<redacted>"}
+    assert config["mcpServers"]["github"]["command"] == "gh"
+    # ...and the real write keeps them intact.
+    assert _run(impl, ["--install", "claude-desktop"], tmp_path).returncode == 0
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["github"] == other
+
+
+def test_both_runtimes_print_the_same_security_summary(tmp_path):
+    """The summary and warnings are what a user decides on, so they are held to
+    the same text, not only the same codes."""
+    pki = _pki(tmp_path / "pki")
+    args = [
+        "--install", "codex", "--dry-run",
+        "--url", "opc.tcp://plc.example:4840",
+        "--security-policy", "Basic256Sha256",
+        "--client-cert", "client.pem",
+        "--client-key", "client_key.pem",
+        "--username", "op",
+        "--profile", "operator",
+        "--allowed-write-nodes", "ns=2;i=5",
+        "--allow-unverified-remote-control",
+    ]  # fmt: skip
+    python = _run("python", args, tmp_path / "py", cwd=pki)
+    node = _run("node", args, tmp_path / "node", cwd=pki)
+    assert python.returncode == node.returncode == 0, python.stderr + node.stderr
+    assert python.stderr == node.stderr
+    assert "NOT verified" in python.stderr
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
+def test_every_installer_setting_has_a_flag_and_no_secret_does(impl, tmp_path):
+    """The flags come from contract/config.json, not from a list in the code."""
+    helped = _run(impl, ["--help"], tmp_path).stdout
+    for setting in load_config_schema()["settings"]:
+        flag = "--" + setting["key"].replace("_", "-")
+        if setting["secret"]:
+            assert flag not in helped, f"{impl} offers {flag}"
+        elif "installer" in setting["surfaces"]:
+            assert flag in helped, f"{impl} has no {flag}"

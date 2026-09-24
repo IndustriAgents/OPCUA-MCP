@@ -136,9 +136,10 @@ def text_of(result) -> str:
 async def _read_or_reason(impl, url, env, errlog) -> str:
     """Everything the run said: the tool's answer plus the server's stderr.
 
-    A rejected connection surfaces as a failed `initialize` on the Python server
-    and as a per-call error on the Node server, so both are folded into one
-    string for the negative tests to assert on.
+    A rejected connection surfaced as a failed `initialize` on the Python server
+    before #136 moved its first connection off the startup path; both runtimes
+    now report it per call. Both are still folded into one string for the
+    negative tests to assert on, so either shape passes.
     """
     params = _server_params(impl, url, env)
     text = ""
@@ -246,10 +247,8 @@ async def test_the_application_uri_comes_from_the_certificate(
 async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, secure_env, errlog):
     """Neither runtime may fall back to a working session when the login fails.
 
-    They surface it at different moments — the Python server activates the
-    session in its lifespan and so dies during `initialize`, while the Node
-    server connects lazily and reports it per call — but both name the same
-    status code.
+    Both report it on the call, since neither waits for its first connection
+    before answering `initialize` (#136), and both name the same status code.
     """
     reason = await _read_or_reason(
         impl, secure_opcua_server, {**secure_env, "OPCUA_PASSWORD": "wrong"}, errlog

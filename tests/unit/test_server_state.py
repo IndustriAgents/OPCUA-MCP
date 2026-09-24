@@ -19,6 +19,7 @@ import asyncio
 import json
 import threading
 
+import pytest
 from conftest import ROOT
 from opcua_mcp_server import server as server_module
 from opcua_mcp_server.server import TOOL_NAMES, create_server
@@ -234,3 +235,36 @@ async def test_the_wait_is_measured_from_the_start_of_the_warm_up():
 async def test_no_warm_up_means_no_wait():
     """A state no lifespan has started — the unit tests' own — answers at once."""
     await ServerState(url="opc.tcp://127.0.0.1:1/none").await_warm_up()
+
+
+async def test_a_tool_call_is_authorized_only_once_the_warm_up_has_connected(monkeypatch):
+    """The policy and the audit trail both read the session the call lands on.
+
+    `nsu=` allowlist entries resolve through the namespace mapping bound on
+    connect, and the audit record names the session. A call that arrives while
+    the warm-up is still connecting must wait for it before either reads them —
+    authorizing first refused a URI-pinned node and audited `session: None`.
+    """
+    release = threading.Event()
+
+    def slow_connect(state, connection):
+        release.wait(10)
+
+    monkeypatch.setattr(server_module, "_connect_and_probe", slow_connect)
+    mcp = create_server(ServerState(url="opc.tcp://127.0.0.1:1/none"))
+    seen = []
+
+    def authorize(name, arguments):
+        seen.append(mcp.state.warm_up.done())
+        raise PermissionError("denied by the test")
+
+    monkeypatch.setattr(mcp.state.policy, "authorize", authorize)
+
+    async with server_module.opcua_lifespan(mcp):
+        call = asyncio.ensure_future(mcp.call_tool("list_subscriptions", {}))
+        await asyncio.sleep(0.2)
+        assert seen == [], "the call was authorized while the warm-up was connecting"
+        release.set()
+        with pytest.raises(Exception, match="denied by the test"):
+            await call
+        assert seen == [True]

@@ -469,8 +469,14 @@ it — Python from its lifespan, which the SDK must leave before it answers
 `initialize`, Node from `run()`. It had been put in front for a reason that still
 holds: requests served *during* it saw no session and answered as though the
 server supported nothing. So `tools/list` and `get_server_status` wait for it,
-for at most `WARM_UP_WAIT_MS` (3s, the same on both) from its start, and a tool
-call that needs a session joins its round as it joins any other. Past that
+for at most `WARM_UP_WAIT_MS` (3s, the same on both) from its start. Every
+other tool call waits for the warm-up — and for any connection round in flight —
+to end *before* it is authorized and audited, unbounded but for the round
+itself: the policy resolves `nsu=` entries through the namespace mapping bound
+on connect, and the audit record names the session, so authorizing first
+refused URI-pinned nodes and audited `session: null`. It never starts a round
+to do so; a call made while disconnected connects after authorization, as
+before. Past that
 window `get_server_status` never joins a round someone else started: it reports
 `connected: false` with "Still connecting … (last failure: …)" and the round
 carries on. Shutdown ends a round rather than waiting it out — Node disconnects

@@ -100,6 +100,27 @@ class ServerState:
         self._warm_up_deadline = asyncio.get_running_loop().time() + self.warm_up_wait_ms / 1000
         return self.warm_up
 
+    async def await_connection_in_flight(self) -> None:
+        """Wait for the warm-up, and any other connection round in flight, unbounded.
+
+        For a tool call, before it is authorized and audited. Both read the
+        session: the policy resolves ``nsu=`` allowlist entries through the
+        namespace mapping bound on connect, and the audit record names the
+        session the call rides on (#105, #107). When the lifespan awaited the
+        warm-up, every call found it finished; a call that arrives during it now
+        waits for it, where before it would have been refused a URI-pinned node
+        and audited against no session at all. Bounded by the round itself,
+        which always ends. Never starts a round: a call made while disconnected
+        connects after it is authorized, as it always has. The Node server's
+        ``OpcuaTools.awaitConnectionInFlight`` is the same wait.
+        """
+        warm_up = self.warm_up
+        if warm_up is not None and not warm_up.done():
+            await asyncio.wait({warm_up})
+        connection = self.connection
+        if connection is not None and connection.connecting:
+            await asyncio.to_thread(connection.settle)
+
     async def await_warm_up(self) -> None:
         """Wait for the startup warm-up, but never past ``warm_up_wait_ms`` from its start.
 

@@ -575,6 +575,23 @@ export class OpcuaTools {
     return this.warmUpPromise;
   }
 
+  /** Wait for the warm-up, and any other connection round in flight, unbounded.
+   *
+   * For a tool call, before it is authorized and audited. Both read the
+   * session: the policy resolves `nsu=` allowlist entries through the namespace
+   * mapping bound on connect, and the audit record names the session the call
+   * rides on (#105, #107). When the warm-up ran before the transport opened,
+   * every call found it finished; a call that arrives during it now waits for
+   * it, where before it would have been refused a URI-pinned node and audited
+   * against no session at all. Bounded by the round itself, which always ends.
+   * Never starts a round: a call made while disconnected connects after it is
+   * authorized, as it always has.
+   */
+  private async awaitConnectionInFlight(): Promise<void> {
+    if (this.warmUpPromise) await this.warmUpPromise;
+    await this.conn.settled();
+  }
+
   /** Wait for the startup warm-up, but never past `warmUpWaitMs` from its start.
    *
    * Against a plant that is up the warm-up finishes well inside the window, so
@@ -810,6 +827,10 @@ export class OpcuaTools {
         throw new Error(message("unknownTool", { tool: name }));
       }
       validateArguments(name, spec.inputSchema, args);
+      // Before the policy and the audit trail read the session, not merely
+      // before the request goes out. `get_server_status` is the exception: it
+      // reports on the connection, and waits for the warm-up only boundedly.
+      if (name !== "get_server_status") await this.awaitConnectionInFlight();
 
       // This is the security boundary. Filtering tools/list improves the model's
       // choices, but clients cache catalogs and may call a previously visible

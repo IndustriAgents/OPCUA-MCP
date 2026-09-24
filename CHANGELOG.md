@@ -89,7 +89,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background. `tools/list` and `get_server_status` wait for it for at most 3s
   from its start — so against a reachable plant the first catalogue is still
   the whole one, which is why the warm-up had been moved in front of the
-  transport — and a tool call that needs a session joins its round, as before.
+  transport. A tool call that arrives during the warm-up (or any other
+  connection attempt) waits for it to end *before* it is authorized and audited,
+  not merely before its request goes out: the policy resolves `nsu=` allowlist
+  entries through the namespace mapping bound on connect, and the audit record
+  names the session the call rides on (#105, #107).
   Past that window `get_server_status` does not join a round someone else
   started: it answers at once with `connected: false` and "Still connecting to
   the OPC UA server at … (last failure: …)" (a new shared `stillConnecting`

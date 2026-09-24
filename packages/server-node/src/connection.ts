@@ -230,6 +230,16 @@ export class OpcuaConnection {
     return this.connectPromise !== null || this.reconnectPromise !== null;
   }
 
+  /** Wait for the connection round already running, whatever it finds. Never
+   *  starts one — see `OpcuaTools.awaitConnectionInFlight` for who needs this. */
+  async settled(): Promise<void> {
+    for (;;) {
+      const inFlight = this.reconnectPromise ?? this.connectPromise;
+      if (!inFlight) return;
+      await inFlight.catch(() => undefined);
+    }
+  }
+
   /** Why the connection is not up, in the client library's words. */
   get lastErrorMessage(): string | null {
     return this.lastError;

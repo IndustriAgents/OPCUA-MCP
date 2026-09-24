@@ -293,6 +293,33 @@ describe("requests served while the warm-up is still running", () => {
     release();
   });
 
+  it(
+    "authorizes a tool call only once the round in flight has ended",
+    { timeout: 10000 },
+    async () => {
+      // The policy resolves `nsu=` entries through the namespace mapping bound on
+      // connect, and the audit record names the session: both must see the
+      // connection the warm-up was making, not the absence of one.
+      const { tools, conn, release } = stalled(100);
+      const seen = [];
+      const policy = tools.policy;
+      policy.authorize = () => {
+        seen.push(conn.connecting);
+        throw new Error("denied by the test");
+      };
+      tools.startWarmUp();
+
+      const call = tools.callTool({ params: { name: "list_subscriptions", arguments: {} } });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.deepEqual(seen, [], "the call was authorized while the warm-up was connecting");
+
+      release();
+      const result = await call;
+      assert.deepEqual(seen, [false]);
+      assert.equal(result.isError, true);
+    }
+  );
+
   it("waits for a warm-up that finishes inside the window", { timeout: 10000 }, async () => {
     // Against a plant that is up the first catalogue must be the whole one,
     // which is why the warm-up used to run before any request was served.

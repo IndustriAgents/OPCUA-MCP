@@ -360,6 +360,19 @@ class OpcuaConnection:
             except Exception as error:
                 print(f"Error disconnecting from OPC UA server: {error}", file=sys.stderr)
 
+    def settle(self) -> None:
+        """Wait for the connection round already running, whatever it finds.
+
+        Never starts one — see :meth:`ServerState.await_connection_in_flight`
+        for who needs this. The Node server's ``settled`` is the same wait.
+        """
+        while True:
+            with self._lock:
+                attempt = self._rebuilding
+            if attempt is None:
+                return
+            attempt.done.wait()
+
     def close(self) -> None:
         """Stop for good: end a round's backoff now, and refuse to start another.
 

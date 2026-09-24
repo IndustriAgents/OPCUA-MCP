@@ -525,6 +525,12 @@ class PolicyMCPServer(MCPServer):
             # signature-derived schema, and word it differently from the Node
             # runtime; this is the contract's own schema on both.
             validate_arguments(name, spec["inputSchema"], arguments)
+            # Before the policy and the audit trail read the session, not merely
+            # before the request goes out. `get_server_status` is the exception:
+            # it reports on the connection, and waits for the warm-up only
+            # boundedly.
+            if name != "get_server_status":
+                await self.state.await_connection_in_flight()
             # Catalog filtering is not authorization: clients may retain an old
             # tools/list result, so enforce the current policy again on every call.
             self.state.policy.authorize(name, arguments)

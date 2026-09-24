@@ -205,6 +205,8 @@ export class OpcuaConnection {
   private closed = false;
   /** An id for the session currently held; see `sessionId`. */
   private session_: string | null = null;
+  /** How many sessions this process has established; see `sessionGeneration`. */
+  private generation_ = 0;
   session: ClientSession | null = null;
 
   /** Called with a *new* session after a dead one was replaced.
@@ -261,6 +263,16 @@ export class OpcuaConnection {
    */
   get sessionId(): string | null {
     return this.session_;
+  }
+
+  /** Which of this process's sessions is held — 1, 2, … — or null if none.
+   *
+   * The random `sessionId` says two records rode *different* sessions; this says
+   * in which order, and how many were lost in between, without anyone having to
+   * reassemble the connect log (#146).
+   */
+  get sessionGeneration(): number | null {
+    return this.session_ === null ? null : this.generation_;
   }
 
   /** The endpoint this server is configured to talk to. */
@@ -326,6 +338,7 @@ export class OpcuaConnection {
       this.opcuaClient = client;
       this.session = session;
       this.session_ = randomBytes(8).toString("hex");
+      this.generation_ += 1;
       this.state = "connected";
       this.lastError = null;
       console.error("OPC UA session created");

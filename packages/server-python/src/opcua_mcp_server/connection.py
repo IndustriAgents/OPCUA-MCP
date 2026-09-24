@@ -210,6 +210,9 @@ class OpcuaConnection:
         self._last_error: str | None = None
         #: An id for the session currently held; see :attr:`session_id`.
         self._session: str | None = None
+        #: How many sessions this process has established; see
+        #: :attr:`session_generation`.
+        self._generation = 0
         #: The rebuild in flight, so concurrent callers join it rather than start
         #: a second. ``None`` when nothing is being rebuilt.
         self._rebuilding: _Rebuild | None = None
@@ -268,6 +271,16 @@ class OpcuaConnection:
         rebuild.
         """
         return self._session
+
+    @property
+    def session_generation(self) -> int | None:
+        """Which of this process's sessions is held — 1, 2, … — or None if none.
+
+        The random :attr:`session_id` says two records rode *different*
+        sessions; this says in which order, and how many were lost in between,
+        without anyone having to reassemble the connect log (#146).
+        """
+        return self._generation if self._session is not None else None
 
     def _open_with_backoff(self) -> Client:
         """One connection, retried with backoff. Raises the last error if none succeeds.
@@ -467,6 +480,7 @@ class OpcuaConnection:
         with self._lock:
             self._client = client
             self._session = secrets.token_hex(8)
+            self._generation += 1
             self._last_error = None
         if self.on_client_replaced is not None:
             try:

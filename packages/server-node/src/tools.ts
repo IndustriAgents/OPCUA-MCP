@@ -29,7 +29,7 @@ import {
 } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
-import { AuditSink, operatorId } from "./audit.js";
+import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
 import { ContractRefusal, message } from "./errors.js";
 import {
   MAX_HISTORY_VALUES,
@@ -472,7 +472,7 @@ function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<str
   return record;
 }
 
-/** Write one line of the control audit trail to stderr.
+/** Write one line of the control audit trail.
  *
  * Only `control` and `alarm-action` tools: an audit trail that also recorded
  * every read would bury the four lines anyone is looking for.
@@ -480,6 +480,9 @@ function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<str
  * Never the *values* being written, only the targets. A setpoint is process
  * data, and this stream is the one an MCP client shows the user and a log
  * collector ships off the machine.
+ *
+ * Throws `AuditWriteError` when the record did not land; what that means for the
+ * call is decided by `auditPermission` and `auditAfter`.
  */
 function auditDecision(
   sink: AuditSink,
@@ -494,37 +497,75 @@ function auditDecision(
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
   if (!tool || !["control", "alarm-action"].includes(tool.accessClass)) return;
-  sink.write({
-    event: "opcua_mcp_policy",
-    timestamp: new Date().toISOString(),
-    // Second, so it is next to the timestamp in the line an operator reads and
-    // can be grepped for to pull one call's whole story out of a shipped log.
-    call_id: callId,
-    // Which physical attempt this line is about. One call can reach the plant
-    // twice — the session dies, the connection is rebuilt, the request is
-    // re-sent — and a trail whose purpose is "what reached the plant" has to
-    // count those separately rather than fold them into one line.
-    attempt,
-    // Which plant, and which of this process's sessions. A node id is not stable
-    // across a server restart — that is the whole reason the `nsu=` allowlist
-    // form exists — so "a write to ns=2;i=5 was allowed" is only interpretable
-    // later alongside where it went and over which session.
-    endpoint: connection.endpointUrl,
-    session: connection.sessionId,
-    // On whose behalf, as the deployment chose to record it. null when
-    // OPCUA_OPERATOR_ID is unset, which is honest: this server has no notion of
-    // who is calling, and a name nothing verified would be worse than none.
-    operator: operatorId(),
-    profile: policy.config.profile,
-    // What let control through, or kept it out: `secured` for a verified server,
-    // or which lab override was in force. An override that shows up only in a
-    // startup line nobody kept is an override nobody can audit.
-    control: controlGate(policy.config),
-    tool: name,
-    decision,
-    ...auditTargets(tool, args),
-    ...(reason ? { reason } : {}),
-  });
+  sink.write(
+    buildRecord({
+      timestamp: new Date().toISOString(),
+      call_id: callId,
+      attempt,
+      endpoint: connection.endpointUrl,
+      session: connection.sessionId,
+      session_generation: connection.sessionGeneration,
+      // null when OPCUA_OPERATOR_ID is unset, which is honest: this server has no
+      // notion of who is calling, and a name nothing verified would be worse
+      // than none.
+      operator_label: operatorId(),
+      ...sink.identity(),
+      profile: policy.config.profile,
+      // What let control through, or kept it out: `secured` for a verified
+      // server, or which lab override was in force. An override that shows up
+      // only in a startup line nobody kept is an override nobody can audit.
+      control: controlGate(policy.config),
+      tool: name,
+      decision,
+      targets: auditTargets(tool, args),
+      reason: reason ?? null,
+    })
+  );
+}
+
+/** Record `allowed` before anything is sent — or refuse the call.
+ *
+ * The fail-closed half (#146): a control call whose permission could not be made
+ * durable never reaches the plant. Reads never get here, because they are not
+ * audited, so an audit outage does not take monitoring down with it.
+ */
+function auditPermission(
+  sink: AuditSink,
+  policy: ToolPolicy,
+  connection: OpcuaConnection,
+  name: string,
+  args: Record<string, unknown>,
+  callId: string,
+  attempt: number
+): void {
+  try {
+    auditDecision(sink, policy, connection, name, args, "allowed", callId, attempt);
+  } catch (error) {
+    if (!(error instanceof AuditWriteError)) throw error;
+    console.error(`AUDIT FAILURE: refusing ${name} (call ${callId}): ${error.message}`);
+    throw new ContractRefusal(message("auditUnavailable", { tool: name, reason: error.message }));
+  }
+}
+
+/** Record a denial or an outcome, reporting rather than throwing if it is lost.
+ *
+ * Fail-closed is decided at `auditPermission`, before dispatch. A denial is
+ * refused whether or not its record lands. An outcome is recorded after the call
+ * reached the plant, and turning a write that happened into a reported failure
+ * would invite the model to send it again — so a sink that refuses it is
+ * reported on stderr, and the next control call's `allowed` record is what
+ * refuses the next call.
+ */
+function auditAfter(...args: Parameters<typeof auditDecision>): void {
+  try {
+    auditDecision(...args);
+  } catch (error) {
+    if (!(error instanceof AuditWriteError)) throw error;
+    const [, , , name, , decision, callId] = args;
+    console.error(
+      `AUDIT FAILURE: the ${decision} record for ${name} (call ${callId}) was not written: ${error.message}`
+    );
+  }
 }
 
 /** An id for one tool call, to tie its audit lines together.
@@ -914,10 +955,8 @@ export class OpcuaTools {
       // tool directly, so authorize again before touching the OPC UA network.
       try {
         this.policy.authorize(name, args);
-        authorized = true;
-        auditDecision(this.audit, this.policy, this.conn, name, args, "allowed", callId, 1);
       } catch (error) {
-        auditDecision(
+        auditAfter(
           this.audit,
           this.policy,
           this.conn,
@@ -930,6 +969,8 @@ export class OpcuaTools {
         );
         throw error;
       }
+      auditPermission(this.audit, this.policy, this.conn, name, args, callId, 1);
+      authorized = true;
       // The one tool that must answer while the connection is down: it exists to
       // say so. Everything below needs a session first.
       if (name === "get_server_status") {
@@ -977,7 +1018,7 @@ export class OpcuaTools {
       // different facts, and the gap between them is where a control call that
       // reached the plant and then failed lives — which is the one an operator
       // most needs to find afterwards.
-      auditDecision(
+      auditAfter(
         this.audit,
         this.policy,
         this.conn,
@@ -993,7 +1034,7 @@ export class OpcuaTools {
       // Only for a call that got past authorization: a denial has already been
       // recorded as one, and logging it twice would double-count refusals.
       if (authorized && !audit.denied) {
-        auditDecision(
+        auditAfter(
           this.audit,
           this.policy,
           this.conn,
@@ -1083,7 +1124,7 @@ export class OpcuaTools {
       this.policy.authorize(spec.name, args);
     } catch (denial) {
       audit.denied = true;
-      auditDecision(
+      auditAfter(
         this.audit,
         this.policy,
         this.conn,
@@ -1096,7 +1137,14 @@ export class OpcuaTools {
       );
       throw denial;
     }
-    auditDecision(this.audit, this.policy, this.conn, spec.name, args, "allowed", callId, 2);
+    try {
+      auditPermission(this.audit, this.policy, this.conn, spec.name, args, callId, 2);
+    } catch (refusal) {
+      // Refused before the second attempt went out, and recorded as nothing
+      // more: a `failed` line would read as though the plant had answered.
+      audit.denied = true;
+      throw refusal;
+    }
 
     return await this.dispatch(spec.name, args);
   }

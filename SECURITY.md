@@ -215,11 +215,16 @@ is `tests/fixtures/control-gate.json`, and both runtimes are tested against it.
 
 ### What is audited
 
-Every `control` and `alarm-action` call writes one JSON line to **stderr**:
+Every `control` and `alarm-action` call writes one JSON line to **stderr**
+(wrapped here for reading; it is one line):
 
 ```json
-{"event":"opcua_mcp_policy","timestamp":"2026-09-18T09:12:44.001Z","call_id":"9f2c1ab4de77f031",
- "attempt":1,"endpoint":"opc.tcp://plc:4840","session":"3b91e0c4a77d2f10","operator":"line-a-hmi",
+{"event":"opcua_mcp_policy","schema_version":2,"timestamp":"2026-09-24T09:12:44.001Z",
+ "call_id":"9f2c1ab4de77f031","attempt":1,"endpoint":"opc.tcp://plc:4840",
+ "session":"3b91e0c4a77d2f10","session_generation":1,
+ "operator_label":"line-a-hmi","operator":"line-a-hmi","mcp_principal":null,
+ "process_identity":{"uid":501,"user":"opcua","pid":4242},
+ "opcua_user_identity":{"type":"username","username":"line-a-operator","certificate_sha256":null},
  "profile":"operator","control":"secured","tool":"write_opcua_nodes","decision":"allowed",
  "node_ids":["ns=2;i=13"]}
 ```
@@ -231,7 +236,9 @@ server, or the lab override that was in force (`INSECURE-OVERRIDE`,
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
 as the verdict, because a call that was permitted and a call that reached the
 plant are different facts. Reads are never audited. Neither credentials nor the
-values being written appear in a record, and a test asserts it.
+values being written appear in a record, and a test asserts it on both runtimes.
+Both runtimes write the same fields in the same order, and for the same inputs the
+same bytes — `tests/fixtures/audit.json` pins it.
 
 `call_id` is what ties the two lines of one call together. Both runtimes serve
 calls concurrently, so two overlapping writes produce four interleaved lines —
@@ -252,7 +259,10 @@ reason the `nsu=` allowlist form exists. A record saying only that a write to
 `ns=2;i=5` was allowed is one a reviewer cannot interpret six months later.
 `session` is minted by this server rather than taken from the OPC UA server —
 python-opcua discards the server's SessionId and node-opcua exposes it, so a field
-built from it could not mean the same thing on both runtimes.
+built from it could not mean the same thing on both runtimes. `session_generation`
+counts the sessions this process has established (1, 2, …), so two records either
+side of an outage say which came first and how many sessions were lost between
+them. Both are `null` for a call refused before any session existed.
 
 `attempt` is which *physical* attempt a line is about. One call can reach the
 plant twice: the session dies, the connection is rebuilt, and a request the
@@ -265,29 +275,176 @@ same `call_id`. No `control` or `alarm-action` call is ever re-sent (see
 what changes for control is that a call whose outcome is genuinely unknown now
 says so rather than being quietly repeated.
 
-Set **`OPCUA_AUDIT_FILE`** for a copy that survives the process. For a stdio
-subprocess launched by an MCP client, stderr is that client's rotating log: not a
-compliance artifact, not integrity-protected, and not shippable by policy. The
-file is append-only, one JSON object per line, written synchronously per record —
-a process killed between performing a control call and flushing would have
-reached the plant and lost the only record of it, which is exactly what happens
-to an MCP server when its client quits. A restart appends; it never truncates.
-stderr is still written either way.
+#### Who a record names — and which of those claims anything checked
 
-A file that cannot be opened **stops the server**. Falling back to stderr would
-leave an operator believing they had a durable record, and they would find out
-from the absence of the line they went looking for.
+Four fields, deliberately kept apart, because running them together is how a
+record comes to claim more than anything verified:
 
-Rotation, syslog and the Windows Event Log are deliberately not here: an MCP
-server reimplementing `logrotate` would be a worse `logrotate` and a worse MCP
-server. A file a collector tails is the seam, and the format is stable and
-line-oriented for exactly that.
+| Field | What it is | Verified by |
+|---|---|---|
+| `operator_label` | The value of `OPCUA_OPERATOR_ID` — which deployment the record came from | **Nothing.** Whoever wrote the MCP client config chose it |
+| `process_identity` | `uid` (effective), `user` (from the account database, not `$USER`) and `pid` of this process. `uid` is `null` on Windows, where `user` is best effort | The OS, as far as this process can see |
+| `opcua_user_identity` | The identity token this server presents to the OPC UA server: `type` (`anonymous`, `username` or `certificate`), the `username`, or the `certificate_sha256` fingerprint of `OPCUA_USER_CERT`. Never a password or a key | The **OPC UA server**, which accepted or refused it — the only one of the four checked by something other than this process |
+| `mcp_principal` | Reserved for a remote caller identity verified by an authenticated MCP transport | Always `null` today: a stdio transport has no caller identity, and this server will not invent one |
 
-**`OPCUA_OPERATOR_ID`** stamps a label on every record. It is a label and not an
-identity: this server has no notion of *who* is calling — one process, one
-configured endpoint, whoever holds the MCP client — and a name nothing verified
-would be worse than none, because it would make a record look attributable when
-it is not. Unset, `operator` is `null`.
+`OPCUA_OPERATOR_ID` is a label, not an identity: this server has no notion of
+*who* is calling — one process, one configured endpoint, whoever holds the MCP
+client — and a name nothing verified would be worse than none, because it would
+make a record look attributable when it is not. Unset, `operator_label` is `null`.
+
+**Schema version.** `schema_version` is `2`. Version 1 (0.5.x, no
+`schema_version` field) had `operator` only; version 2 adds `schema_version`,
+`session_generation`, `operator_label`, `mcp_principal`, `process_identity` and
+`opcua_user_identity`, and timestamps are milliseconds on both runtimes. `operator`
+is still written with the same value as `operator_label` so existing readers keep
+working; it is deprecated and will be dropped in a future schema version. Every
+field a version-1 reader looked for is still there, with the same meaning.
+
+#### The durable copy: `OPCUA_AUDIT_FILE`
+
+For a stdio subprocess launched by an MCP client, stderr is that client's
+rotating log: not a compliance artifact, not integrity-protected, and not
+shippable by policy. Set **`OPCUA_AUDIT_FILE`** for a copy that survives the
+process. It is append-only, one JSON object per line, written synchronously per
+record, and the same bytes as the stderr line. A restart appends; it never
+truncates. stderr is still written either way.
+
+**Who can touch it.** A new file is created **`0600`** — explicitly, not whatever
+the umask allowed. An existing target is refused, and the server does not start,
+if it is:
+
+- a **symlink** (it could redirect the trail anywhere the process can write);
+- **not a regular file** — a directory, FIFO or device;
+- **owned by another account**;
+- **writable by group or others**.
+
+Group- or world-*readable* is accepted on purpose: a collector reading the file as
+its own group (`0640`, as logrotate's `create` commonly sets it) is a legitimate
+deployment, and nothing in a record is secret. Put the file in a directory only
+the service account can write — a check on the file cannot stop someone who can
+rename entries in its directory. **On Windows** the owner and mode bits are not
+checked and the file inherits the directory's ACLs; symlinks and non-regular
+targets are still refused. Restrict the directory's ACL yourself.
+
+**When it is on disk.** `OPCUA_AUDIT_FSYNC` decides:
+
+| Value | After each record | Survives |
+|---|---|---|
+| `always` *(default)* | written, then `fsync`'d before the call proceeds | a crash of this process, and a power loss or kernel panic |
+| `none` | written to the OS | a crash of this process — not a power loss |
+
+Only control and alarm-action calls are audited, so `always` costs one fsync per
+control decision, which is small next to an OPC UA round trip. A newly created
+file's directory entry is fsync'd too (best effort; not on Windows). On macOS
+`fsync` does not flush the drive's own cache (`F_FULLFSYNC` is not used, on either
+runtime).
+
+**Rotation.** Before every record the path is compared with the open file. If an
+external rotator renamed it away (logrotate's default `create` mode), or it was
+deleted, the next record goes to a new file created at the path — and whatever is
+at the path then is held to the same rules as at startup, so a rotation cannot
+swap in a symlink or someone else's file. No signal is needed. `copytruncate`
+also works: the file is opened in append mode, so writes land at the new end.
+Rotated files are never written again. One declared difference: **on Windows the
+Python server** holds the file without delete sharing, so a rotator cannot rename
+or delete it while that server runs — use copy-and-truncate there, or rotate with
+the server stopped. The Node server allows the rename on every platform.
+
+#### When the audit trail cannot be written
+
+| Call | What happens |
+|---|---|
+| Control or alarm action, **before** it is sent | **Refused — fail closed.** The `allowed` record must be durable first; if it cannot be written the call is refused with `… was not sent: its audit record could not be written (…)` and nothing reaches the plant |
+| Control or alarm action, **after** it reached the plant | The result is returned as it was, and `AUDIT FAILURE: …` goes to stderr. The plant cannot be un-written, and reporting a write that happened as a failure invites the model to send it again. The next control call's `allowed` record is what refuses the next call |
+| A denial | Still a denial. A lost denial record is reported on stderr |
+| Reads | **Unaffected.** They are not audited, so an audit outage does not take monitoring down with it |
+
+There is no queue: each record is written before the call proceeds, so nothing
+builds up unbounded while a sink is failing. The server retries the file on every
+record, so fixing the path (or the disk) restores control calls without a restart.
+A record that failed is not written to stderr either — a line saying `allowed`
+for a call that was then refused would be the one false record in the trail.
+
+#### Tamper evidence: `OPCUA_AUDIT_CHAIN`
+
+Off by default. With `OPCUA_AUDIT_CHAIN=sha256`, or `hmac-sha256` plus
+`OPCUA_AUDIT_CHAIN_KEY_FILE`, every record ends with three more fields:
+
+```json
+…,"seq":42,"prev_hash":"5cf7…a937","hash":"2771…e7ee"}
+```
+
+`hash` is SHA-256 (or HMAC-SHA256 with the key) over the record's exact bytes up
+to where `,"hash"` begins — so it covers the content, `seq`, and the previous
+record's `hash`. The chain continues across a restart (the server reads the last
+record of the file it opens) and across rotation (the new file's first record
+links to the rotated file's last). Both runtimes write identical chains, and
+either CLI verifies either's files:
+
+```console
+$ opcua-mcp-server --verify-audit audit.jsonl.1 audit.jsonl --key-file /etc/opcua-mcp/audit.key
+OK: 1289 chained record(s), seq 1..1289
+```
+
+Oldest file first. Exit status 0 if the chain holds, 1 if it does not, 2 on
+misuse. The key file must be at least 32 bytes (`openssl rand -hex 32`), a
+regular file, and not readable or writable by group or others; surrounding
+whitespace is ignored.
+
+**What it detects**, within the files it is given: a record that was **modified**
+(its hash no longer matches — any byte, including reformatting), a record that
+was **deleted, inserted or reordered** (the next record's `prev_hash`/`seq` no
+longer follows), an unchained line in the middle of a chain, a torn line, and a
+chain restarted in the middle of a file.
+
+**What it does not detect**, and the reason:
+
+- **Truncation of the tail.** Cutting off the last *n* records leaves a shorter,
+  perfectly valid chain. Only a copy held elsewhere — a collector that has
+  already shipped them — can show what is missing. The same goes for the head of
+  a stream whose earlier files are not given; the verifier reports "chain begins
+  at seq N" rather than passing it off as complete.
+- **An attacker who can compute the hash.** With `sha256` that is *anyone* who
+  can write the file: they can rewrite a record and recompute every hash after
+  it. `sha256` detects accidental corruption and naive edits, nothing more. With
+  `hmac-sha256` they need the key — and this process has to read the key, so an
+  attacker running as the service account, or root, has it. Keep the key readable
+  by the service account alone, and hold the verifying copy somewhere else.
+- **Records that were never written.** A process that is compromised before it
+  writes a record can simply not write it. The chain says what was written was not
+  changed afterwards; it says nothing about what should have been written.
+- **Files given in the wrong order** read as a chain restart at a file boundary —
+  reported as a note, not a failure, because a server started on a fresh file
+  legitimately starts a new chain there.
+
+#### What the local audit file can and cannot prove
+
+It **can** show, for the calls it recorded: which control call was permitted or
+refused under which profile, what it targeted (never the value), whether it
+completed, over which of this process's sessions and against which endpoint, which
+OS account the server ran as, and which identity token the OPC UA server accepted.
+With a chain, it can show that the records present have not been edited, dropped
+or reordered since they were written, by anyone without the key.
+
+It **cannot** prove who at the MCP client asked for a call — nothing on a stdio
+transport authenticates the caller, and `operator_label` is configuration. It
+cannot prove the trail is complete — a truncated tail, a process that never wrote
+a record, or an attacker with the account's privileges (and so the key) are
+outside what a local file can protect against. For evidence that has to survive
+the machine it describes, ship the file off it as it is written.
+
+#### External sinks
+
+A syslog, journald, Windows Event Log or collector sink is not built in — a file a
+collector tails is the supported seam, and the format is stable and line-oriented
+for exactly that. Both runtimes do define the interface one would implement
+(`LineSink` in `audit.ts` and `audit.py`): a synchronous `write(line)` that
+returns once the line is as durable as that sink promises and throws
+`AuditWriteError` when it did not land — which fails the control call closed, as
+above — plus `close()`. Every sink receives the same bytes, chain trailer
+included, so any one of them can be verified on its own. A sink that buffers must
+bound its own buffer and throw when it is full; there is no unbounded queue
+anywhere in the audit path.
 
 ## Known advisories in dependencies
 

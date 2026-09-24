@@ -328,6 +328,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the parity both runtimes keep; pinning is exact-match, so a revoked or
   URI-mismatched certificate is handled by replacing the pin.
 
+### Security
+- **The audit file is no longer only as safe as the umask, and no longer claims
+  more than it can prove (#146).** Both runtimes, identically:
+  - A new `OPCUA_AUDIT_FILE` is created `0600`. An existing target that is a
+    symlink, not a regular file, owned by another account, or group/world-writable
+    stops the server with a message naming the problem. (Windows: owner and mode
+    are not checked; the directory's ACL applies.)
+  - Each record is `fsync`'d before the control call proceeds.
+    `OPCUA_AUDIT_FSYNC=none` opts back out to OS-buffered writes.
+  - A file rotated away, deleted or replaced is detected before the next record
+    and reopened — and whatever is at the path then must pass the startup checks,
+    so rotation cannot swap in a symlink or another account's file.
+  - **Control calls fail closed.** If the `allowed` record cannot be written the
+    call is refused (`… was not sent: its audit record could not be written`) and
+    nothing reaches the plant. Reads are not audited and carry on. An outcome
+    record lost after the plant was touched is reported on stderr rather than
+    turning a completed write into a reported failure.
+  - Optional tamper evidence: `OPCUA_AUDIT_CHAIN=sha256|hmac-sha256` (the latter
+    with `OPCUA_AUDIT_CHAIN_KEY_FILE`) adds `seq`, `prev_hash` and `hash` to every
+    record, continued across restarts and rotation.
+    `opcua-mcp-server --verify-audit FILE… [--key-file KEY]` on either runtime
+    detects modified, deleted, inserted and reordered records. It cannot detect a
+    truncated tail or an attacker holding the key; SECURITY.md says so.
+  - SECURITY.md now states what the local audit file can and cannot prove.
+
+### Changed — the audit record is `schema_version` 2
+- **Audit records are `schema_version: 2`.** New fields: `schema_version`,
+  `session_generation` (1, 2, … per session this process established),
+  `operator_label`, `mcp_principal` (always `null` — nothing on a stdio transport
+  authenticates the caller), `process_identity` (`uid`, `user`, `pid`) and
+  `opcua_user_identity` (`type`, `username`, `certificate_sha256` — never a
+  secret). `operator` is still written, equal to `operator_label`, and is
+  deprecated. The `control` gate added by #134 keeps its place after `profile`. Python timestamps are now milliseconds, as Node's always were, and
+  both runtimes write byte-identical lines for the same record
+  (`tests/fixtures/audit.json`).
+
 ## [0.5.1] — 2026-09-22
 
 0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for
@@ -1514,7 +1550,6 @@ build, so this is the first version published to both registries.
   it alone.
 - Both publish jobs are now idempotent (`skip-existing` on PyPI, a version check
   on npm), so a partial release like 0.2.0's is safe to re-run.
-
 
 ## [0.2.0] — 2026-09-09
 

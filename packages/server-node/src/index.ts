@@ -11,7 +11,7 @@ import {
 import { realpathSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 
-import { AUDIT_FILE_ENV, AuditSink, describeAudit } from "./audit.js";
+import { AuditSink, describeAudit, parseAuditConfig } from "./audit.js";
 import { SERVER_URL, describeReconnect, reconnectConfig } from "./config.js";
 import { OpcuaConnection } from "./connection.js";
 import { VERSION } from "./contract.js";
@@ -210,8 +210,10 @@ export function runMain(opts: { scriptPath: string | null }): void {
       securityConfig();
       // Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and
       // cannot be given one has to be told now, not at the first control call
-      // they were relying on it to record.
-      audit = new AuditSink(process.env[AUDIT_FILE_ENV]?.trim() || null);
+      // they were relying on it to record. So does one whose target is unsafe
+      // to write (a symlink, another account's file) or whose chain key cannot
+      // be read.
+      audit = AuditSink.fromConfig(parseAuditConfig());
       console.error(`Tool policy: ${describePolicy(toolPolicy())}`);
       console.error(`Control audit: ${describeAudit(audit)}`);
       console.error(`Connection resilience: ${describeReconnect(reconnectConfig())}`);

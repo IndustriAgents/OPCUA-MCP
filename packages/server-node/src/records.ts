@@ -13,7 +13,9 @@
 // Python — so anything that reaches for `String(value)` or `typeof` as its
 // primary signal diverges by construction. The per-type table is shared, and
 // pinned from both sides by tests/fixtures/value-encoding.json.
-import { DataType, DataValue, Variant, VariantArrayType } from "node-opcua-client";
+import { DataType, DataValue, StatusCode, Variant, VariantArrayType } from "node-opcua-client";
+
+import { isGood } from "./status.js";
 
 export interface HistoryRecord {
   /** JSON-native where the OPC UA type allows; see `variantToJson`. */
@@ -159,4 +161,24 @@ export function toHistoryRecord(dataValue: DataValue): HistoryRecord {
 /** The history/aggregate `DataValue` array as canonical records. */
 export function toHistoryRecords(dataValues: DataValue[] | null | undefined): HistoryRecord[] {
   return (dataValues ?? []).map(toHistoryRecord);
+}
+
+/** The readings (or events) a HistoryReadResult carries; [] when it has none.
+ *
+ * Good *severity* is success, not plain Good only. `GoodNoData` is how a Part
+ * 11 server answers a range with nothing in it — an empty answer, not a failed
+ * read — and this runtime used to refuse it while the Python one returned []
+ * (#157). `history_data` in `records.py` is the other half.
+ */
+export function historyData<T>(
+  result: { statusCode: StatusCode; historyData?: unknown } | undefined,
+  what: string,
+  field: "dataValues" | "events"
+): T[] {
+  if (!result) throw new Error(`${what} failed`);
+  if (!isGood(result.statusCode)) {
+    throw new Error(`${what} failed with status: ${result.statusCode.name}`);
+  }
+  const data = result.historyData as Record<string, unknown> | null | undefined;
+  return ((data?.[field] as T[] | null | undefined) ?? []).slice();
 }

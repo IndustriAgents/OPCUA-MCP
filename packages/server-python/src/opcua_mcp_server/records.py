@@ -177,3 +177,19 @@ def history_record(data_value: Any) -> dict:
 def history_records(data_values: Iterable[Any] | None) -> list[dict]:
     """A history/aggregate result as canonical records."""
     return [history_record(data_value) for data_value in data_values or ()]
+
+
+def history_data(result: Any, what: str, field: str) -> list:
+    """The readings (or events) a HistoryReadResult carries; [] when it has none.
+
+    Good *severity* is success, not plain Good only. ``GoodNoData`` is how a Part
+    11 server answers a range with nothing in it — an empty answer, not a failed
+    read — and it may come with no HistoryData at all, which used to surface
+    here as an AttributeError on ``None`` and on the Node runtime as a refusal
+    (#157). ``historyData`` in ``records.ts`` is the other half.
+    """
+    status = result.StatusCode
+    if not status.is_good():
+        raise ValueError(f"{what} failed with status: {status.name}")
+    data = getattr(result, "HistoryData", None)
+    return list(getattr(data, field, None) or []) if data is not None else []

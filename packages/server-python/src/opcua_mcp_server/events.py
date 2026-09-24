@@ -34,7 +34,7 @@ from .contract import EVENTS
 from .errors import message
 from .history import continues, release_continuation_point
 from .notices import notice
-from .records import variant_to_json
+from .records import history_data, variant_to_json
 
 #: The Server object — where most servers raise every event they have.
 DEFAULT_NOTIFIER: str = EVENTS["defaultNotifierNodeId"]
@@ -326,13 +326,14 @@ def read_event_history(
     details.Filter = event_filter()
 
     result = client.get_node(node_id).history_read_events(details)
-    if not result.StatusCode.is_good():
-        raise ValueError(f"Read event history failed with status: {result.StatusCode.name}")
+    # Good severity, not plain Good: GoodNoData is an empty range, and may come
+    # with no HistoryData at all (#157).
+    history = history_data(result, "Read event history", "Events")
 
     continued = continues(result.ContinuationPoint)
     release_continuation_point(client, node_id, result.ContinuationPoint, details)
 
-    fetched = [event_record(event.EventFields) for event in result.HistoryData.Events]
+    fetched = [event_record(event.EventFields) for event in history]
     last = fetched[-1]["time"] if fetched else None
     return EventHistoryPage(
         records=[record for record in fetched if _severity_at_least(record, severity_min)],
@@ -421,7 +422,7 @@ def alarm_action(
     action: str,
     comment: str = "",
     duration_ms: float | None = None,
-) -> None:
+) -> str:
     """Call one Part 9 §5.5 method on one condition instance.
 
     *Which* object the method hangs off is the action's own business — see
@@ -430,8 +431,10 @@ def alarm_action(
     with the condition as the object. That well-known id is the fallback here,
     exactly as ``events.ts`` does it.
 
-    Raises whatever python-opcua raises for a non-Good status, which the caller
-    turns into the message the model sees.
+    Returns the name of the status the server answered, which is Good or a Good
+    subcode, so the tool can report it rather than a hard-coded "Good". Raises
+    with the status name otherwise, which the caller turns into the message the
+    model sees — the same reason the Node runtime gives.
     """
     spec = ACTIONS[action]
     condition = client.get_node(condition_id)
@@ -444,17 +447,26 @@ def alarm_action(
     target = condition if spec["on"] == "condition" else _shelving_state(condition, condition_id)
     method = _action_method(target, client, spec)
 
+    arguments = []
     if spec["takes"] == "eventIdAndComment":
-        target.call_method(
-            method,
+        arguments = [
             ua.Variant(b64decode(event_id), ua.VariantType.ByteString),
             ua.Variant(ua.LocalizedText(comment), ua.VariantType.LocalizedText),
-        )
+        ]
     elif spec["takes"] == "duration":
         # Duration is a Double of milliseconds in OPC UA, not a struct.
-        target.call_method(method, ua.Variant(float(duration_ms or 0), ua.VariantType.Double))
-    else:
-        target.call_method(method)
+        arguments = [ua.Variant(float(duration_ms or 0), ua.VariantType.Double)]
+
+    request = ua.CallMethodRequest()
+    request.ObjectId = target.nodeid
+    request.MethodId = method.nodeid
+    request.InputArguments = arguments
+    status = target.server.call([request])[0].StatusCode
+    # Good severity: an acknowledgement the server answered GoodClamped (or any
+    # Good subcode) happened, and reporting it as a failure invites a retry.
+    if not status.is_good():
+        raise ValueError(str(status.name))
+    return str(status.name)
 
 
 def _shelving_state(condition, condition_id: str):
@@ -479,14 +491,14 @@ def _shelving_state(condition, condition_id: str):
     raise ValueError(message("shelvingNotSupported", condition_id=condition_id))
 
 
-def acknowledge_alarm(client, condition_id: str, event_id: str, comment: str) -> None:
+def acknowledge_alarm(client, condition_id: str, event_id: str, comment: str) -> str:
     """Acknowledge one condition instance. The first stage of Part 9's handshake.
 
     Kept as its own name because `acknowledge_alarm` is a tool callers already
     have; the work is :func:`alarm_action`'s, so there is only ever one
     implementation to drift.
     """
-    alarm_action(client, condition_id, event_id, "acknowledge", comment)
+    return alarm_action(client, condition_id, event_id, "acknowledge", comment)
 
 
 def _action_method(target, client, spec: dict):

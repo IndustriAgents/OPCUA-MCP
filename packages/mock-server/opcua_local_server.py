@@ -161,6 +161,9 @@ class IndustrialControlSystem:
         scratch_folder = industrial_system.add_folder(2, "Scratch")
         self._create_scratch_variables(scratch_folder)
 
+        # Last, with string ids, so adding them renumbered nothing above.
+        self._create_parity_probes(methods_folder, scratch_folder)
+
         logging.info("Address space setup completed")
 
     #: The OperationLimits this mock publishes (Part 5 §6.3.11), both below the
@@ -188,6 +191,39 @@ class IndustrialControlSystem:
             self.server.get_node(ua.NodeId(identifier)).set_value(
                 ua.Variant(value, ua.VariantType.UInt32)
             )
+
+    def _create_parity_probes(self, methods_folder: Node, scratch_folder: Node):
+        """Two nodes that show what a plain-Good, all-built-in mock cannot (#157).
+
+        ``EchoDuration`` declares its one argument as ``Duration`` (``i=290``) —
+        not a built-in type, but a Double on the wire — and answers with the type
+        and value it actually received, so a test can see what each runtime sent.
+        Node refused to call such a method; Python guessed every argument.
+
+        ``OverriddenSetpoint`` answers a read with ``GoodLocalOverride``: a Good
+        subcode, so a success with a value. Node reported it as null.
+        """
+        duration = ua.Argument()
+        duration.Name = "Duration"
+        duration.DataType = ua.NodeId(ua.ObjectIds.Duration)
+        duration.ValueRank = -1
+        methods_folder.add_method(
+            ua.NodeId("EchoDuration", 2),
+            ua.QualifiedName("EchoDuration", 2),
+            self.echo_duration_callback,
+            [duration],
+            [ua.VariantType.String],
+        )
+
+        overridden = scratch_folder.add_variable(
+            ua.NodeId("OverriddenSetpoint", 2), ua.QualifiedName("OverriddenSetpoint", 2), 42.5
+        )
+        overridden.set_value(
+            ua.DataValue(
+                ua.Variant(42.5, ua.VariantType.Double),
+                ua.StatusCode(ua.StatusCodes.GoodLocalOverride),
+            )
+        )
 
     def historize(self):
         accessHistoryDataCapability = self.server.get_node("ns=0;i=11193")
@@ -580,6 +616,11 @@ class IndustrialControlSystem:
             # Add some calibration effect
             pass
         return [ua.Variant(True, ua.VariantType.Boolean)]
+
+    def echo_duration_callback(self, parent, *args):
+        """Answer with the Variant type and value received, e.g. ``Double:1500.0``."""
+        received = [f"{arg.VariantType.name}:{arg.Value!r}" for arg in args]
+        return [ua.Variant(" ".join(received), ua.VariantType.String)]
 
     def simulate_process(self):
         """Simulate industrial process behavior."""

@@ -1,23 +1,49 @@
-"""Unit tests for the Python server's ISO-8601 handling.
+"""Unit tests for the Python server's date/time handling.
 
 No OPC UA server and no MCP transport: this is the pure conversion layer that
 sits between what MCP delivers (strings) and what the opcua client needs
 (datetimes). It has broken before — the history tool originally accepted a
-different shape and reported errors differently from the Node server.
+different shape and reported errors differently from the Node server — and the
+two runtimes then disagreed about the grammar itself and about what a value with
+no zone means (#157).
 
-The Node equivalent lives in packages/server-node/test/unit.test.mjs; the two
-files deliberately assert the same error wording.
+The rules are the shared table in ``tests/fixtures/datetime-parsing.json``;
+``packages/server-node/test/dates.test.mjs`` drives the same table through the
+Node server's ``toDate``.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import timezone
 
 import pytest
+from conftest import ROOT
 from opcua_mcp_server import parse_iso_datetime
 
-# Must stay byte-identical to the Node server's `toDate` message.
-EXPECTED_ERROR = 'Invalid date/time: "{value}". Use ISO 8601, e.g. 2026-04-23T17:40:00Z'
+CASES = json.loads(
+    (ROOT / "tests" / "fixtures" / "datetime-parsing.json").read_text(encoding="utf-8")
+)["cases"]
+
+
+def _utc_ms(value) -> str:
+    """The instant as the fixture writes it: ISO-8601 UTC at millisecond precision."""
+    value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%dT%H:%M:%S") + f".{value.microsecond // 1000:03d}Z"
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["name"] for case in CASES])
+def test_the_shared_table(case):
+    if "error" in case:
+        with pytest.raises(ValueError) as excinfo:
+            parse_iso_datetime(case["input"])
+        assert str(excinfo.value) == case["error"]
+    else:
+        parsed = parse_iso_datetime(case["input"])
+        assert parsed.tzinfo is not None, "an aware datetime, never a naive one"
+        assert _utc_ms(parsed) == case["expected"]
+        # Truncated to milliseconds, as the Node runtime's Date holds it.
+        assert parsed.microsecond % 1000 == 0
 
 
 def test_none_passes_through():
@@ -25,36 +51,8 @@ def test_none_passes_through():
     assert parse_iso_datetime(None) is None
 
 
-def test_parses_utc_z_suffix():
-    assert parse_iso_datetime("2026-04-23T17:40:00Z") == datetime(
-        2026, 4, 23, 17, 40, tzinfo=timezone.utc
-    )
-
-
-def test_preserves_non_utc_offset():
-    """An offset must shift the instant, not be silently dropped."""
-    parsed = parse_iso_datetime("2026-04-23T19:40:00+02:00")
-    assert parsed.astimezone(timezone.utc) == datetime(2026, 4, 23, 17, 40, tzinfo=timezone.utc)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "not-a-date",
-        "",
-        "23/04/2026",
-        "2026-13-01T00:00:00Z",  # month out of range
-        "2026-02-30T00:00:00Z",  # day out of range for the month
-    ],
-)
-def test_rejects_malformed_input_with_shared_wording(value):
-    with pytest.raises(ValueError) as excinfo:
-        parse_iso_datetime(value)
-    assert str(excinfo.value) == EXPECTED_ERROR.format(value=value)
-
-
 def test_error_does_not_leak_the_underlying_exception():
-    """`raise ... from None` keeps the low-level message out of the model's view."""
+    """No chained low-level cause for the model to see."""
     with pytest.raises(ValueError) as excinfo:
         parse_iso_datetime("nope")
     assert excinfo.value.__cause__ is None

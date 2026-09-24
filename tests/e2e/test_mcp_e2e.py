@@ -55,6 +55,11 @@ NODE = {
     # Its id is fixed in the mock rather than assigned in sequence, so adding a
     # node cannot renumber it out from under this map.
     "ScratchAnalog": "ns=2;i=90",
+    # Parity probes (#157), string ids so nothing above is renumbered: a method
+    # whose argument is declared as Duration and echoes what it received, and a
+    # variable that answers reads with the Good subcode GoodLocalOverride.
+    "EchoDuration": "ns=2;s=EchoDuration",
+    "OverriddenSetpoint": "ns=2;s=OverriddenSetpoint",
 }
 
 # A node id the mock does not have, for the failure-path tests.

@@ -63,6 +63,30 @@
       "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"quite warm\". Nothing was written."
     },
     {
+      "name": "hex is not a number to a bound (#157: Node's Number() read 16 and let it through)",
+      "node_id": "ns=2;i=2",
+      "value": "0x10",
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"0x10\". Nothing was written."
+    },
+    {
+      "name": "digit separators are not a number to a bound (#157: Python's float() read 1000)",
+      "node_id": "ns=2;i=2",
+      "value": "1_000",
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"1_000\". Nothing was written."
+    },
+    {
+      "name": "NaN is not a number to a bound (#157: Python compared it false against both ends, so it passed)",
+      "node_id": "ns=2;i=2",
+      "value": "nan",
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"nan\". Nothing was written."
+    },
+    {
+      "name": "an empty string is not zero",
+      "node_id": "ns=2;i=2",
+      "value": "",
+      "error": "Node ns=2;i=2 is bounded, so it only accepts a number; got \"\". Nothing was written."
+    },
+    {
       "name": "a boolean is not a number, even where the language says it is",
       "node_id": "ns=2;i=2",
       "value": true,
@@ -115,6 +139,12 @@
       "node_id": "ns=2;i=5",
       "value": 3,
       "error": "3 is not one of the values node ns=2;i=5 accepts under the operator policy (0, 1, 2). Nothing was written."
+    },
+    {
+      "name": "a numeric enum does not read hex as a member (#157)",
+      "node_id": "ns=2;i=5",
+      "value": "0x1",
+      "error": "\"0x1\" is not one of the values node ns=2;i=5 accepts under the operator policy (0, 1, 2). Nothing was written."
     },
     {
       "name": "a string enum accepts one of its members",

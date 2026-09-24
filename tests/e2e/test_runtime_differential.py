@@ -121,6 +121,44 @@ DIFFERENTIAL_CALLS = [
         },
     ),
     ("subscribe_events", {}),
+    # Values the write codec must refuse identically (#157), each for a reason
+    # one runtime used to write anyway: Node's Number() read "0x10" as 16, Python's
+    # float() read true as 1.0, and a zone-less DateTime was local time on one
+    # runtime and UTC on the other. Every one fails conversion, so nothing is sent.
+    (
+        "write_opcua_nodes",
+        {
+            "nodes": [
+                {"node_id": NODE["ScratchDouble"], "value": "0x10"},
+                {"node_id": NODE["ScratchDouble"], "value": True},
+                {"node_id": NODE["ScratchDouble"], "value": [5]},
+                {
+                    "node_id": NODE["ScratchDouble"],
+                    "value": "2026-04-23T17:40:00",
+                    "data_type": "DateTime",
+                },
+            ]
+        },
+    ),
+    # A method argument declared as Duration (i=290): a Double on the wire. Node
+    # used to refuse the call and Python to guess every argument; the mock echoes
+    # what it received, so `outputs` shows both now send the same Double.
+    (
+        "call_opcua_method",
+        {
+            "object_node_id": NODE["Methods"],
+            "method_node_id": NODE["EchoDuration"],
+            "arguments": [1500],
+        },
+    ),
+    (
+        "call_opcua_method",
+        {
+            "object_node_id": NODE["Methods"],
+            "method_node_id": NODE["EchoDuration"],
+            "arguments": ["1500"],
+        },
+    ),
 ]
 
 
@@ -197,6 +235,40 @@ async def test_the_same_value_is_encoded_the_same_way_by_both(both):
     # A Boolean must be a JSON boolean on both, not 1/0 and not "True".
     assert isinstance(python_values[NODE["PumpEnabled"]], bool)
     assert python_types[NODE["PumpEnabled"]] == "Boolean"
+
+
+async def test_a_good_subcode_is_a_value_on_both(both):
+    """GoodLocalOverride is a success that says something more (#157).
+
+    Node compared against plain Good and reported this reading as null; Python
+    tested severity and returned it. Both now return the value and name the
+    subcode, so the override is visible rather than either hidden or mistaken
+    for a failure. Unmasked: the mock never moves this node.
+    """
+    results = await call_on_both(
+        both, "read_opcua_nodes", {"node_ids": [NODE["OverriddenSetpoint"]]}
+    )
+    for impl, records in results.items():
+        [record] = records
+        assert record["value"] == 42.5, f"{impl}: {record}"
+        assert record["data_type"] == "Double", f"{impl}: {record}"
+        assert record["status"] == "GoodLocalOverride", f"{impl}: {record}"
+
+
+async def test_a_duration_argument_reaches_the_plant_as_the_same_double(both):
+    """What the method received, not only that it was called (#157)."""
+    results = await call_on_both(
+        both,
+        "call_opcua_method",
+        {
+            "object_node_id": NODE["Methods"],
+            "method_node_id": NODE["EchoDuration"],
+            "arguments": ["1500"],
+        },
+    )
+    for impl, record in results.items():
+        assert record["outputs"] == ["Double:1500.0"], f"{impl}: {record}"
+        assert record["status"] == "Good", f"{impl}: {record}"
 
 
 async def test_a_rejected_node_is_reported_the_same_way_by_both(both):
@@ -278,6 +350,43 @@ DIFFERENTIAL_FAILURES = [
         "read_opcua_history",
         {"node_id": NODE["Temperature"], "aggregate_function": "Average"},
         "read_opcua_history requires start_time when aggregate_function is given",
+    ),
+    (
+        # #157: Node read this as the host's local time and Python as UTC — two
+        # different windows of history for one call. Refused on both instead.
+        "a history start time with no timezone",
+        "read_opcua_history",
+        {"node_id": NODE["Temperature"], "start_time": "2026-04-23T17:40:00"},
+        f"Failed to read history of node {NODE['Temperature']}: "
+        'Invalid date/time: "2026-04-23T17:40:00" has no timezone, so the instant it names '
+        "depends on where it is read. Add Z for UTC or an offset such as +02:00, "
+        "e.g. 2026-04-23T17:40:00Z",
+    ),
+    (
+        # The same refusal, and on Python no longer an SDK crash: the date was
+        # parsed outside the handler that words refusals.
+        "an event history end time with no timezone",
+        "read_event_history",
+        {"end_time": "2026-04-23T17:40:00"},
+        'Invalid date/time: "2026-04-23T17:40:00" has no timezone, so the instant it names '
+        "depends on where it is read. Add Z for UTC or an offset such as +02:00, "
+        "e.g. 2026-04-23T17:40:00Z",
+    ),
+    (
+        # #157: a method publishing no InputArguments had its array argument sent
+        # as the string "1,2" by Node and as an Int64 array by Python. Refused on
+        # both before anything is sent — the mock's StopProduction would
+        # otherwise run.
+        "an array argument to a method that declares no argument types",
+        "call_opcua_method",
+        {
+            "object_node_id": NODE["Methods"],
+            "method_node_id": "ns=2;i=31",
+            "arguments": [[1, 2]],
+        },
+        f"Failed to call method ns=2;i=31 on object {NODE['Methods']}: arguments[0] is an "
+        "array, and the method publishes no InputArguments to say what type it expects; "
+        "pass a boolean, a number or a string",
     ),
     (
         "cancelling a subscription that was never made",

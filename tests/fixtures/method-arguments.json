@@ -1,0 +1,47 @@
+{
+  "$comment": "What type a call_opcua_method argument is sent as — the other half of what reaches the plant. Driven by BOTH tests/unit/test_method_arguments.py and packages/server-node/test/method-arguments.test.mjs. `declared`: the method declares a DataType for the argument, and it is resolved to the built-in type it is encoded as by walking `supertypes` (child -> parent, the inverse HasSubtype reference a live server answers) — #157 found Node failing every such call and Python guessing every argument and sending it. `expected` is the built-in type's OPC UA name; `error` the exact refusal. `guessed`: the method declares no InputArguments at all, so the JSON value alone decides — #157 found Node sending a number as a Double and an array as the string \"1,2\", Python sending an int as an Int64 and a list as a typed array. `expected` is the Variant's type and value.",
+  "supertypes": {
+    "ns=0;i=290": "ns=0;i=11",
+    "ns=0;i=294": "ns=0;i=13",
+    "ns=0;i=295": "ns=0;i=12",
+    "ns=0;i=30": "ns=0;i=15",
+    "ns=0;i=29": "ns=0;i=24",
+    "ns=0;i=26": "ns=0;i=24",
+    "ns=0;i=27": "ns=0;i=26",
+    "ns=0;i=22": "ns=0;i=24",
+    "ns=2;i=3001": "ns=0;i=29",
+    "ns=2;i=3002": "ns=0;i=290",
+    "ns=2;i=4000": "ns=0;i=22",
+    "ns=2;i=6000": "ns=2;i=6001",
+    "ns=2;i=6001": "ns=2;i=6000"
+  },
+  "declared": [
+    { "name": "a built-in type is itself", "data_type": "ns=0;i=11", "expected": "Double" },
+    { "name": "Duration is a Double on the wire", "data_type": "ns=0;i=290", "expected": "Double" },
+    { "name": "UtcTime is a DateTime", "data_type": "ns=0;i=294", "expected": "DateTime" },
+    { "name": "LocaleId is a String", "data_type": "ns=0;i=295", "expected": "String" },
+    { "name": "Image is a ByteString", "data_type": "ns=0;i=30", "expected": "ByteString" },
+    { "name": "a plant's own enumeration is an Int32", "data_type": "ns=2;i=3001", "expected": "Int32" },
+    { "name": "a subtype of a subtype resolves all the way", "data_type": "ns=2;i=3002", "expected": "Double" },
+    { "name": "an abstract Integer resolves to BaseDataType, which the codec refuses to guess", "data_type": "ns=0;i=27", "expected": "Variant" },
+    { "name": "a structure resolves to ExtensionObject, which the codec refuses to guess", "data_type": "ns=2;i=4000", "expected": "ExtensionObject" },
+    { "name": "a DataType with no supertype is refused before anything is sent", "data_type": "ns=2;i=5000", "error": "DataType ns=2;i=5000 is not a subtype of any built-in OPC UA type, so an argument of it cannot be encoded; nothing was sent" },
+    { "name": "a hierarchy that loops is refused rather than walked forever", "data_type": "ns=2;i=6000", "error": "DataType ns=2;i=6000 is not a subtype of any built-in OPC UA type, so an argument of it cannot be encoded; nothing was sent" }
+  ],
+  "guessed": [
+    { "name": "a boolean", "value": true, "expected": { "type": "Boolean", "value": true } },
+    { "name": "an integer is a Double, not Python's Int64", "value": 5, "expected": { "type": "Double", "value": 5 } },
+    { "name": "a fraction", "value": 5.5, "expected": { "type": "Double", "value": 5.5 } },
+    { "name": "a numeric string is the number it spells", "value": "60", "expected": { "type": "Double", "value": 60 } },
+    { "name": "JSON whitespace around a numeric string", "value": " 60 ", "expected": { "type": "Double", "value": 60 } },
+    { "name": "a word is a String", "value": "hello", "expected": { "type": "String", "value": "hello" } },
+    { "name": "an empty string is a String, not Node's old 0", "value": "", "expected": { "type": "String", "value": "" } },
+    { "name": "hex is a String, not Node's old 16", "value": "0x10", "expected": { "type": "String", "value": "0x10" } },
+    { "name": "digit separators are a String, not Python's old 1000", "value": "1_000", "expected": { "type": "String", "value": "1_000" } },
+    { "name": "inf is a String, not Python's old infinity", "value": "inf", "expected": { "type": "String", "value": "inf" } },
+    { "name": "a numeric string too large for a Double is refused", "value": "1e400", "error": "1e400 is outside the Double range" },
+    { "name": "null is refused, not sent as \"null\" or \"None\"", "value": null, "error": "arguments[0] is null, and the method publishes no InputArguments to say what type it expects; pass a boolean, a number or a string" },
+    { "name": "an array is refused, not sent as \"1,2\" or an Int64 array", "value": [1, 2], "error": "arguments[0] is an array, and the method publishes no InputArguments to say what type it expects; pass a boolean, a number or a string" },
+    { "name": "an object is refused, not sent as \"[object Object]\"", "value": { "a": 1 }, "error": "arguments[0] is an object, and the method publishes no InputArguments to say what type it expects; pass a boolean, a number or a string" }
+  ]
+}

@@ -40,6 +40,25 @@ CONDITION_ID = "ns=2;i=100"
 EVENT_ID = "YWJjMTIz"  # base64 of "abc123"
 
 
+class FakeServer:
+    """The session a node calls through: records each CallMethodRequest.
+
+    Answers ``status`` — Good unless a test says otherwise — so what the server
+    said can be checked to reach the caller.
+    """
+
+    def __init__(self, node: FakeNode) -> None:
+        self.node = node
+        self.status = ua.StatusCodes.Good
+
+    def call(self, requests):
+        [request] = requests
+        # The node ids *are* the fake nodes (see FakeNode.nodeid), so a test can
+        # assert which method was resolved by identity.
+        self.node.calls.append((request.MethodId, tuple(request.InputArguments)))
+        return [type("CallMethodResult", (), {"StatusCode": ua.StatusCode(self.status)})()]
+
+
 class FakeNode:
     """A node that remembers what was called on it and what it was browsed for."""
 
@@ -47,11 +66,15 @@ class FakeNode:
         self.node_id = node_id
         self._children = children or {}
         self.calls: list[tuple] = []
+        self.server = FakeServer(self)
 
     # python-opcua's Node surface, only the parts the code under test touches.
     @property
     def nodeid(self):
-        return type("NodeId", (), {"to_string": lambda _self: self.node_id})()
+        return self
+
+    def to_string(self):
+        return self.node_id
 
     def get_children(self):
         return list(self._children.values())
@@ -59,9 +82,6 @@ class FakeNode:
     def get_browse_name(self):
         name = self.node_id.rsplit(":", 1)[-1]
         return type("QualifiedName", (), {"Name": name})()
-
-    def call_method(self, method, *args):
-        self.calls.append((method, args))
 
 
 class NamedNode(FakeNode):
@@ -86,7 +106,7 @@ class FakeClient:
         if node_id == CONDITION_ID:
             return self.condition
         self.requested.append(node_id)
-        return f"well-known:{node_id}"
+        return FakeNode(f"well-known:{node_id}")
 
 
 def condition_with(*browse_names: str) -> FakeNode:
@@ -230,5 +250,29 @@ def test_a_condition_that_hides_its_methods_falls_back_to_the_type_s():
     alarm_action(client, CONDITION_ID, EVENT_ID, "comment", "note")
 
     [(method, _)] = condition.calls
-    assert method == f"well-known:{ACTIONS['comment']['methodNodeId']}"
+    assert method.node_id == f"well-known:{ACTIONS['comment']['methodNodeId']}"
     assert client.requested == [ACTIONS["comment"]["methodNodeId"]]
+
+
+def test_a_good_subcode_is_a_success_and_is_reported_by_name():
+    """GoodClamped is an acknowledgement that happened (#157).
+
+    It used to be reported as plain "Good" here and refused on the Node runtime;
+    both now return the status the server answered, so nothing is hidden and
+    nothing that succeeded is reported as a failure.
+    """
+    condition = condition_with("Acknowledge")
+    condition.server.status = ua.StatusCodes.GoodClamped
+    client = FakeClient(condition)
+
+    assert acknowledge_alarm(client, CONDITION_ID, EVENT_ID, "seen") == "GoodClamped"
+
+
+def test_a_bad_answer_is_raised_with_the_status_name():
+    """The reason is the status name, as the Node runtime gives it."""
+    condition = condition_with("Acknowledge")
+    condition.server.status = ua.StatusCodes.BadConditionAlreadyDisabled
+    client = FakeClient(condition)
+
+    with pytest.raises(ValueError, match=r"^BadConditionAlreadyDisabled$"):
+        acknowledge_alarm(client, CONDITION_ID, EVENT_ID, "seen")

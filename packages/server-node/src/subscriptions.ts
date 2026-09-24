@@ -19,13 +19,13 @@ import {
   DataChangeTrigger,
   DataValue,
   DeadbandType,
-  StatusCodes,
   TimestampsToReturn,
 } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
 import { HistoryRecord, toHistoryRecord } from "./records.js";
 import { message } from "./errors.js";
+import { isGood } from "./status.js";
 
 // Defaults and bounds, read from the contract rather than written here. They
 // were five constants declared identically in this file and in
@@ -363,7 +363,7 @@ export class SubscriptionManager {
       // node-opcua reports a rejected item through the create result rather than
       // by throwing, so an unreadable node would otherwise leave a subscription
       // that silently never fires.
-      if (monitoredItem.statusCode && monitoredItem.statusCode !== StatusCodes.Good) {
+      if (monitoredItem.statusCode && !isGood(monitoredItem.statusCode)) {
         throw new Error(`Monitoring rejected with status: ${monitoredItem.statusCode.toString()}`);
       }
       monitoredItem.on("changed", (dataValue: DataValue) => this.record(entry, dataValue));

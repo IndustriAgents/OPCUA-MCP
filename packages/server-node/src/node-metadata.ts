@@ -38,7 +38,6 @@
 import {
   AttributeIds,
   ClientSession,
-  StatusCodes,
   makeBrowsePath,
   type BrowsePathResult,
   type DataValue,
@@ -53,6 +52,7 @@ import {
   translateChunk,
   type ServerOperationLimits,
 } from "./operation-limits.js";
+import { isGood } from "./status.js";
 
 const ANALOG = CONTRACT.analog;
 
@@ -129,7 +129,7 @@ function assemble(properties: unknown[]): AnalogInfo | null {
  * failure: most nodes are not AnalogItems.
  */
 function firstTarget(result: BrowsePathResult): string | null {
-  if (result.statusCode !== StatusCodes.Good) return null;
+  if (!isGood(result.statusCode)) return null;
   const target = result.targets?.[0];
   return target ? target.targetId.toString() : null;
 }
@@ -235,7 +235,7 @@ export class NodeMetadata {
     );
     owners.forEach(([nodeIndex, propertyIndex], position) => {
       const dataValue = values[position];
-      if (!dataValue || dataValue.statusCode !== StatusCodes.Good) return;
+      if (!dataValue || !isGood(dataValue.statusCode)) return;
       found.get(nodeIds[nodeIndex])![propertyIndex] = dataValue.value?.value ?? null;
     });
 

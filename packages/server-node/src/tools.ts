@@ -9,10 +9,8 @@ import {
   Variant,
   VariantArrayType,
   DataValue,
-  StatusCodes,
   CallMethodResult,
   NodeClass,
-  HistoryData,
   AggregateFunction,
   BrowseDirection,
   ClientSession,
@@ -73,7 +71,7 @@ import {
   readEventHistory,
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
-import { toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
+import { historyData, toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
 import {
   SubscribeOptions,
@@ -95,10 +93,15 @@ import {
   type ValueBound,
 } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
+import { builtInType, guessVariant } from "./method-arguments.js";
+import { isGood } from "./status.js";
 import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
 const ROOT_FOLDER = "ns=0;i=84";
+
+/** The HasSubtype reference type (ns=0), which links a DataType to its parent. */
+const HAS_SUBTYPE = 45;
 
 /** One node's reading (resultShapes.nodeValues). */
 interface NodeValueRecord {
@@ -187,26 +190,9 @@ function browseNameMatches(segment: string, namespaceIndex: number, name: string
   return segment === name;
 }
 
-/** The pre-#10 argument heuristic, kept only for methods that declare no types.
- *
- * Parses float → int → string and forces Double or String. It is wrong for
- * Boolean and every sized integer, which is what `inputArgumentTypes` exists to
- * fix; this remains because a method that publishes no InputArguments leaves
- * nothing better to go on.
- */
-function guessVariant(arg: unknown): Variant {
-  if (typeof arg === "boolean") return new Variant({ dataType: DataType.Boolean, value: arg });
-  if (typeof arg === "number") return new Variant({ dataType: DataType.Double, value: arg });
-  const text = String(arg);
-  const asNumber = Number(text);
-  return Number.isFinite(asNumber) && text.trim() !== ""
-    ? new Variant({ dataType: DataType.Double, value: asNumber })
-    : new Variant({ dataType: DataType.String, value: text });
-}
-
 /** A node's present reading as a number, or null if there is not one to compare. */
 function currentNumber(dataValue: DataValue | undefined): number | null {
-  if (!dataValue || dataValue.statusCode !== StatusCodes.Good) return null;
+  if (!dataValue || !isGood(dataValue.statusCode)) return null;
   return asNumber(variantToJson(dataValue.value));
 }
 
@@ -256,7 +242,7 @@ export function checkMaxChange(
   if (present === null) {
     const reason = !dataValue
       ? "it could not be read"
-      : dataValue.statusCode !== StatusCodes.Good
+      : !isGood(dataValue.statusCode)
         ? dataValue.statusCode.name
         : "the node returned no usable value";
     throw new ContractRefusal(message("currentValueUnreadable", { node_id: nodeId, reason }));
@@ -292,12 +278,12 @@ export function checkMaxChange(
  * to stringify natively and so diverged by construction — the one thing
  * `value-encoding.json` exists to prevent, just outside its reach.
  */
-function toNodeValueRecord(
+export function toNodeValueRecord(
   nodeId: string,
   dataValue: DataValue | undefined,
   engineering: AnalogInfo | null = null
 ): NodeValueRecord {
-  const good = dataValue?.statusCode === StatusCodes.Good;
+  const good = dataValue !== undefined && isGood(dataValue.statusCode);
   return {
     node_id: canonicalNodeId(nodeId),
     value: good ? variantToJson(dataValue?.value) : null,
@@ -1364,9 +1350,9 @@ export class OpcuaTools {
         });
         if (historyReadings.length !== 1) throw new Error("Read history failed");
         const reading = historyReadings[0];
-        if (reading.statusCode !== StatusCodes.Good) {
-          throw new Error(`Read history failed with status: ${reading.statusCode.name}`);
-        }
+        // Good severity, not plain Good: GoodNoData is an empty range with
+        // completeness complete, not a failed read (#157).
+        const dataValues = historyData<DataValue>(reading, "Read history", "dataValues");
         const continued = continues(reading.continuationPoint);
         // The details `readHistoryValue` sent, so the server knows which history
         // the point belongs to.
@@ -1382,7 +1368,7 @@ export class OpcuaTools {
             isReadModified: false,
           })
         );
-        const records = toHistoryRecords((reading.historyData as HistoryData).dataValues);
+        const records = toHistoryRecords(dataValues);
         return historyResult(
           records,
           historyCompleteness({
@@ -1440,9 +1426,7 @@ export class OpcuaTools {
         aggregateType,
         request.processingInterval
       );
-      if (aggregated.statusCode !== StatusCodes.Good) {
-        throw new Error(`Read aggregate failed with status: ${aggregated.statusCode.name}`);
-      }
+      const dataValues = historyData<DataValue>(aggregated, "Read aggregate", "dataValues");
       const continued = continues(aggregated.continuationPoint);
       await releaseContinuationPoint(
         session,
@@ -1455,7 +1439,7 @@ export class OpcuaTools {
           processingInterval: request.processingInterval,
         })
       );
-      const records = toHistoryRecords((aggregated.historyData as HistoryData).dataValues);
+      const records = toHistoryRecords(dataValues);
       // No count was asked for, so only the server can have cut this short. Where
       // it resumes is the interval after the last one returned, which is not a
       // timestamp this server should compute and round on the caller's behalf —
@@ -1613,7 +1597,7 @@ export class OpcuaTools {
       { nodeId, attributeId: AttributeIds.BrowseName },
       { nodeId, attributeId: AttributeIds.NodeClass },
     ]);
-    if (browseName.statusCode !== StatusCodes.Good) {
+    if (!isGood(browseName.statusCode)) {
       throw new Error(`Browse failed with status: ${browseName.statusCode.name}`);
     }
     const name = browseName.value?.value;
@@ -1673,7 +1657,7 @@ export class OpcuaTools {
       }
       results.forEach((result, index) => {
         records[start + index].type_definition = typeDefinitionOf(
-          result.statusCode === StatusCodes.Good,
+          isGood(result.statusCode),
           (result.references ?? []).map((reference) => reference.browseName.name ?? "")
         );
       });
@@ -1712,11 +1696,11 @@ export class OpcuaTools {
 
     variables.forEach((record, index) => {
       const [value, dataType, description] = values.slice(index * 3, index * 3 + 3);
-      if (value?.statusCode === StatusCodes.Good) {
+      if (value && isGood(value.statusCode)) {
         record.value = variantToJson(value.value);
         record.data_type = dataTypeName(value.value);
       }
-      if (record.data_type === null && dataType?.statusCode === StatusCodes.Good) {
+      if (record.data_type === null && dataType && isGood(dataType.statusCode)) {
         record.data_type = dataTypeNameFromNodeId(dataType.value?.value);
       }
       const text = description?.value?.value?.text;
@@ -1865,7 +1849,7 @@ export class OpcuaTools {
             if (Array.isArray(node.value)) arrayType = VariantArrayType.Array;
           } else {
             const dataValue = currentByIndex.get(index);
-            if (!dataValue || dataValue.statusCode !== StatusCodes.Good || !dataValue.value) {
+            if (!dataValue || !isGood(dataValue.statusCode) || !dataValue.value) {
               results[index] = {
                 node_id: results[index].node_id,
                 status: dataValue?.statusCode?.name ?? "BadUnexpectedError",
@@ -1974,7 +1958,7 @@ export class OpcuaTools {
       const declared = await this.inputArgumentTypes(session, methodNodeId);
       const inputArguments = args.map((arg, index) => {
         const declaredType = declared[index];
-        if (declaredType === undefined) return guessVariant(arg);
+        if (declaredType === undefined) return guessVariant(arg, index);
         return new Variant({
           dataType: declaredType.dataType,
           arrayType: declaredType.arrayType,
@@ -1987,7 +1971,10 @@ export class OpcuaTools {
         methodId: methodNodeId,
         inputArguments,
       });
-      if (callResult.statusCode !== StatusCodes.Good) {
+      // Good severity, not plain Good: GoodClamped or GoodLocalOverride is a call
+      // that happened, and refusing it would report as failed an action the
+      // plant carried out. The subcode is reported in `status` instead.
+      if (!isGood(callResult.statusCode)) {
         throw new Error(`Method call failed with status: ${callResult.statusCode.name}`);
       }
 
@@ -2011,24 +1998,52 @@ export class OpcuaTools {
     }
   }
 
-  /** The declared type of each input argument, or [] when the method publishes none. */
+  /** The declared type of each input argument, or [] when the method publishes none.
+   *
+   * A declared DataType that is not itself built in (`Duration`, `UtcTime`, an
+   * enumeration) is resolved to the built-in type it is encoded as, and one that
+   * resolves to none throws: that is a method whose argument cannot be encoded,
+   * not one that declares nothing, and guessing would send it anyway.
+   */
   private async inputArgumentTypes(
     session: ClientSession,
     methodNodeId: string
   ): Promise<Array<{ dataType: DataType; arrayType: VariantArrayType }>> {
+    let definition;
     try {
-      const definition = await session.getArgumentDefinition(methodNodeId);
-      return (definition.inputArguments ?? []).map((argument) => ({
-        // Built-in types are numbered identically in the DataType enum and in
-        // namespace 0, which is what makes this a lookup rather than a table.
-        dataType: Number(argument.dataType.value) as DataType,
-        arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
-      }));
+      definition = await session.getArgumentDefinition(methodNodeId);
     } catch {
       // Not every method publishes InputArguments, and a method with no
       // arguments has nothing to publish. Fall back rather than refuse.
       return [];
     }
+
+    const supertypeOf = async (dataType: string): Promise<string | null> => {
+      // Every inverse reference, filtered here rather than by the server:
+      // python-opcua's server answers a browse filtered to HasSubtype with
+      // nothing at all, and the Python runtime does the same for that reason.
+      const result = await session.browse({
+        nodeId: dataType,
+        browseDirection: BrowseDirection.Inverse,
+        resultMask: 63,
+      });
+      if (!isGood(result.statusCode)) return null;
+      const parent = (result.references ?? []).find(
+        (reference) =>
+          reference.referenceTypeId.namespace === 0 &&
+          reference.referenceTypeId.value === HAS_SUBTYPE
+      );
+      return parent ? canonicalNodeId(parent.nodeId.toString()) : null;
+    };
+
+    const declared = [];
+    for (const argument of definition.inputArguments ?? []) {
+      declared.push({
+        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), supertypeOf),
+        arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
+      });
+    }
+    return declared;
   }
 
   // --- data-change subscriptions -------------------------------------------
@@ -2288,7 +2303,10 @@ export class OpcuaTools {
     } catch (error) {
       throw failed(describeError(error));
     }
-    if (statusCode !== StatusCodes.Good) {
+    // Good severity: an acknowledgement the server answered with a Good subcode
+    // happened, and reporting it as a failure invites a retry. The subcode is in
+    // `status`.
+    if (!isGood(statusCode)) {
       throw failed(statusCode.name);
     }
 

@@ -14,10 +14,11 @@
  * server's number is combined with ours.
  */
 
-import { AttributeIds, ClientSession, StatusCodes } from "node-opcua-client";
+import { AttributeIds, ClientSession } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
 import { MAX_NODES_PER_READ, MAX_NODES_PER_WRITE, effectiveLimit } from "./limits.js";
+import { isGood } from "./status.js";
 
 /** The server's stated limits, null where it states none. */
 export interface ServerOperationLimits {
@@ -56,7 +57,7 @@ export async function readOperationLimits(session: ClientSession): Promise<Serve
     NAMES.forEach((name, index) => {
       const dataValue = values[index];
       const value = dataValue?.value?.value;
-      if (dataValue?.statusCode === StatusCodes.Good && typeof value === "number") {
+      if (dataValue && isGood(dataValue.statusCode) && typeof value === "number") {
         limits[name] = value;
       }
     });

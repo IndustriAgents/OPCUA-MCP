@@ -9,8 +9,9 @@ import {
   BrowseResult,
   ClientSession,
   ReferenceDescription,
-  StatusCodes,
 } from "node-opcua-client";
+
+import { isGood } from "./status.js";
 
 /** The browse this server performs: hierarchical references, forward only.
  *
@@ -60,7 +61,7 @@ export async function browseAllReferences(
   let result: BrowseResult = await session.browse(browseDescription(nodeId));
 
   for (;;) {
-    if (result.statusCode !== StatusCodes.Good) {
+    if (!isGood(result.statusCode)) {
       // `.name`, not the whole StatusCode: node-opcua renders the same rejection
       // as `BadNodeIdUnknown (0x80340000)` and python-opcua as
       // `StatusCode(BadNodeIdUnknown)`. Neither server controls the other's

@@ -51,6 +51,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only `tooManyNodes` one, which is gone.
 - `write_opcua_nodes`'s description now says a batch is not a transaction.
 
+### Changed — **breaking** for inputs the two runtimes read differently (#157)
+- **The two runtimes now agree on what reaches the plant** (#157, group A). On
+  some inputs the same tool call could make the Node and Python servers write a
+  different value, read a different window of history, or disagree about whether
+  a call worked. Each rule below is now one table under `tests/fixtures/` that
+  both runtimes' unit suites run: `datetime-parsing.json`, `write-coercion.json`,
+  `method-arguments.json`, `status-severity.json`, plus new rows in
+  `value-bounds.json`.
+
+  **Breaking: some inputs that used to be accepted are now refused.** Each was
+  accepted by only one runtime, or accepted by both with different results:
+
+  | Input | Before | Now |
+  |---|---|---|
+  | Date/time with no timezone, e.g. `2026-04-23T17:40:00` (history `start_time`/`end_time`, DateTime writes) | Node: the host's local time. Python: UTC | Refused: *"… has no timezone … Add Z for UTC or an offset such as +02:00"* |
+  | `04/23/2026`, `April 23, 2026`, `2026`, `2026-04-23` (no time), `T24:00` | Node accepted | Refused |
+  | `20260423T174000Z`, `2026-W17-4` | Python 3.11+ accepted | Refused |
+  | `2026-02-30` in a DateTime **write** | Node wrote 2 March | Refused (history already refused it) |
+  | Dates before 1601 or after 9999 | Varied | Refused: an OPC UA DateTime cannot carry them |
+  | Numeric strings `"0x10"`, `""`, `"Infinity"` (writes, method arguments, policy bounds) | Node read 16, 0, Infinity | Refused / not a number |
+  | Numeric strings `"1_000"`, `"inf"`, `"nan"`, `"+5"`, `"007"`, `".5"`, non-ASCII digits | Python (and for `+5`/`007`, both) accepted | Refused / not a number |
+  | `true` written to a Double/Float/integer node | Python wrote 1.0 | Refused. `true` is not 1 |
+  | `[5]`, `["5"]`, `[]` written to a **scalar** node | Node wrote 5, 5, 0 | Refused |
+  | A number or boolean written to a String node | `"1"`/`"1.0"`, `"true"`/`"True"` | Refused. Send a string |
+  | A LocalizedText/QualifiedName written as an object | Node passed it through, Python wrote `str(dict)` | Refused. Send the text |
+  | A Guid with braces, `urn:uuid:` or no hyphens | Python accepted | Refused. The canonical 8-4-4-4-12 form only |
+  | ByteString given as a number | Python base64-decoded `str(n)` | Refused |
+  | An Int64/UInt64 JSON number beyond ±2^53−1 | Node had already rounded it | Refused. Send it as a decimal string |
+  | A Float outside ±3.4e38 | Node wrote Infinity, Python raised mid-encode | Refused |
+  | Method with **no** InputArguments, argument `null`, an array or an object | Node sent `"null"`, `"1,2"`, `"[object Object]"`; Python `"None"`, a typed array | Refused before the call is sent |
+
+  **Now accepted where one runtime refused:** the integer `5.0` and the strings
+  `"5.0"` and `"1e3"` for an integer node (Python refused), `1`/`0` for a
+  Boolean node, and the nil and version-7 Guids (Node refused).
+
+  **Method arguments with a derived DataType** (`Duration` i=290, `UtcTime`,
+  an enumeration) are sent as the built-in type they derive from: a Duration as a
+  Double, an enumeration as an Int32. Before, Node failed the call and Python
+  *guessed every argument and sent the call anyway*. A type with no built-in
+  base is refused before anything is sent. With no InputArguments, a JSON number
+  is sent as a Double on both runtimes (Python used to send an int as an Int64).
+
+  **Good subcodes are successes on both runtimes**, per OPC UA Part 4 §7.39's
+  severity bits, and the subcode is reported in `status` so nothing is hidden. A
+  `GoodLocalOverride`/`GoodClamped` read returns its value (Node returned null),
+  write type inference and `max_change` use it, browse `include_values` keeps it,
+  a `GoodNoData` history or event-history range is an empty list (Node failed
+  it), and a method call or alarm action answered with a Good subcode succeeds
+  and reports that status. Python used to report `"Good"` for a method call or
+  alarm action whatever the server answered.
+
+  Refusal messages that echo a value (`Cannot convert "0x10" to Double`) are now
+  identical on both runtimes, as the fixtures check.
+
 
 ### Fixed
 - **The Claude Desktop bundle could not configure server-certificate pinning,
@@ -150,6 +204,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node below the root that refused to be browsed was skipped silently, so its
   subtree was missing from a result that looked complete. `completeness` now
   reports it as `unbrowsable`.
+- **Python: an invalid `start_time`/`end_time` on `read_event_history` crashed
+  the tool** with the SDK's generic *"Error executing tool"*. It now gets the
+  same refusal as on Node (#157, B11).
 
 ### Added
 - **The identity status is reported everywhere control is decided.**

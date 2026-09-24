@@ -7,6 +7,7 @@ security boundary and is called for every invocation before OPC UA is touched.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from collections.abc import Iterable, Mapping, Sequence
@@ -18,6 +19,7 @@ from typing import Any
 from .contract import CONTRACT
 from .errors import message
 from .node_ids import namespace_uri_form, resolve_node_id
+from .numeric import parse_numeric_string
 
 PROFILES = ("observe", "operator", "full")
 ACCESS_CLASSES = ("read", "monitor", "alarm-action", "control")
@@ -426,16 +428,23 @@ def as_number(value: Any) -> float | None:
     A boolean is not a number here even though Python says it is. ``True`` is not
     1 to an operator writing a bound, and letting it compare as one is the same
     coercion the typed-argument work removed from method calls.
+
+    The string is read with the one numeric grammar the write codec also uses
+    (``numeric.py``), not ``float()``. ``float()`` takes ``"1_000"``, ``"inf"``
+    and ``"nan"`` — and a NaN compares false against every bound, so it passed
+    all of them — while the Node runtime's ``Number()`` took ``"0x10"`` instead
+    (#157). A string the codec would not write cannot be compared either.
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
         try:
-            return float(value.strip())
-        except ValueError:
+            number = float(value)
+        except OverflowError:
             return None
+        return number if math.isfinite(number) else None
+    if isinstance(value, str):
+        return parse_numeric_string(value)
     return None
 
 

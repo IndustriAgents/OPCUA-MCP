@@ -51,6 +51,8 @@ Discover these any time with `browse_opcua_nodes`.
 | Scratch / ScratchDouble | `ns=2;i=41` | Double | read/write |
 | Scratch / ScratchBoolean | `ns=2;i=42` | Boolean | read/write |
 | Scratch / ScratchAnalog | `ns=2;i=90` | Double, AnalogItemType | read/write |
+| Methods / EchoDuration | `ns=2;s=EchoDuration` | Method | call (1 Duration arg); returns what it received |
+| Scratch / OverriddenSetpoint | `ns=2;s=OverriddenSetpoint` | Double, status `GoodLocalOverride` | read |
 
 > Method NodeIds account for the per-method `InputArguments`/`OutputArguments`
 > property nodes. Always browse the `Methods` folder rather than hard-coding.
@@ -151,6 +153,14 @@ call — one unreadable node must not discard the other forty-nine.
 At most 500 nodes per call. A server that publishes a lower `MaxNodesPerRead` is
 sent the list in consecutive Reads, and the records still come back in the order
 asked, each with its own status.
+
+A Good *subcode* is still a value. `GoodLocalOverride`, `GoodClamped` and the
+rest are successes that say something more, so the value is returned and the
+subcode named, and you can see that someone overrode the node locally:
+```json
+{ "node_id": "ns=2;s=OverriddenSetpoint", "value": 42.5, "data_type": "Double",
+  "status": "GoodLocalOverride", … }
+```
 > Prompt: *"Read temperature, pressure, and pump status together."*
 
 ### `write_opcua_nodes`
@@ -181,6 +191,27 @@ writes per call, and fewer where the server publishes a lower `MaxNodesPerWrite`
 a batch over either is refused before anything is sent rather than split, because
 splitting would add the case where the first half moved the plant and the second
 never arrived.
+
+Conversion is strict, and the same on both runtimes
+(`../tests/fixtures/write-coercion.json` is the full table). A numeric string must
+look like a JSON number, so `"42.5"` and `"1e3"` work and `"0x2A"`, `"1_000"`
+and `""` do not. `true` is not 1, `[5]` is not 5, and a String node takes only a
+string. A DateTime needs a timezone:
+```json
+{ "nodes": [
+  { "node_id": "ns=2;i=41", "value": "0x10" },
+  { "node_id": "ns=2;i=41", "value": "2026-04-23T17:40:00", "data_type": "DateTime" }
+] }
+```
+```json
+{ "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
+  "error": "Cannot convert \"0x10\" to Double" }
+{ "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
+  "error": "Invalid date/time: \"2026-04-23T17:40:00\" has no timezone, so the instant it names depends on where it is read. Add Z for UTC or an offset such as +02:00, e.g. 2026-04-23T17:40:00Z" }
+```
+An Int64 or UInt64 larger than ±2^53−1 has to be sent as a decimal string
+(`"9223372036854775807"`), because a JSON number that large has already been
+rounded before it arrives.
 > Note: the simulation republishes sensor/actuator state every ~1s, so direct
 > writes to those nodes are transient. Use the **command variables** or
 > **methods** to drive lasting state changes.
@@ -277,6 +308,23 @@ Call a method on an object node.
 Arguments are converted to the types the method *declares*: this server reads the
 method's `InputArguments`, so a Boolean argument is sent as a Boolean and an
 Int32 as an Int32, rather than everything becoming a Double or a String.
+
+A declared type derived from a built-in one is sent as that built-in type. The
+mock's `EchoDuration` takes a `Duration` (`i=290`), which is a Double on the wire,
+and answers with what it received:
+```json
+{ "object_node_id": "ns=2;i=27", "method_node_id": "ns=2;s=EchoDuration",
+  "arguments": ["1500"] }
+```
+```json
+{ "object_node_id": "ns=2;i=27", "method_node_id": "ns=2;s=EchoDuration",
+  "status": "Good", "outputs": ["Double:1500.0"] }
+```
+A method that publishes no `InputArguments` gets its arguments by JSON type: a
+boolean is sent as a Boolean, a number or numeric string as a Double, and any other
+string as a String. `null`, arrays and objects have no obvious OPC UA type, so
+they are refused before the call is sent. `status` is what the server answered,
+including a Good subcode such as `GoodClamped`.
 After this, `SystemMode` (`ns=2;i=19`) becomes `AUTO` and `ProductionRate`
 (`ns=2;i=21`) becomes `60` within ~1s.
 > Prompt: *"Start production at 60 units/hour, then stop it."*
@@ -413,6 +461,13 @@ interval. Offered when the server advertises historical access
 { "node_id": "ns=2;i=3", "start_time": "2026-06-05T09:50:00Z",
   "end_time": "2026-06-05T10:30:00Z", "num_values": 3 }
 ```
+
+`start_time` and `end_time` are RFC 3339 and must carry a timezone, `Z` or an
+offset such as `+02:00`. A timestamp with none is refused rather than read as
+UTC or as the server host's local time, because either guess can silently move
+the window by hours. The full grammar is `../tests/fixtures/datetime-parsing.json`.
+A range with nothing in it (the server answers `GoodNoData`) comes back as an
+empty result, not an error.
 
 Both servers answer with the same records — one per historical value, returned
 as one content block each:

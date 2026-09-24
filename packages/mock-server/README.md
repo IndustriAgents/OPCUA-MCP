@@ -61,6 +61,16 @@ A comprehensive mockup OPC UA server for industrial control systems, featuring r
 5. **CalibrateSensors(sensorName: String) → Boolean**
    - Simulates sensor calibration process
 
+6. **EchoDuration(duration: Duration) → String** (`ns=2;s=EchoDuration`)
+   - Its argument is declared as `Duration` (`i=290`), which is not a built-in
+     type but is encoded as a Double. It returns the type and value it received,
+     for example `Double:1500.0`, so a test can see what a client actually sent.
+
+The `Scratch` folder also holds `OverriddenSetpoint` (`ns=2;s=OverriddenSetpoint`),
+a Double of 42.5 that reads with the Good subcode `GoodLocalOverride`. It is a
+success that carries a value, not an error. Both probes use string ids, so adding
+them did not renumber any existing node.
+
 ### 🔔 **Events**
 The server raises a plain `BaseEventType` event whenever its alarm state
 *changes* — severity 700 for `Alarm active: <reason>`, 100 for `Alarm cleared` —

@@ -57,6 +57,7 @@ from .limits import (
     event_buffer_size,
     history_values,
 )
+from .method_arguments import built_in_type, guess_variant
 from .node_ids import canonical_node_id
 from .node_metadata import AnalogInfo
 from .notices import notice
@@ -75,7 +76,7 @@ from .policy import (
     server_identity_record,
     values_at,
 )
-from .records import history_records, scalar_to_json, variant_to_json
+from .records import history_data, history_records, variant_to_json
 from .security import describe_security, security_config
 from .state import ServerState
 from .subscriptions import (
@@ -932,10 +933,12 @@ def read_opcua_history(
             # continuation point it throws away; see history.py.
             details = raw_details(start, end, wanted)
             result = client.get_node(node_id).history_read(details)
-            result.StatusCode.check()
+            # Good severity, not `StatusCode.check()`'s plain Good: GoodNoData is
+            # an empty range with completeness complete, not a failed read (#157).
+            values = history_data(result, "Read history", "DataValues")
             continued = continues(result.ContinuationPoint)
             release_continuation_point(client, node_id, result.ContinuationPoint, details)
-            records = history_records(result.HistoryData.DataValues)
+            records = history_records(values)
             return _history_result(
                 records,
                 history_completeness(
@@ -999,11 +1002,10 @@ def read_opcua_history(
             )
 
         result = client.get_node(node_id).history_read(details)
-        if not result.StatusCode.is_good():
-            raise ValueError(f"Read aggregate failed with status: {result.StatusCode.name}")
+        values = history_data(result, "Read aggregate", "DataValues")
         continued = continues(result.ContinuationPoint)
         release_continuation_point(client, node_id, result.ContinuationPoint, details)
-        records = history_records(result.HistoryData.DataValues)
+        records = history_records(values)
         # No count was asked for, so only the server can have cut this short.
         # Where it resumes is the interval after the last one returned, which is
         # not a timestamp this server should compute and round on the caller's
@@ -1057,11 +1059,16 @@ def read_event_history(
             ``completeness`` beside them.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
-    end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
-    # An hour back, rather than the epoch: a range nobody bounded should be the
-    # recent past, not the whole archive. `read_opcua_history` defaults the same
-    # way and for the same reason.
-    start = parse_iso_datetime(start_time) or end - timedelta(hours=1)
+    # A refusal the model has to see, as the Node runtime words it: a bare
+    # ValueError here escaped as the SDK's generic "Error executing tool".
+    try:
+        end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
+        # An hour back, rather than the epoch: a range nobody bounded should be
+        # the recent past, not the whole archive. `read_opcua_history` defaults
+        # the same way and for the same reason.
+        start = parse_iso_datetime(start_time) or end - timedelta(hours=1)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
     # The same cap as a raw value read, and a refusal rather than a knob: an
     # alarm burst is tens of thousands of events, and "all of them" is a request
     # that never returns.
@@ -1759,45 +1766,57 @@ def check_write_bounds(
 
 
 def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:
-    """The declared type of each input argument, or [] when the method publishes none."""
+    """The declared type of each input argument, or [] when the method publishes none.
+
+    A declared DataType that is not itself built in (``Duration``, ``UtcTime``,
+    an enumeration) is resolved to the built-in type it is encoded as, and one
+    that resolves to none raises: that is a method whose argument cannot be
+    encoded, not one that declares nothing, and guessing would send it anyway.
+    """
     try:
         arguments = client.get_node(method_node_id).get_child(["0:InputArguments"]).get_value()
     except Exception:
         # Not every method publishes InputArguments, and a method with no
         # arguments has nothing to publish. Fall back rather than refuse.
         return []
-    declared = []
-    for argument in arguments or []:
-        # Built-in types are numbered identically in the VariantType enum and in
-        # namespace 0, which is what makes this a lookup rather than a table.
-        try:
-            variant_type = ua.VariantType(argument.DataType.Identifier)
-        except Exception:
-            return []
-        declared.append((variant_type, argument.ValueRank >= 1))
-    return declared
+
+    def supertype_of(data_type: str) -> str | None:
+        # Every inverse reference, filtered here rather than by the server:
+        # python-opcua's own server answers a browse filtered to HasSubtype with
+        # nothing at all, and `method-arguments.ts` does the same for that reason.
+        references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
+        for reference in references:
+            if reference.ReferenceTypeId == ua.NodeId(ua.ObjectIds.HasSubtype):
+                return canonical_node_id(reference.NodeId.to_string())
+        return None
+
+    return [
+        (
+            built_in_type(canonical_node_id(argument.DataType.to_string()), supertype_of),
+            argument.ValueRank >= 1,
+        )
+        for argument in arguments or []
+    ]
 
 
-def _guess_variant(value: Any) -> Any:
-    """The pre-#10 argument heuristic, kept only for methods that declare no types.
+def _call(node: Any, method_node: Any, arguments: list[Any]) -> Any:
+    """Call a method and return its whole CallMethodResult.
 
-    Parses float then int then string. It is wrong for Boolean and every sized
-    integer, which is what :func:`_input_argument_types` exists to fix; this
-    remains because a method that publishes no InputArguments leaves nothing
-    better to go on.
+    Not python-opcua's ``call_method``, which returns only the outputs — so the
+    tool reported ``"Good"`` whatever the server said — and flattens a single
+    array output into what look like several outputs.
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    text = str(value)
-    try:
-        return float(text)
-    except ValueError:
-        try:
-            return int(text)
-        except ValueError:
-            return text
+    request = ua.CallMethodRequest()
+    request.ObjectId = node.nodeid
+    request.MethodId = method_node.nodeid
+    request.InputArguments = arguments
+    result = node.server.call([request])[0]
+    # Good *severity*, not plain Good: GoodClamped or GoodLocalOverride is a call
+    # that happened, and refusing it would report as failed an action the plant
+    # carried out. The subcode is reported in `status` instead.
+    if not result.StatusCode.is_good():
+        raise ValueError(f"Method call failed with status: {result.StatusCode.name}")
+    return result
 
 
 def call_opcua_method(
@@ -1832,23 +1851,15 @@ def call_opcua_method(
                     ua.Variant(convert_for_variant(argument, variant_type, is_array), variant_type)
                 )
             else:
-                method_args.append(_guess_variant(argument))
+                method_args.append(guess_variant(argument, index))
 
-        # python-opcua exposes call_method on Node (not Client), and a string
-        # methodid is treated as a child browse-name, so pass the resolved
-        # method Node to call it by node id.
-        outputs = object_node.call_method(method_node, *method_args)
-        if outputs is None:
-            outputs = []
-        elif not isinstance(outputs, (list, tuple)):
-            outputs = [outputs]
-
+        result = _call(object_node, method_node, method_args)
         return _object_result(
             {
                 "object_node_id": canonical_node_id(object_node_id),
                 "method_node_id": canonical_node_id(method_node_id),
-                "status": "Good",
-                "outputs": [scalar_to_json(output) for output in outputs],
+                "status": str(result.StatusCode.name),
+                "outputs": [variant_to_json(output) for output in result.OutputArguments],
             }
         )
     except LimitExceeded as e:
@@ -2116,7 +2127,7 @@ def acknowledge_alarm(
 
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
-        events.acknowledge_alarm(client, condition, event_id, comment)
+        status = events.acknowledge_alarm(client, condition, event_id, comment)
     except Exception as e:
         raise ToolError(
             error_message("acknowledgeFailed", condition_id=condition, reason=describe_error(e))
@@ -2125,7 +2136,7 @@ def acknowledge_alarm(
         {
             "event_id": event_id,
             "condition_id": canonical_node_id(condition),
-            "status": "Good",
+            "status": status,
         }
     )
 
@@ -2159,7 +2170,9 @@ def act_on_alarm(
 
     client = ctx.request_context.lifespan_context["opcua_client"]
     try:
-        events.alarm_action(client, condition, event_id, action, comment, shelve_duration_ms)
+        status = events.alarm_action(
+            client, condition, event_id, action, comment, shelve_duration_ms
+        )
     except Exception as e:
         raise ToolError(
             error_message(
@@ -2171,7 +2184,7 @@ def act_on_alarm(
             "event_id": event_id,
             "condition_id": canonical_node_id(condition),
             "action": action,
-            "status": "Good",
+            "status": status,
         }
     )
 

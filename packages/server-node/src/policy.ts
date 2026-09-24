@@ -4,6 +4,7 @@ import { ACCESS_CLASSES } from "./access-classes.js";
 import { CONTRACT, type ToolGuard, type ToolSpec } from "./contract.js";
 import { namespaceUriForm, resolveNodeId } from "./node-ids.js";
 import { message } from "./errors.js";
+import { parseNumericString } from "./numeric.js";
 
 export type ToolProfile = "observe" | "operator" | "full";
 
@@ -487,16 +488,17 @@ export function pairsAt(
  * A boolean is not a number here. `true` is not 1 to an operator writing a
  * bound, and letting it compare as one is the same coercion the typed-argument
  * work removed from method calls.
+ *
+ * The string is read with the one numeric grammar the write codec also uses
+ * (`numeric.ts`), not `Number()`. `Number()` takes "0x10" as 16 while the
+ * Python runtime's `float()` took "1_000", "inf" and "nan" instead (#157), so a
+ * bound held on one runtime and not the other. A string the codec would not
+ * write cannot be compared either.
  */
 export function asNumber(value: unknown): number | null {
   if (typeof value === "boolean") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed === "") return null;
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
+  if (typeof value === "string") return parseNumericString(value);
   return null;
 }
 

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { DataType, StatusCodes } from "node-opcua-client";
 
-import { asNumber, formatNumber, pairsAt, ToolPolicy, parsePolicyConfig } from "../build/policy.js";
+import { formatNumber, pairsAt, ToolPolicy, parsePolicyConfig } from "../build/policy.js";
 import { NodeMetadata, withinRange } from "../build/node-metadata.js";
 import { CONTRACT } from "../build/contract.js";
 import { checkEuRange, checkMaxChange } from "../build/tools.js";
@@ -183,22 +183,9 @@ describe("how a policy file is read", () => {
 });
 
 describe("the helpers the two runtimes share", () => {
-  for (const [value, expected] of [
-    [42, 42],
-    [42.5, 42.5],
-    ["42.5", 42.5],
-    ["  42.5  ", 42.5],
-    ["", null],
-    ["warm", null],
-    [true, null],
-    [false, null],
-    [null, null],
-    [[1], null],
-  ]) {
-    it(`asNumber(${JSON.stringify(value)}) is ${expected}`, () => {
-      assert.equal(asNumber(value), expected);
-    });
-  }
+  // `asNumber` is pinned by the `numbers` table in tests/fixtures/write-coercion.json,
+  // driven from variant-codec.test.mjs: it must read a string by the same grammar
+  // the write codec does.
 
   // `format_number` in policy.py must agree character for character: the
   // refusals they build are compared by tests/e2e/test_runtime_differential.py.

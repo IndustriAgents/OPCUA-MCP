@@ -1,0 +1,29 @@
+{
+  "$comment": "Which OPC UA statuses count as success, and what a success with a subcode looks like. Per Part 4 §7.39 severity is the top two bits: 00 is Good, 01 Uncertain, 10 Bad. A Good *subcode* — GoodClamped, GoodLocalOverride, GoodNoData — is a success that says something more. #157 found Node accepting only plain Good (a read came back null, a completed method call and an empty history range were reported as failures) while python-opcua's is_good() tests severity. Both now test severity, and report the subcode by name so nothing is hidden. Driven by BOTH tests/unit/test_status_severity.py and packages/server-node/test/status-severity.test.mjs. `code` is the status's numeric value, and both client libraries must know it by `name`.",
+  "statuses": [
+    { "name": "Good", "code": 0, "good": true },
+    { "name": "GoodClamped", "code": 3145728, "good": true },
+    { "name": "GoodLocalOverride", "code": 9830400, "good": true },
+    { "name": "GoodNoData", "code": 10813440, "good": true },
+    { "name": "GoodMoreData", "code": 10878976, "good": true },
+    { "name": "UncertainLastUsableValue", "code": 1083179008, "good": false },
+    { "name": "BadNodeIdUnknown", "code": 2150891520, "good": false },
+    { "name": "BadNotReadable", "code": 2151284736, "good": false }
+  ],
+  "reads": [
+    { "name": "a plain Good read", "status": "Good", "record": { "value": 51.75, "data_type": "Double", "status": "Good" } },
+    { "name": "a locally overridden value is still the value, and says so", "status": "GoodLocalOverride", "record": { "value": 51.75, "data_type": "Double", "status": "GoodLocalOverride" } },
+    { "name": "a clamped value is still the value, and says so", "status": "GoodClamped", "record": { "value": 51.75, "data_type": "Double", "status": "GoodClamped" } },
+    { "name": "an Uncertain value is not reported as a value", "status": "UncertainLastUsableValue", "record": { "value": null, "data_type": null, "status": "UncertainLastUsableValue" } },
+    { "name": "a Bad read has no value", "status": "BadNotReadable", "record": { "value": null, "data_type": null, "status": "BadNotReadable" } }
+  ],
+  "maxChange": [
+    { "name": "a GoodLocalOverride current value is where the node is", "status": "GoodLocalOverride", "current": 50, "value": 55, "limit": 10, "error": null },
+    { "name": "and is measured from", "status": "GoodClamped", "current": 50, "value": 140, "limit": 10, "error": "Moving node ns=2;i=90 from 50 to 140 is a change of 90, and the operator policy allows at most 10 in one write. Nothing was written. Make the move in steps if it is deliberate." },
+    { "name": "an Uncertain current value cannot be measured from", "status": "UncertainLastUsableValue", "current": 50, "value": 55, "limit": 10, "error": "Node ns=2;i=90 has a max_change bound, which can only be checked against its current value — and reading it failed (UncertainLastUsableValue). Nothing was written." }
+  ],
+  "history": [
+    { "name": "GoodNoData with no HistoryData is an empty range, not a failure", "status": "GoodNoData", "records": [] },
+    { "name": "a Bad answer is still a failure", "status": "BadHistoryOperationUnsupported", "error": "Read history failed with status: BadHistoryOperationUnsupported" }
+  ]
+}

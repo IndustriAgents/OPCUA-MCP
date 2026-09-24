@@ -48,6 +48,7 @@ import {
   userIdentity,
 } from "./security.js";
 import { message } from "./errors.js";
+import { isGood } from "./status.js";
 import { transportSettings } from "./transport-limits.js";
 
 // Happy Eyeballs: try IPv4 and IPv6 rather than only the first address DNS
@@ -623,7 +624,7 @@ export class OpcuaConnection {
         session = this.session!;
       }
       const dataValue = await session.readVariableValue(CONTRACT.capabilities[name].nodeId);
-      return dataValue.statusCode === StatusCodes.Good && dataValue.value?.value === true;
+      return isGood(dataValue.statusCode) && dataValue.value?.value === true;
     } catch (error) {
       console.error(`${CONTRACT.capabilities[name].browseName} probe failed:`, error);
       return false;
@@ -650,7 +651,7 @@ export class OpcuaConnection {
         browseDirection: 0, // Forward
         resultMask: 63, // All information (including BrowseName)
       });
-      if (browseResult.statusCode === StatusCodes.Good && browseResult.references) {
+      if (isGood(browseResult.statusCode) && browseResult.references) {
         for (const reference of browseResult.references) {
           // Map the string BrowseName to the AggregateFunction
           if (reference.browseName.name) {

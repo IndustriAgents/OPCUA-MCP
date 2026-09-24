@@ -36,7 +36,6 @@ from opcua_mcp_server.node_metadata import (
 from opcua_mcp_server.policy import (
     ToolPolicy,
     ValueBound,
-    as_number,
     format_number,
     pairs_at,
     parse_policy_config,
@@ -209,25 +208,10 @@ def test_the_environment_variable_carries_node_ids_only():
 
 
 # --- the helpers the two runtimes share ------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (42, 42.0),
-        (42.5, 42.5),
-        ("42.5", 42.5),
-        ("  42.5  ", 42.5),
-        ("", None),
-        ("warm", None),
-        (True, None),
-        (False, None),
-        (None, None),
-        ([1], None),
-    ],
-)
-def test_as_number(value, expected):
-    assert as_number(value) == expected
+#
+# `as_number` is pinned by the `numbers` table in tests/fixtures/write-coercion.json,
+# driven from test_variant_codec.py: it must read a string by the same grammar the
+# write codec does.
 
 
 @pytest.mark.parametrize(

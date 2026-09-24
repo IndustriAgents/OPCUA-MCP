@@ -45,6 +45,12 @@ permissions of the account you connect with all change the answer.
 - **Transport: stdio only.** The client must be able to launch a local stdio MCP
   server, or install the Claude Desktop `.mcpb` bundle. There is no HTTP
   transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)).
+- **What reaches the plant is identical on both runtimes.** Date/time parsing,
+  write conversion per data type, method-argument typing, OPC UA status severity
+  and the operator policy's number parsing are each one table under
+  [`tests/fixtures/`](../tests/fixtures/) that both runtimes' unit suites run
+  ([#157](https://github.com/IndustriAgents/OPCUA-MCP/issues/157)). Timestamps
+  must carry a zone (`Z` or an offset); one without is refused on both.
 - Client configurations in [docs/install.md](install.md) are worked
   examples, not a per-client certification matrix. `--install claude-desktop`
   is the only client integration with its own tests.
@@ -86,9 +92,10 @@ differently* box. Those known today are **not** allowed differences and are
 being fixed in both runtimes:
 
 - [#157](https://github.com/IndustriAgents/OPCUA-MCP/issues/157) — found while
-  writing ADR 0001. Most serious: for the same call, a timezone-less date, a
-  numeric string or a Good-subcode status can lead the two runtimes to write a
-  different value or read a different time window. Also result and error
+  writing ADR 0001. The group that reached the plant is fixed: dates, write
+  conversion, method-argument types, Good-subcode statuses and the policy's
+  number parsing now follow one rule on both runtimes (see
+  [Runtimes and clients](#runtimes-and-clients)). Still open: result and error
   formatting, subscription parameters, policy-file parsing, signal handling and
   `--install` details.
 - [#136](https://github.com/IndustriAgents/OPCUA-MCP/issues/136) — with
@@ -96,9 +103,8 @@ being fixed in both runtimes:
   never open its MCP transport, and the numeric reconnect settings accept
   different spellings on each runtime.
 
-Until they are fixed, send timestamps with an explicit zone (`Z` or an offset),
-send numeric values as JSON numbers rather than strings, and do not rely on
-`OPCUA_RECONNECT_MAX_RETRY=-1` with the Node runtime.
+Until #136 is fixed, do not rely on `OPCUA_RECONNECT_MAX_RETRY=-1` with the
+Node runtime.
 
 ## Security coverage
 

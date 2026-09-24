@@ -17,7 +17,6 @@ import {
   ClientSubscription,
   DataType,
   LocalizedText,
-  StatusCodes,
   TimestampsToReturn,
   Variant,
   coerceNodeId,
@@ -31,8 +30,9 @@ import {
 import { CONTRACT } from "./contract.js";
 import { message } from "./errors.js";
 import { continues, releaseContinuationPoint } from "./history.js";
-import { variantToJson } from "./records.js";
+import { historyData, variantToJson } from "./records.js";
 import { notice } from "./notices.js";
+import { isGood } from "./status.js";
 
 const EVENTS = CONTRACT.events;
 
@@ -354,17 +354,16 @@ export async function readEventHistory(
     )
   );
 
+  // Good severity, not plain Good: GoodNoData is an empty range, and may come
+  // with no HistoryData at all (#157).
   const result = response.results?.[0];
-  if (!result) throw new Error("Read event history failed");
-  if (result.statusCode !== StatusCodes.Good) {
-    throw new Error(`Read event history failed with status: ${result.statusCode.name}`);
-  }
+  const events = historyData<{ eventFields: Variant[] }>(result, "Read event history", "events");
 
   const continued = continues(result.continuationPoint);
   await releaseContinuationPoint(session, nodeId, result.continuationPoint, details);
 
-  const fetched: EventRecord[] = (result.historyData?.events ?? []).map(
-    (event: { eventFields: Variant[] }) => toEventRecord(event.eventFields)
+  const fetched: EventRecord[] = events.map((event: { eventFields: Variant[] }) =>
+    toEventRecord(event.eventFields)
   );
   const last = fetched.at(-1)?.time;
   return {
@@ -437,7 +436,7 @@ export async function listActiveAlarms(
     });
 
     const statusCode = await callConditionRefresh(session, subscription.subscriptionId);
-    if (statusCode !== StatusCodes.Good) {
+    if (!isGood(statusCode)) {
       throw new Error(
         `ConditionRefresh failed with status: ${statusCode.toString()}. ` +
           "The server may not implement OPC UA Alarms & Conditions."

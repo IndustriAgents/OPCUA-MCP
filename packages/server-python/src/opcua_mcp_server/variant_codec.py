@@ -1,4 +1,23 @@
-"""Strict MCP JSON to OPC UA Variant conversion for writes."""
+"""Strict MCP JSON to OPC UA Variant conversion for writes.
+
+What a JSON value becomes on the wire is decided here, and it has to be decided
+the same way by ``variant-codec.ts``: a value one runtime writes and the other
+refuses — or, worse, writes differently — is a different plant depending on which
+package was installed (#157). ``tests/fixtures/write-coercion.json`` is the one
+table both are held to, messages included.
+
+The rules, where each runtime's native conversion used to decide:
+
+* A numeric string follows JSON's number grammar (``numeric.py``); no ``"0x10"``,
+  ``"1_000"``, ``"inf"`` or ``""``.
+* A boolean is not a number and a number is not a string: ``true`` is refused for
+  a Double and ``42`` for a String, rather than each runtime spelling it its own
+  way (``"true"``/``"True"``, ``"1"``/``"1.0"``).
+* A scalar node takes a scalar. ``[5]`` is not 5.
+* An integer given as a JSON number must be one JSON carries exactly
+  (±2**53-1); a larger one has already been rounded by a JavaScript parser, so it
+  is refused and must be sent as a decimal string.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +32,10 @@ from uuid import UUID
 
 from opcua import ua
 
+from .datetimes import parse_iso_datetime
 from .errors import message
 from .limits import MAX_BYTE_STRING_BYTES, LimitExceeded
+from .numeric import MAX_SAFE_INTEGER, exact_integer, js_number, json_text, numeric_text
 
 _INTEGER_RANGES = {
     ua.VariantType.SByte: (-(2**7), 2**7 - 1),
@@ -27,27 +48,102 @@ _INTEGER_RANGES = {
     ua.VariantType.UInt64: (0, 2**64 - 1),
 }
 
+_WIDE_INTEGERS = {ua.VariantType.Int64, ua.VariantType.UInt64}
+
+#: The largest finite IEEE-754 single. Past it a Float is infinity on the wire —
+#: node-opcua writes that, python-opcua raises — so it is refused before either.
+_FLOAT_MAX = 3.4028234663852886e38
+
+_GUID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
+_BASE64 = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+_JSON_WHITESPACE = " \t\n\r"
+
+
+def _is_number(raw: Any) -> bool:
+    return isinstance(raw, (int, float)) and not isinstance(raw, bool)
+
+
+def _is_finite(raw: int | float) -> bool:
+    """Whether a JSON number is one a double can hold.
+
+    An integer too large for a double is Infinity to a JavaScript parser, so it
+    is treated as the Node runtime sees it.
+    """
+    try:
+        return math.isfinite(float(raw))
+    except OverflowError:
+        return False
+
+
+def _cannot(raw: Any, variant_type: ua.VariantType) -> ValueError:
+    return ValueError(f"Cannot convert {json_text(raw)} to {variant_type.name}")
+
+
+def _out_of_range(text: str, variant_type: ua.VariantType) -> ValueError:
+    return ValueError(f"{text} is outside the {variant_type.name} range")
+
 
 def _integer(raw: Any, variant_type: ua.VariantType) -> int:
-    text = str(raw).strip()
-    if isinstance(raw, bool) or not re.fullmatch(r"[+-]?\d+", text):
-        raise ValueError(f"Cannot convert {raw!r} to {variant_type.name}")
-    value = int(text)
     minimum, maximum = _INTEGER_RANGES[variant_type]
-    if not minimum <= value <= maximum:
-        raise ValueError(f"{text} is outside the {variant_type.name} range")
+    if _is_number(raw):
+        if not _is_finite(raw):
+            raise ValueError(f"The number is outside the {variant_type.name} range")
+        if isinstance(raw, float) and not raw.is_integer():
+            raise _cannot(raw, variant_type)
+        value = int(raw)
+        if abs(value) > MAX_SAFE_INTEGER and variant_type in _WIDE_INTEGERS:
+            raise ValueError(
+                f"A JSON number beyond ±{MAX_SAFE_INTEGER} has lost precision before it "
+                f"arrives; send {variant_type.name} values this large as decimal strings"
+            )
+        if not minimum <= value <= maximum:
+            raise _out_of_range(json_text(raw), variant_type)
+        return value
+
+    text = numeric_text(raw) if isinstance(raw, str) else None
+    value = exact_integer(text) if text is not None else None
+    if value is None:
+        raise _cannot(raw, variant_type)
+    if value == "too large" or not minimum <= value <= maximum:
+        raise _out_of_range(text, variant_type)
     return value
 
 
 def _boolean(raw: Any) -> bool:
     if isinstance(raw, bool):
         return raw
-    normalized = str(raw).strip().lower()
-    if normalized in {"true", "1", "yes", "on"}:
-        return True
-    if normalized in {"false", "0", "no", "off"}:
-        return False
-    raise ValueError(f"Cannot convert {raw!r} to Boolean")
+    if _is_number(raw) and raw in (0, 1):
+        return raw == 1
+    if isinstance(raw, str):
+        normalized = raw.strip(_JSON_WHITESPACE).lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise _cannot(raw, ua.VariantType.Boolean)
+
+
+def _floating(raw: Any, variant_type: ua.VariantType) -> float:
+    if _is_number(raw):
+        if not _is_finite(raw):
+            raise ValueError(f"The number is outside the {variant_type.name} range")
+        value = float(raw)
+    else:
+        text = numeric_text(raw) if isinstance(raw, str) else None
+        if text is None:
+            raise _cannot(raw, variant_type)
+        value = float(text)
+        if not math.isfinite(value):
+            raise _out_of_range(text, variant_type)
+    if variant_type == ua.VariantType.Float and abs(value) > _FLOAT_MAX:
+        raise _out_of_range(js_number(value), variant_type)
+    return value
+
+
+def _string_only(raw: Any, variant_type: ua.VariantType) -> str:
+    if not isinstance(raw, str):
+        raise ValueError(f"{variant_type.name} values must be a JSON string")
+    return raw
 
 
 def _scalar(raw: Any, variant_type: ua.VariantType) -> Any:
@@ -58,35 +154,29 @@ def _scalar(raw: Any, variant_type: ua.VariantType) -> Any:
     if variant_type == ua.VariantType.Boolean:
         return _boolean(raw)
     if variant_type in {ua.VariantType.Float, ua.VariantType.Double}:
-        try:
-            value = float(raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Cannot convert {raw!r} to {variant_type.name}") from exc
-        if not math.isfinite(value):
-            raise ValueError(f"Cannot convert {raw!r} to {variant_type.name}")
-        return value
+        return _floating(raw, variant_type)
     if variant_type == ua.VariantType.String:
-        if not isinstance(raw, (str, int, float, bool)):
-            raise ValueError("String values must be a JSON scalar")
-        return str(raw)
+        return _string_only(raw, variant_type)
     if variant_type == ua.VariantType.DateTime:
         if isinstance(raw, datetime):
             return raw
-        try:
-            return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError(f"{raw!r} is not a DateTime") from exc
+        if not isinstance(raw, str):
+            raise ValueError(
+                "DateTime values must be an ISO 8601 string, e.g. 2026-04-23T17:40:00Z"
+            )
+        return parse_iso_datetime(raw)
     if variant_type == ua.VariantType.Guid:
-        try:
-            return UUID(str(raw))
-        except ValueError as exc:
-            raise ValueError(f"{raw!r} is not a Guid") from exc
+        if not isinstance(raw, str) or not _GUID.fullmatch(raw):
+            raise ValueError(f"{json_text(raw)} is not a Guid")
+        return UUID(raw)
     if variant_type == ua.VariantType.ByteString:
         if isinstance(raw, bytes):
             decoded = raw
+        elif not isinstance(raw, str) or not _BASE64.fullmatch(raw):
+            raise ValueError("ByteString values must be standard base64")
         else:
             try:
-                decoded = base64.b64decode(str(raw), validate=True)
+                decoded = base64.b64decode(raw, validate=True)
             except (binascii.Error, ValueError) as exc:
                 raise ValueError("ByteString values must be standard base64") from exc
         # A refusal of the request, not a conversion failure of one value: a
@@ -98,12 +188,21 @@ def _scalar(raw: Any, variant_type: ua.VariantType) -> Any:
             )
         return decoded
     if variant_type == ua.VariantType.NodeId:
-        return ua.NodeId.from_string(str(raw))
+        return ua.NodeId.from_string(_string_only(raw, variant_type))
     if variant_type == ua.VariantType.LocalizedText:
-        return raw if isinstance(raw, ua.LocalizedText) else ua.LocalizedText(str(raw))
+        if isinstance(raw, ua.LocalizedText):
+            return raw
+        return ua.LocalizedText(_string_only(raw, variant_type))
     if variant_type == ua.VariantType.QualifiedName:
-        return raw if isinstance(raw, ua.QualifiedName) else ua.QualifiedName(str(raw))
+        if isinstance(raw, ua.QualifiedName):
+            return raw
+        return ua.QualifiedName(_string_only(raw, variant_type))
     raise ValueError(f"Writes to OPC UA {variant_type.name} values are not supported safely")
+
+
+def _no_constants(name: str) -> Any:
+    """``json.loads`` accepts ``NaN`` and ``Infinity``; ``JSON.parse`` does not."""
+    raise ValueError(name)
 
 
 def convert_for_variant(raw: Any, variant_type: ua.VariantType, is_array: bool = False) -> Any:
@@ -114,8 +213,8 @@ def convert_for_variant(raw: Any, variant_type: ua.VariantType, is_array: bool =
     values = raw
     if isinstance(values, str):
         try:
-            values = json.loads(values)
-        except json.JSONDecodeError as exc:
+            values = json.loads(values, parse_constant=_no_constants)
+        except ValueError as exc:
             raise ValueError(f"{variant_type.name} array values must be a JSON array") from exc
     if not isinstance(values, list):
         raise ValueError(f"{variant_type.name} array values must be a JSON array")

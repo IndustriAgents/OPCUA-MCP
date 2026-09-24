@@ -977,11 +977,11 @@
           },
           "start_time": {
             "type": "string",
-            "description": "Start of the time range, ISO-8601 ('2026-09-09T12:00:00Z'). A naive timestamp is read as UTC. Required when `aggregate_function` is given; for a raw read, defaults to one hour before `end_time`."
+            "description": "Start of the time range, ISO-8601 with a timezone: '2026-09-09T12:00:00Z' or '2026-09-09T14:00:00+02:00'. A timestamp with no timezone is refused rather than guessed. Required when `aggregate_function` is given; for a raw read, defaults to one hour before `end_time`."
           },
           "end_time": {
             "type": "string",
-            "description": "End of the time range, ISO-8601. Defaults to now (UTC)."
+            "description": "End of the time range, ISO-8601 with a timezone. Defaults to now."
           },
           "num_values": {
             "type": "integer",
@@ -1026,11 +1026,11 @@
           },
           "start_time": {
             "type": "string",
-            "description": "Start of the time range, ISO-8601 ('2026-09-09T12:00:00Z'). A naive timestamp is read as UTC. Defaults to one hour before `end_time`."
+            "description": "Start of the time range, ISO-8601 with a timezone: '2026-09-09T12:00:00Z' or '2026-09-09T14:00:00+02:00'. A timestamp with no timezone is refused rather than guessed. Defaults to one hour before `end_time`."
           },
           "end_time": {
             "type": "string",
-            "description": "End of the time range, ISO-8601. Defaults to now (UTC)."
+            "description": "End of the time range, ISO-8601 with a timezone. Defaults to now."
           },
           "num_values": {
             "type": "integer",
@@ -1132,7 +1132,7 @@
                   "description": "The OPC UA node ID to write to. Example: 'ns=2;i=2'."
                 },
                 "value": {
-                  "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work."
+                  "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. A value that does not convert is reported for that node and not written."
                 },
                 "data_type": {
                   "type": "string",
@@ -1191,7 +1191,7 @@
           "arguments": {
             "type": "array",
             "maxItems": 64,
-            "description": "Arguments in the order the method declares them, at most 64. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean.",
+            "description": "Arguments in the order the method declares them, at most 64. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean. A declared type derived from a built-in one is sent as that built-in type (a Duration as a Double). For a method that publishes no argument types, a boolean is sent as a Boolean, a number or numeric string as a Double and any other string as a String; null, arrays and objects are refused rather than guessed.",
             "items": {}
           }
         },

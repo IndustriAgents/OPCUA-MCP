@@ -34,7 +34,15 @@ import threading
 import pytest
 from conftest import ROOT
 from mcp import StdioServerParameters
-from test_artifacts import CORE_TOOLS, NODE_PKG_DIR, PY_PKG_DIR, _list_tools, _run, node_tool
+from test_artifacts import (
+    CORE_TOOLS,
+    NODE_PKG_DIR,
+    PY_PKG_DIR,
+    _list_tools,
+    _run,
+    node_tool,
+    prebuilt,
+)
 
 pytestmark = pytest.mark.smoke
 
@@ -55,7 +63,11 @@ def _node_major() -> int:
 
 @pytest.fixture(scope="module")
 def node_binary():
-    """Build the Node single-file executable."""
+    """Build the Node single-file executable, or take the one release.yml signed."""
+    shipped = prebuilt(f"opcua-mcp-server-node-{PLATFORM}{EXE_SUFFIX}")
+    if shipped is not None:
+        return shipped
+
     npm = node_tool("npm")
     if not (NODE_PKG_DIR / "node_modules").is_dir():
         pytest.skip("Node dependencies not installed — run `npm ci` in packages/server-node")
@@ -71,7 +83,11 @@ def node_binary():
 
 @pytest.fixture(scope="module")
 def python_binary():
-    """Build the Python single-file executable with PyInstaller."""
+    """Build the Python single-file executable with PyInstaller, or take the signed one."""
+    shipped = prebuilt(f"opcua-mcp-server-python-{PLATFORM}{EXE_SUFFIX}")
+    if shipped is not None:
+        return shipped
+
     if shutil.which("uv") is None:
         pytest.skip("uv not available")
 

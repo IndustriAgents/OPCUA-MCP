@@ -17,6 +17,9 @@ Neither registry is configured yet; both are needed before the first release.
    workflow `publish.yml`, environment `pypi`. No token to store.
 3. Create the `pypi` GitHub environment (optionally with a required reviewer, so
    a publish needs an explicit approval).
+4. Optional, and not done yet: the Apple and Windows code-signing secrets —
+   see [Platform signing](#platform-signing--secrets-to-add). Releases work
+   without them and say in their notes that the executables are unsigned.
 
 ## A note on READMEs
 
@@ -69,7 +72,8 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 The `publish.yml` workflow then runs the full suite plus the artifact smoke
-tests, and only publishes if they pass; `release.yml` builds and attaches nothing
+tests, and only publishes if they pass (run by hand from a branch, it verifies
+and stops — the publish jobs need a tag); `release.yml` builds and attaches nothing
 until the same suite has passed on the tag. Both run it in required mode
 (`OPCUA_TESTS_REQUIRED=1`), so a missing mock or toolchain fails the release
 instead of quietly skipping a subsystem — see
@@ -129,19 +133,105 @@ source, and uploads the results as an artifact rather than committing them.
 `release.yml` runs off the same tag and handles what `publish.yml` cannot: the
 `.mcpb` MCP bundle, and a single-file executable per runtime per platform. Those
 executables embed the interpreter they were built with, so they cannot be
-cross-compiled — the workflow builds them on Linux, macOS and Windows runners,
-checks each one starts and reports the right version, and attaches everything to
-the GitHub release (creating it from the tag if it does not exist yet).
+cross-compiled — the workflow builds them on Linux, macOS and Windows runners.
+It also attaches the npm tarball, wheel and sdist, so an offline install can come
+from the release page.
 
 It is a separate workflow on purpose: a macOS runner being unavailable must not
-be able to hold up an npm or PyPI publish. Uploads use `--clobber`, so re-running
-after a partial failure is safe. `workflow_dispatch` builds the artifacts without
-cutting a tag, which is the way to test a change to the build scripts.
+be able to hold up an npm or PyPI publish. `workflow_dispatch` runs everything up
+to and including platform signing without a tag and publishes nothing, which is
+the way to test a change to the build or signing scripts.
 
-macOS binaries are ad-hoc signed rather than notarised, and Windows binaries are
-unsigned, so first launch needs a Gatekeeper or SmartScreen override. That is
-documented in [install.md](install.md); proper signing needs an Apple Developer
-account and a Windows code-signing certificate, and is not set up.
+### What a release carries, and how it is checked (#145)
+
+Every asset is exercised over MCP *as shipped* (after signing, which rewrites
+an executable), and every asset gets a CycloneDX SBOM from
+[`scripts/sbom.py`](../scripts/sbom.py). Then, for a tag only, and in jobs that
+run nothing but pinned actions, `gh`, `cosign` and coreutils:
+
+1. **`SHA256SUMS`** over every asset, SBOMs included, signed keyless with
+   Sigstore cosign (`SHA256SUMS.sigstore.json`) — the certificate names
+   `release.yml` at the tag.
+2. **Build-provenance attestations** (SLSA, `actions/attest-build-provenance`)
+   for every asset and for `SHA256SUMS`, and an **SBOM attestation**
+   (`actions/attest-sbom`) binding each SBOM to its artifact's digest.
+3. **A draft release** is created and uploaded to; the workflow downloads it
+   back, checks the file list against the manifest, `sha256sum --check`s it,
+   verifies the cosign signature and every attestation with
+   `gh attestation verify`, and only then publishes it. A failure leaves an
+   unpublished draft, which the next run deletes and recreates.
+
+The release notes gain a *Verifying this release* section and one line per
+platform saying whether its executables carry a platform signature — derived
+from what the build job actually checked, not from configuration. The
+consumer-side commands are in [install.md](install.md#verifying-a-download).
+
+Re-runs are safe: if the tag's release is already public with its `SHA256SUMS`,
+the workflow stops before attesting anything (a rebuild's executables would not
+match the published ones byte for byte). A public release *without* a manifest —
+0.5.1 and earlier — is refused rather than altered; turn it back into a draft
+first if it really should be re-attached.
+
+**Recommended repository setting:** enable *immutable releases* (Settings →
+General → Releases). The draft-then-publish flow above is what it expects;
+once on, a published release's assets and tag cannot be changed, which is what
+makes `SHA256SUMS` final.
+
+### Platform signing — secrets to add
+
+Neither certificate exists yet, so today macOS executables are ad-hoc signed and
+Windows executables are unsigned, and the release notes say so. The signing steps
+are fully wired and switch on by themselves once these **repository secrets**
+exist; configuring only part of a set fails the release rather than shipping it
+half-signed. The build and test steps never see them — only the signing step
+does.
+
+**macOS — Developer ID signature, hardened runtime, notarization**
+(requires an [Apple Developer Program](https://developer.apple.com/programs/)
+membership):
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERT_P12` | A *Developer ID Application* certificate and its private key, exported from Keychain Access as `.p12`, base64-encoded (`base64 -i cert.p12`). If codesign cannot build the chain on the runner, re-export with the *Developer ID Certification Authority* intermediate included |
+| `APPLE_CERT_PASSWORD` | The password the `.p12` was exported with |
+| `APPLE_NOTARY_KEY` | An App Store Connect API key (`AuthKey_XXXX.p8`, role *Developer*) — the file's contents, as-is |
+| `APPLE_NOTARY_KEY_ID` | That key's ID |
+| `APPLE_NOTARY_ISSUER` | The issuer ID shown above the keys list in App Store Connect → Users and Access → Integrations |
+
+Each executable is signed with `codesign --options runtime --timestamp` and the
+runtime's own entitlements
+([Node](../packages/server-node/scripts/macos-entitlements.plist): JIT;
+[Python](../packages/server-python/packaging/macos-entitlements.plist): unsigned
+libraries unpacked at run time — without them each binary is killed on launch,
+which the post-signing smoke test would catch), then submitted to `notarytool`
+and required to come back *Accepted*. Bare executables cannot be stapled, so
+Gatekeeper fetches the ticket online at first launch.
+
+**Windows — Authenticode** (code-signing keys have had to live on an HSM since
+2023, so this uses [AzureSignTool](https://github.com/vcsjones/AzureSignTool)
+against a certificate whose key was generated in Azure Key Vault Premium, HSM
+protected):
+
+| Secret | Value |
+|---|---|
+| `AZURE_KEY_VAULT_URI` | e.g. `https://opcua-mcp-signing.vault.azure.net` |
+| `AZURE_CERT_NAME` | The certificate's name in that vault |
+| `AZURE_TENANT_ID` | Tenant of the app registration below |
+| `AZURE_CLIENT_ID` | An app registration (service principal) with the *Key Vault Crypto User* and *Key Vault Certificate User* roles on the vault |
+| `AZURE_CLIENT_SECRET` | A client secret for that app registration |
+
+Signatures are RFC 3161 timestamped (DigiCert), so they stay valid after the
+certificate expires. The build checks every file with `Get-AuthenticodeSignature`
+before continuing.
+
+### Keeping the pins current
+
+Every third-party action is pinned to a commit SHA with the tag in a comment;
+Dependabot's monthly `github-actions` PR moves both, across the three workflows
+and the conformance action. Two versions live in `release.yml` itself and are
+not Dependabot's to update: the AzureSignTool download (version and SHA-256,
+taken from the release's asset digests) and, implicitly, the cosign release
+`sigstore/cosign-installer` installs by default.
 
 ## After the first `opcua-mcp-server` release
 

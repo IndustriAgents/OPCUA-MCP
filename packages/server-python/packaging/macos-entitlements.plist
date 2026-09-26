@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements for the PyInstaller single-file executable,
+  applied only when release.yml signs it with a Developer ID (#145).
+
+  A onefile build unpacks libpython and every extension module to a temporary
+  directory and loads them from there. Those were signed ad hoc at build time,
+  not with the release identity, so library validation would refuse them:
+  hence disable-library-validation. cffi (under `cryptography`) allocates
+  executable callback trampolines, hence allow-unsigned-executable-memory.
+  Nothing here needs JIT.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

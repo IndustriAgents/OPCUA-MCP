@@ -1,8 +1,9 @@
 name: Release artifacts
 
 # Builds the downloadable artifacts and attaches them to the GitHub release:
-# the `.mcpb` MCP bundle for Claude Desktop, and a single-file executable per
-# platform for everything else.
+# the `.mcpb` MCP bundle for Claude Desktop, a single-file executable per
+# platform for everything else, and the npm tarball, wheel and sdist for anyone
+# installing offline.
 #
 # Separate from publish.yml on purpose. That workflow ships to npm and PyPI,
 # where the artifact is the same everywhere and one Linux runner can produce it.
@@ -12,12 +13,35 @@ name: Release artifacts
 #
 # Tag-triggered for the same reason publish.yml is: a release should never depend
 # on somebody remembering to run a command. `workflow_dispatch` is there so the
-# build can be exercised without cutting a tag.
+# build can be exercised without cutting a tag: without one, everything up to and
+# including platform signing runs, and nothing is attested or published.
+#
+# What a consumer can check (#145), and where it is made:
+#
+#   build jobs    each artifact is exercised over MCP *as shipped* (after
+#                 signing), and gets a CycloneDX SBOM (scripts/sbom.py);
+#                 macOS/Windows executables are platform-signed when the
+#                 certificates are configured — see docs/releasing.md
+#   manifest      one SHA256SUMS over every asset, signed keyless with Sigstore
+#                 cosign, plus a build-provenance attestation for every file
+#   sbom-attest   an SBOM attestation binding each SBOM to its artifact's digest
+#   attach        uploads to a *draft*, downloads it back, verifies checksums,
+#                 signature and every attestation, and only then publishes
+#
+# Every third-party action is pinned to a commit SHA (the comment is the tag it
+# was resolved from; Dependabot keeps both current).
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs. The build jobs run
+# third-party code — npm install scripts, PyInstaller, the test suite — so they
+# get a read-only token and no OIDC token. Only the jobs that sign, attest and
+# publish can mint an identity, and they run nothing but pinned actions, `gh`,
+# `cosign` and coreutils.
+permissions: {}
 
 # A tag push can be delivered more than once — v0.3.0 queued two identical runs a
 # second apart. Without a group they race: two `gh release create` calls, two
@@ -41,8 +65,12 @@ jobs:
   verify-tag:
     name: Tag matches the manifests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Tag must match the manifests
         if: startsWith(github.ref, 'refs/tags/v')
@@ -60,28 +88,39 @@ jobs:
     name: Conformance suite
     needs: verify-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Conformance suite
         uses: ./.github/actions/conformance
 
   # Platform-independent: the bundle contains no compiled code, only the server
   # and its dependencies as one JavaScript file. Claude Desktop supplies Node.
+  #
+  # The build jobs below restore no caches: a release artifact is built from the
+  # lockfiles and nothing a previous run left behind.
   mcpb:
     name: MCP bundle (.mcpb)
     needs: [verify-tag, conformance]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: packages/server-node/package-lock.json
 
       - name: Install Node dependencies
         working-directory: packages/server-node
@@ -98,33 +137,111 @@ jobs:
           OPCUA_TESTS_REQUIRED: "1"
         run: uv run --no-sync pytest -v -m smoke smoke/test_artifacts.py -k mcpb
 
-      - uses: actions/upload-artifact@v7
+      - name: Stage the bundle and its SBOM
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          cp packages/server-node/dist/*.mcpb staged/
+          uv run --no-sync python scripts/sbom.py staged
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mcpb
-          path: packages/server-node/dist/*.mcpb
+          name: asset-mcpb
+          path: staged/*
+          if-no-files-found: error
+
+  # The registry packages, attached so an air-gapped install can come from the
+  # release page and so they are covered by the same checksums, SBOMs and
+  # attestations as everything else. publish.yml builds its own copies from the
+  # same commit for npm and PyPI; those carry the registries' own provenance
+  # (npm provenance, PyPI attestations) — see docs/install.md.
+  packages:
+    name: npm tarball, wheel and sdist
+    needs: [verify-tag, conformance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      # `npm ci` runs `prepare`, which is the build `npm pack` needs.
+      - name: Install Node dependencies
+        working-directory: packages/server-node
+        run: npm ci
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      # `uv build` without `--wheel` builds the sdist, then the wheel from it —
+      # the path PyPI publishing takes.
+      - name: Build the packages
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          (cd packages/server-node && npm pack --pack-destination ../../staged)
+          uv build --out-dir staged packages/server-python
+
+      # The same smoke tests CI runs, pointed at these exact files rather than
+      # a fresh build of their own.
+      - name: Verify the packages as shipped
+        working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1"
+          OPCUA_SMOKE_ARTIFACTS_DIR: ${{ github.workspace }}/staged
+        run: uv run --no-sync pytest -v -m smoke smoke/test_artifacts.py -k "npm or wheel or sdist"
+
+      - name: SBOMs
+        run: uv run --no-sync python scripts/sbom.py staged
+
+      # upload-artifact leaves out the `.gitignore` `uv build` writes.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: asset-packages
+          path: staged/*
           if-no-files-found: error
 
   binaries:
     name: Executables — ${{ matrix.os }}
     needs: [verify-tag, conformance]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # Whether platform signing is configured: a boolean, never the secret, so
+      # it can gate steps without putting credentials in reach of the build and
+      # test steps, which run third-party code. The signing steps receive the
+      # secrets themselves, and only they do.
+      APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+      WINDOWS_SIGNING: ${{ secrets.AZURE_KEY_VAULT_URI != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
 
       # The single-file executable embeds *this* Node, so it has to be a Node the
       # server actually runs on — `engines.node` is `>=22.13.0`, which is also
       # comfortably past the Node 20 floor `--experimental-sea-config` needs.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: packages/server-node/package-lock.json
 
       - name: Install Node dependencies
         working-directory: packages/server-node
@@ -146,22 +263,6 @@ jobs:
           OPCUA_TESTS_REQUIRED: "1"
         run: uv run --no-sync pytest -v -m smoke smoke/test_binaries.py
 
-      - name: Every executable reports the tag's version
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=$(node -p "require('./packages/server-node/package.json').version")
-          found=0
-          for binary in packages/*/dist/opcua-mcp-server-*; do
-            case "$binary" in *.mcpb) continue ;; esac
-            found=$((found + 1))
-            version=$("$binary" --version)
-            test "$version" = "$expected" || {
-              echo "::error::$binary reports $version, expected $expected"; exit 1;
-            }
-          done
-          test "$found" -eq 2 || { echo "::error::expected 2 executables, found $found"; exit 1; }
-
       # Collect into one directory before uploading. `upload-artifact` keeps the
       # common ancestor of its path patterns, so listing the two `dist`
       # directories separately produced an artifact containing
@@ -177,63 +278,465 @@ jobs:
           cp packages/server-python/dist/opcua-mcp-server-python-* staged/
           ls -l staged
 
-      - uses: actions/upload-artifact@v7
+      # Developer ID signature with the hardened runtime, then notarization.
+      # Each runtime gets its own entitlements (see the two plists for why).
+      #
+      # No stapling: a ticket can only be stapled to an app bundle, disk image or
+      # installer package, not a bare Mach-O executable, so Gatekeeper looks it
+      # up online at first launch instead. docs/install.md covers the offline
+      # case.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_SIGNING == 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+          # Half-configured signing fails the release rather than shipping unsigned.
+          for var in APPLE_CERT_PASSWORD APPLE_NOTARY_KEY APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER; do
+            if [ -z "${!var}" ]; then
+              echo "::error::APPLE_CERT_P12 is set but $var is not; see docs/releasing.md"
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/release-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          cleanup() {
+            security delete-keychain "$keychain" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/notarize.zip"
+          }
+          trap cleanup EXIT
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain" >/dev/null
+          # On the search list too, so codesign can build the chain through any
+          # intermediate the .p12 carries.
+          # shellcheck disable=SC2046 # one word per existing keychain path
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo "::error::APPLE_CERT_P12 holds no 'Developer ID Application' identity"
+            exit 1
+          fi
+
+          for binary in staged/*; do
+            case "$(basename "$binary")" in
+              opcua-mcp-server-node-*) entitlements=packages/server-node/scripts/macos-entitlements.plist ;;
+              opcua-mcp-server-python-*) entitlements=packages/server-python/packaging/macos-entitlements.plist ;;
+              *) echo "::error::no entitlements for $binary"; exit 1 ;;
+            esac
+            codesign --force --timestamp --options runtime \
+              --entitlements "$entitlements" --keychain "$keychain" \
+              --sign "$identity" "$binary"
+          done
+
+          # notarytool takes a zip, pkg or dmg, never a bare executable.
+          ditto -c -k staged "$RUNNER_TEMP/notarize.zip"
+          printf '%s' "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          notary=(--key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER")
+          # A rejection exits non-zero; carry on far enough to print Apple's log.
+          result=$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" "${notary[@]}" \
+            --wait --timeout 30m --output-format json) || true
+          echo "$result"
+          submission=$(jq -r .id <<<"$result")
+          xcrun notarytool log "$submission" "${notary[@]}" || true
+          if [ "$(jq -r .status <<<"$result")" != "Accepted" ]; then
+            echo "::error::notarization was not accepted; the log above says why"
+            exit 1
+          fi
+
+      # Azure Key Vault holds the key (code-signing keys must live on an HSM
+      # since 2023, so there is no .pfx to import). AzureSignTool is the
+      # standalone build, pinned by version and SHA-256 rather than installed as
+      # a .NET tool, which would need a particular SDK on the runner.
+      - name: Sign (Windows)
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING == 'true'
+        shell: pwsh
+        env:
+          AZURE_KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+          AZURESIGNTOOL_URL: https://github.com/vcsjones/AzureSignTool/releases/download/v7.0.1/AzureSignTool-x64.exe
+          AZURESIGNTOOL_SHA256: dc85a3f24bcd5978c63fcfd167a9b41313af9116722b99b831400f05f387fcba
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($var in 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_CERT_NAME') {
+            if (-not [Environment]::GetEnvironmentVariable($var)) {
+              Write-Output "::error::AZURE_KEY_VAULT_URI is set but $var is not; see docs/releasing.md"
+              exit 1
+            }
+          }
+          $tool = Join-Path $env:RUNNER_TEMP 'AzureSignTool.exe'
+          Invoke-WebRequest -Uri $env:AZURESIGNTOOL_URL -OutFile $tool
+          if ((Get-FileHash $tool -Algorithm SHA256).Hash -ne $env:AZURESIGNTOOL_SHA256) {
+            Write-Output "::error::AzureSignTool download does not match its pinned SHA-256"
+            exit 1
+          }
+          $files = Get-ChildItem staged -File | ForEach-Object { $_.FullName }
+          & $tool sign `
+            --azure-key-vault-url $env:AZURE_KEY_VAULT_URI `
+            --azure-key-vault-client-id $env:AZURE_CLIENT_ID `
+            --azure-key-vault-tenant-id $env:AZURE_TENANT_ID `
+            --azure-key-vault-client-secret $env:AZURE_CLIENT_SECRET `
+            --azure-key-vault-certificate $env:AZURE_CERT_NAME `
+            --timestamp-rfc3161 http://timestamp.digicert.com `
+            --timestamp-digest sha256 --file-digest sha256 `
+            --description 'OPC UA MCP server' `
+            --description-url 'https://github.com/IndustriAgents/OPCUA-MCP' `
+            --verbose @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Checks what the steps above produced rather than trusting their exit
+      # codes, and says plainly — in the job summary and, via the attach job, in
+      # the release notes — when an executable ships without a platform
+      # signature, instead of letting that pass unremarked.
+      - name: Check the signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p signing
+          case "$RUNNER_OS" in
+            macOS)
+              for binary in staged/*; do codesign --verify --strict --verbose=2 "$binary"; done
+              if [ "$APPLE_SIGNING" = true ]; then
+                for binary in staged/*; do
+                  # Not `grep -q`: it exits at the first match, and under
+                  # pipefail codesign's resulting SIGPIPE fails the check.
+                  codesign -dvv "$binary" 2>&1 | grep '^Authority=Developer ID Application' || {
+                    echo "::error::$binary is not signed with a Developer ID"; exit 1; }
+                done
+                status="macOS executables: Developer ID signed (hardened runtime) and notarized by Apple."
+              else
+                status="macOS executables: **not** Developer ID signed or notarized — ad-hoc signature only, because this project has no Apple signing certificate configured. Gatekeeper will block the first launch; verify the download with SHA256SUMS and its attestation instead (docs/install.md)."
+              fi
+              ;;
+            Windows)
+              if [ "$WINDOWS_SIGNING" = true ]; then
+                # shellcheck disable=SC2016 # PowerShell's `$`, not the shell's
+                pwsh -NoProfile -Command '
+                  $invalid = 0
+                  Get-ChildItem staged -File | ForEach-Object {
+                    $sig = Get-AuthenticodeSignature $_.FullName
+                    Write-Output "$($_.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+                    if ($sig.Status -ne "Valid") { $invalid++ }
+                  }
+                  exit $invalid'
+                status="Windows executables: Authenticode signed."
+              else
+                status="Windows executables: **not** Authenticode signed, because this project has no Windows code-signing certificate configured. SmartScreen will warn on first launch; verify the download with SHA256SUMS and its attestation instead (docs/install.md)."
+              fi
+              ;;
+            Linux)
+              status="Linux executables: no platform code signature exists for ELF binaries; they are covered by SHA256SUMS, its Sigstore signature and the build-provenance attestations like every other asset."
+              ;;
+          esac
+          echo "- $status" | tee "signing/$RUNNER_OS.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # The build step above tested what PyInstaller and postject produced;
+      # signing rewrote the macOS and Windows binaries since, and a hardened
+      # runtime missing an entitlement kills the process on launch. So the MCP
+      # checks run again on the exact files being uploaded.
+      - name: Verify the executables as shipped
+        working-directory: tests
+        env:
+          OPCUA_TESTS_REQUIRED: "1"
+          OPCUA_SMOKE_ARTIFACTS_DIR: ${{ github.workspace }}/staged
+        run: uv run --no-sync pytest -v -m smoke smoke/test_binaries.py
+
+      - name: Every executable reports the tag's version
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(node -p "require('./packages/server-node/package.json').version")
+          found=0
+          for binary in staged/opcua-mcp-server-*; do
+            found=$((found + 1))
+            version=$("$binary" --version)
+            test "$version" = "$expected" || {
+              echo "::error::$binary reports $version, expected $expected"; exit 1;
+            }
+          done
+          test "$found" -eq 2 || { echo "::error::expected 2 executables, found $found"; exit 1; }
+
+      # Last, so each SBOM records the digest of the signed file.
+      - name: SBOMs
+        run: uv run --no-sync python scripts/sbom.py staged
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: binaries-${{ matrix.os }}
+          name: asset-binaries-${{ matrix.os }}
           path: staged/*
           if-no-files-found: error
 
-  attach:
-    name: Attach to the GitHub release
-    needs: [mcpb, binaries]
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signing-${{ matrix.os }}
+          path: signing/*
+          if-no-files-found: error
+
+  # Everything from here runs only for a tag.
+  manifest:
+    name: Checksums, signature and provenance
+    needs: [mcpb, packages, binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write # Sigstore: cosign's keyless signature and the attestations
+      attestations: write
+    outputs:
+      released: ${{ steps.state.outputs.released }}
+      sboms: ${{ steps.sums.outputs.sboms || '[]' }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      # `--clobber` so a re-run after a partial failure is safe, matching how the
-      # npm and PyPI jobs are made idempotent in publish.yml.
-      - name: Upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # One MCP bundle plus an executable per runtime per platform.
-          EXPECTED_ASSETS: "7"
+      # A tag push delivered twice runs this workflow twice, one after the
+      # other. The second rebuilds everything — and the executables are not
+      # bit-for-bit reproducible, so its files differ from the published ones.
+      # Stop before attesting bytes that will never be released.
+      - name: Is this tag already released?
+        id: state
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-
-          # Only regular files: `gh release upload` fails outright on a directory,
-          # and one bad entry aborts the whole upload, so a stray subdirectory
-          # takes every asset down with it — which is how v0.3.0 shipped with the
-          # bundle attached and none of the six executables.
-          assets=()
-          while IFS= read -r file; do assets+=("$file"); done < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq "$EXPECTED_ASSETS" || {
-            echo "::error::expected $EXPECTED_ASSETS assets (1 bundle + 6 executables), found ${#assets[@]}"
-            printf '  %s\n' "${assets[@]}"
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$draft" = false ]; then
+            if gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS; then
+              echo "release $GITHUB_REF_NAME is already public with its manifest — nothing to do"
+              echo "released=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::release $GITHUB_REF_NAME is already public but carries no SHA256SUMS. Assets of a public release are not replaced in place; turn it back into a draft (gh release edit $GITHUB_REF_NAME --draft=true) and re-run."
             exit 1
-          }
-
-          # A tag push can be delivered twice, and the concurrency group only
-          # serialises the second run — GitHub keeps one running and one pending,
-          # then runs the pending one. So this step has to be idempotent by
-          # itself. It matters because `--clobber` *deletes* an asset before
-          # replacing it: a redundant re-upload that fails half way leaves the
-          # release worse than it found it.
-          want=$(printf '%s\n' "${assets[@]}" | xargs -n1 basename | sort | paste -sd, -)
-          have=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | sort | join(",")')
-          if [ "$want" = "$have" ]; then
-            echo "release $TAG already carries all ${#assets[@]} assets — nothing to do"
-            exit 0
           fi
+          echo "released=false" >> "$GITHUB_OUTPUT"
 
-          printf 'uploading:\n'; printf '  %s\n' "${assets[@]}"
-          gh release upload "$TAG" "${assets[@]}" --clobber
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.state.outputs.released != 'true'
+        with:
+          pattern: asset-*
+          path: assets
+          merge-multiple: true
+
+      # One manifest over every asset — SBOMs included — in the format
+      # `sha256sum -c` and `shasum -a 256 -c` both read.
+      - name: Write SHA256SUMS
+        id: sums
+        if: steps.state.outputs.released != 'true'
+        env:
+          # One MCP bundle, the npm tarball, wheel and sdist, and an executable
+          # per runtime per platform — each with its SBOM.
+          EXPECTED_ARTIFACTS: "10"
+        run: |
+          set -euo pipefail
+          cd assets
+          # Only regular files: a stray subdirectory once took every executable
+          # out of a release (v0.3.0), and would not be in the manifest either.
+          test -z "$(find . -mindepth 1 -not -type f -print -quit)" || {
+            echo "::error::assets contains something other than regular files"; find . ; exit 1; }
+          artifacts=$(find . -type f ! -name '*.cdx.json' | wc -l)
+          test "$artifacts" -eq "$EXPECTED_ARTIFACTS" || {
+            echo "::error::expected $EXPECTED_ARTIFACTS artifacts, found $artifacts"; ls -l; exit 1; }
+          for file in *; do
+            case "$file" in *.cdx.json) continue ;; esac
+            test -f "$file.cdx.json" || { echo "::error::$file has no SBOM"; exit 1; }
+          done
+          test "$(find . -name '*.cdx.json' | wc -l)" -eq "$EXPECTED_ARTIFACTS" || {
+            echo "::error::an SBOM has no artifact"; ls -l; exit 1; }
+
+          find . -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum -- > ../SHA256SUMS
+          cat ../SHA256SUMS
+
+          # SBOM -> subject digest pairs for the attestation matrix below.
+          {
+            for sbom in *.cdx.json; do
+              subject=${sbom%.cdx.json}
+              digest=$(awk -v name="$subject" '$2 == name { print $1 }' ../SHA256SUMS)
+              jq -nc --arg sbom "$sbom" --arg subject "$subject" --arg digest "sha256:$digest" \
+                '{sbom: $sbom, subject: $subject, digest: $digest}'
+            done
+          } | jq -sc . > ../sboms.json
+          echo "sboms=$(cat ../sboms.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: steps.state.outputs.released != 'true'
+
+      # Keyless: the certificate names this workflow, this repository and this
+      # tag, and the signature is logged in Rekor — so it verifies with no key
+      # to distribute and no access to this repository.
+      - name: Sign SHA256SUMS
+        if: steps.state.outputs.released != 'true'
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      # SLSA build provenance for every asset and for the manifest itself, tied
+      # to this run, its commit and its workflow file. `gh attestation verify`
+      # checks it with any GitHub account; no write access needed.
+      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        if: steps.state.outputs.released != 'true'
+        with:
+          subject-path: |
+            assets/*
+            SHA256SUMS
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.state.outputs.released != 'true'
+        with:
+          name: manifest
+          path: |
+            SHA256SUMS
+            SHA256SUMS.sigstore.json
+          if-no-files-found: error
+
+      # Small, so each SBOM attestation job fetches its SBOM without the ~400 MB
+      # of executables beside it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.state.outputs.released != 'true'
+        with:
+          name: sboms
+          path: assets/*.cdx.json
+          if-no-files-found: error
+
+  # One job per SBOM: `attest-sbom` takes a single SBOM per call, and the asset
+  # list (version-stamped names, per-runner architectures) is only known once
+  # the builds are done. The subject is identified by the digest recorded in
+  # SHA256SUMS, so these jobs never need the artifact itself.
+  sbom-attestations:
+    name: SBOM attestation — ${{ matrix.subject }}
+    needs: manifest
+    if: needs.manifest.outputs.released != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.manifest.outputs.sboms) }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sboms
+          path: sboms
+
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ matrix.subject }}
+          subject-digest: ${{ matrix.digest }}
+          sbom-path: sboms/${{ matrix.sbom }}
+
+  # Draft first, verify, then publish. A release is public — and, with GitHub's
+  # immutable releases turned on, frozen — the moment it stops being a draft, so
+  # every check a consumer would run happens before that, against the files as
+  # GitHub serves them rather than the local copies that were uploaded.
+  attach:
+    name: Attach to the GitHub release
+    needs: [manifest, sbom-attestations]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.manifest.outputs.released != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create, upload to and publish the release
+      attestations: read # `gh attestation verify`
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: asset-*
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: manifest
+          path: assets
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: signing-*
+          path: signing
+          merge-multiple: true
+
+      # A draft left by an earlier, failed run was never public, so it is
+      # replaced outright rather than patched: the notes and assets then always
+      # come from one run.
+      - name: Upload to a draft release
+        run: |
+          set -euo pipefail
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          case "$draft" in
+            true) gh release delete "$TAG" --yes ;;
+            false) echo "::error::release $TAG was published while this run was building"; exit 1 ;;
+          esac
+
+          # shellcheck disable=SC2016 # the backticks are Markdown
+          {
+            echo "## Verifying this release"
+            echo
+            echo 'Every file below is listed in `SHA256SUMS`, which is signed keyless with Sigstore (`SHA256SUMS.sigstore.json`). Every file has a GitHub build-provenance attestation, and every package, bundle and executable has a CycloneDX SBOM (`<file>.cdx.json`) with an attestation of its own. Copy-paste commands: [docs/install.md](https://github.com/'"$GITHUB_REPOSITORY"'/blob/'"$TAG"'/docs/install.md#verifying-a-download).'
+            echo
+            echo "### Platform signatures"
+            echo
+            cat signing/*.md
+            echo
+          } > notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+          gh release create "$TAG" --draft --verify-tag --generate-notes --notes-file notes.md
+          gh release upload "$TAG" assets/*
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Verify the draft as GitHub serves it
+        run: |
+          set -euo pipefail
+          mkdir verify && cd verify
+          gh release download "$TAG"
+
+          # Exactly the manifest's files, plus the manifest and its signature.
+          diff <(awk '{ print $2 }' SHA256SUMS | LC_ALL=C sort) \
+               <(find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sigstore.json -printf '%f\n' | LC_ALL=C sort)
+          sha256sum --check --strict SHA256SUMS
+
+          cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+          # The same commands docs/install.md gives users, pinned to this
+          # workflow and tag so an attestation from anywhere else does not count.
+          verify() {
+            gh attestation verify "$@" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" --deny-self-hosted-runners > "$RUNNER_TEMP/verify.log" 2>&1 \
+              || { cat "$RUNNER_TEMP/verify.log"; echo "::error::attestation check failed: $*"; exit 1; }
+          }
+          for file in $(awk '{ print $2 }' SHA256SUMS) SHA256SUMS; do
+            verify "$file"
+            echo "provenance ok: $file"
+          done
+          for sbom in *.cdx.json; do
+            verify "${sbom%.cdx.json}" --predicate-type https://cyclonedx.org/bom
+            echo "sbom attestation ok: ${sbom%.cdx.json}"
+          done
+
+      - name: Publish the release
+        run: gh release edit "$TAG" --draft=false

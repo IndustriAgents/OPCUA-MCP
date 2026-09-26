@@ -505,6 +505,77 @@ authenticate the server, encrypt the channel, and do not point either runtime at
 an endpoint you do not trust. The Node runtime is on a maintained client library
 and is the better choice where that matters.
 
+## Release integrity
+
+Every file on a GitHub release is listed in a `SHA256SUMS` manifest signed
+keyless with Sigstore, carries a GitHub build-provenance attestation tied to
+`release.yml`, the tag and its commit, and ships with a CycloneDX SBOM that is
+attested against the file's digest. The npm package is published with npm
+provenance and the PyPI files with PEP 740 attestations. macOS and Windows
+executables are platform-signed when the project's certificates are configured;
+each release's notes say whether they were. How to check all of it is in
+[docs/install.md](docs/install.md#verifying-a-download); how it is produced is in
+[docs/releasing.md](docs/releasing.md#what-a-release-carries-and-how-it-is-checked-145).
+
+A signature proves where a file came from, not that the source was sound. If you
+find an artifact that fails these checks, or one that passes them and should not
+exist, report it as a vulnerability (below).
+
+### Emergency process: compromised artifact, signing identity or credential
+
+For the maintainers. Sigstore's transparency log is append-only, so a keyless
+signature or attestation cannot be withdrawn once made; revocation here works by
+*publication* — an advisory naming the affected versions and digests — plus
+revoking whatever credential made the bad artifact possible. Work top to bottom;
+the first two steps are the same whatever was compromised.
+
+1. **Stop further releases.** Disable `publish.yml` and `release.yml`
+   (Actions → workflow → *Disable workflow*) and make sure the `v*` tag ruleset
+   blocks tag creation, so nothing more ships while the cause is unknown.
+2. **Withdraw the affected versions everywhere they are served**, and record
+   their digests from `SHA256SUMS` first — the advisory needs them:
+   - GitHub release: delete it, or, where deletion is not possible (immutable
+     releases), retitle it `REVOKED — do not use` and replace its notes with a
+     pointer to the advisory.
+   - npm: `npm deprecate opcua-mcp-server@<version> "SECURITY: see GHSA-…; use <fixed>"`.
+     npm allows unpublishing only within 72 hours; for malicious content, ask
+     npm support to remove it.
+   - PyPI: yank the release (project → *Manage* → *Options* → *Yank*); for
+     malicious content, contact the PyPI admins to remove it.
+3. **Revoke the credential involved**, then replace the repository secret:
+   - *Apple Developer ID certificate* (`APPLE_CERT_P12`): revoke it in the Apple
+     Developer portal (Certificates, IDs & Profiles) and ask Apple Developer
+     Support to revoke the notarization tickets of the affected builds; then
+     issue a new certificate. Rotate the notary API key (`APPLE_NOTARY_KEY`) in
+     App Store Connect if it may have leaked too.
+   - *Windows code-signing certificate* (Azure Key Vault): disable the key,
+     rotate `AZURE_CLIENT_SECRET`, and ask the issuing CA to revoke the
+     certificate **with a revocation date no later than the first misuse** —
+     timestamped signatures made before that date stay valid, everything after
+     fails. Check the vault's diagnostic logs for every sign operation.
+   - *`NPM_TOKEN`*: revoke it on npmjs.com and check the package's publish
+     history for versions nobody released.
+   - *PyPI trusted publisher*: remove it from the project and re-add it once the
+     cause is fixed; there is no stored token.
+   - *Keyless identity* (a malicious workflow run on a tag): nothing to revoke —
+     the identity is the workflow file at a ref, which is why verification pins
+     both. Fix the cause (a compromised maintainer account, a workflow change, a
+     tag ruleset gap), rotate the account's credentials, and review the
+     repository's audit log.
+4. **Publish a GitHub security advisory** listing affected versions and the
+   SHA-256 of every affected file, what the file may have done, and the fixed
+   version; request a CVE through it.
+5. **Release a fixed version** from a reviewed commit, through the normal,
+   verified pipeline, with new certificates if step 3 revoked any. Re-enable the
+   workflows only for that.
+
+**If an advisory lists a digest you have deployed:** stop the server, remove the
+file, and review what it did. The OPC UA server's own audit log is the record to
+trust, since a compromised binary writes its own; this server's
+[audit trail](#what-is-audited) (stderr, and `OPCUA_AUDIT_FILE` if set) lists
+the writes, method calls and alarm actions it attempted. Then install the fixed
+version and verify it before use.
+
 ## Supported versions
 
 This project is pre-1.0. Security fixes land on `main` and in the next release of

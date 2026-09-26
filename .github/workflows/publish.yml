@@ -4,10 +4,21 @@ name: Publish
 # The npm package in particular needs `npm run build` to stage build/contract.json
 # and build/version.json; publishing without it ships a package that dies at
 # startup.
+#
+# `workflow_dispatch` from a branch runs the verification only; the publish jobs
+# need a `v*` tag ref, so a manual run on `main` can never ship whatever version
+# happens to be in the manifests. Dispatching on a tag re-runs a release.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs (#145). The registry
+# credentials — NPM_TOKEN, and the OIDC token npm provenance and PyPI trusted
+# publishing exchange — exist only in the job that uses them, and neither of
+# those jobs runs a third-party install script. Every third-party action is
+# pinned to a commit SHA; the comment is the tag it was resolved from.
+permissions: {}
 
 # A tag push can be delivered more than once — v0.3.0 queued two identical runs a
 # second apart. The registry jobs are individually idempotent, but two running at
@@ -22,8 +33,12 @@ jobs:
   verify:
     name: Verify before publishing
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # First, so a mistyped tag fails in seconds rather than after the suite.
       - name: Tag must match the manifests
@@ -56,22 +71,30 @@ jobs:
   npm:
     name: Publish to npm
     needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # npm provenance
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
 
+      # `--ignore-scripts` on both install and publish: this job can mint an
+      # OIDC token, and the publish step holds NPM_TOKEN, so no dependency's
+      # install script and no lifecycle hook runs here. The only package with
+      # an install script is esbuild, a dev dependency the build does not use;
+      # `npm run build` is the `prepare` that `npm ci` would otherwise run.
       - name: Build
         working-directory: packages/server-node
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
 
       # Idempotent: a partial release (one registry succeeding, the other failing)
@@ -84,27 +107,57 @@ jobs:
             echo "opcua-mcp-server@$VERSION already on npm — skipping."
             exit 0
           fi
-          npm publish --provenance --access public
+          npm publish --provenance --access public --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  pypi:
-    name: Publish to PyPI
+  # Built in a job of its own, as PyPA recommends for trusted publishing: the
+  # build backend and its hooks run where no OIDC token can be minted, and the
+  # publish job below receives only the finished files.
+  python-dist:
+    name: Build wheel and sdist
     needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
-      id-token: write # PyPI trusted publishing
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
 
       - name: Build wheel and sdist
         run: uv build --out-dir dist packages/server-python
 
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-dist
+          path: dist/*
+          if-no-files-found: error
+
+  pypi:
+    name: Publish to PyPI
+    needs: python-dist
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing, and the PEP 740 attestations below
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-dist
+          path: dist
+
+      # Trusted publishing also makes the action sign and upload a PEP 740
+      # attestation for each file (its `attestations` input defaults to on),
+      # which is what `pypi-attestations verify pypi` in docs/install.md checks.
       - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           # Same reason as the npm job: re-running a partial release must not fail.
           skip-existing: true

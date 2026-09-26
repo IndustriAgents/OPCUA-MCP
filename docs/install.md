@@ -31,7 +31,8 @@ field — no runtime to install, no JSON to edit, nothing fetched from the netwo
 at startup.
 
 1. Download `opcua-mcp-server-<version>.mcpb` from the
-   [latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest).
+   [latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest),
+   and [verify it](#verifying-a-download).
 2. In Claude Desktop, open **Settings → Extensions**.
 3. Drag the file onto that pane.
 4. Set **OPC UA endpoint** to your server's URL, e.g. `opc.tcp://192.168.0.10:4840`.
@@ -67,6 +68,9 @@ for a network you do not fully trust (see
 `<platform>` is `linux`, `darwin` (macOS) or `win32`, and `<arch>` is `x64` or
 `arm64`.
 
+Before running it, [verify the download](#verifying-a-download) — it is about to
+be handed access to an industrial network.
+
 Then make it executable and register it:
 
 ```bash
@@ -74,15 +78,25 @@ chmod +x opcua-mcp-server-python-linux-x64
 ./opcua-mcp-server-python-linux-x64 --install claude-desktop --url opc.tcp://192.168.0.10:4840
 ```
 
-**macOS** binaries are ad-hoc signed, not notarised, so Gatekeeper will refuse
-the first launch. Clear the quarantine flag once:
+**Platform signatures.** Each release's notes state, per platform, whether its
+executables carry a platform-native signature. The release workflow signs and
+notarizes them when the project's Apple Developer ID and Windows code-signing
+certificates are configured; until they are, the notes say so, and:
 
-```bash
-xattr -d com.apple.quarantine opcua-mcp-server-python-darwin-arm64
-```
+- **macOS** binaries are ad-hoc signed, not notarised, so Gatekeeper will refuse
+  the first launch. Having verified the download, clear the quarantine flag once:
 
-**Windows** SmartScreen will warn for the same reason: choose *More info → Run
-anyway*.
+  ```bash
+  xattr -d com.apple.quarantine opcua-mcp-server-python-darwin-arm64
+  ```
+
+- **Windows** SmartScreen will warn for the same reason: having verified the
+  download, choose *More info → Run anyway*.
+
+A notarized macOS executable is not stapled — Apple staples tickets only to app
+bundles, disk images and installer packages — so Gatekeeper checks it online at
+first launch. On a machine that cannot reach Apple, rely on the checksum and
+attestation checks below.
 
 ## 3. `--install` — let the server write the config
 
@@ -337,6 +351,134 @@ runtime's OPC UA library is unmaintained — this project patches it
 (CVE-2022-25304) and is moving it to `asyncua`
 ([#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144)).
 
+## Verifying a download
+
+Everything on a [release page](https://github.com/IndustriAgents/OPCUA-MCP/releases)
+— bundle, executables, npm tarball, wheel, sdist, and the SBOMs — can be checked
+three ways, none of which needs any access to this repository beyond reading it:
+
+| File | Proves | Check with |
+|---|---|---|
+| `SHA256SUMS` | the file is byte-for-byte what the release workflow built | `sha256sum`, `shasum`, PowerShell |
+| `SHA256SUMS.sigstore.json` | `SHA256SUMS` was signed by this repository's `release.yml`, for this tag (Sigstore keyless signature, logged in the public Rekor transparency log) | `cosign` |
+| build-provenance attestation | the file was built by `release.yml` from a specific commit of `IndustriAgents/OPCUA-MCP` on a GitHub-hosted runner (SLSA provenance) | `gh` with any GitHub account |
+| `<file>.cdx.json` and its attestation | what the file contains — every dependency with version and hash, the lockfile digest, the toolchain, and for an executable the embedded runtime | any CycloneDX tool; `gh` |
+
+The release workflow runs every one of these checks against the files as GitHub
+serves them before it makes the release public, so a release that is public has
+passed them once already. Running them yourself proves nothing changed since.
+(Releases cut before this was introduced, 0.5.1 and earlier, carry the files
+only.)
+
+Set the version once:
+
+```bash
+VERSION=0.6.0    # the release you downloaded
+```
+
+**1. Checksums.** Download the files you want plus the two manifest files (or use
+the release page), then check them. `--ignore-missing` skips what you did not
+download.
+
+```bash
+gh release download "v$VERSION" --repo IndustriAgents/OPCUA-MCP \
+  --pattern 'opcua-mcp-server-python-linux-x64' --pattern 'SHA256SUMS*'
+
+sha256sum --check --ignore-missing SHA256SUMS         # Linux
+shasum -a 256 --check --ignore-missing SHA256SUMS     # macOS
+```
+
+```powershell
+# Windows (PowerShell)
+$file = 'opcua-mcp-server-python-win32-x64.exe'
+$expected = ((Select-String -Path SHA256SUMS -Pattern "  $([regex]::Escape($file))$").Line -split '\s+')[0]
+if ((Get-FileHash $file -Algorithm SHA256).Hash -eq $expected) { 'OK' } else { 'MISMATCH - do not run it' }
+```
+
+**2. The manifest's signature.** With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+installed. The identity pins the signer to this repository's release workflow at
+this exact tag; a signature from anywhere else fails.
+
+```bash
+cosign verify-blob SHA256SUMS \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/IndustriAgents/OPCUA-MCP/.github/workflows/release.yml@refs/tags/v$VERSION" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Steps 1 and 2 together are sufficient for any file listed in `SHA256SUMS`.
+
+**3. Build provenance**, per file, without the manifest. Needs the
+[GitHub CLI](https://cli.github.com/) logged in to any account (`gh auth login`):
+
+```bash
+gh attestation verify opcua-mcp-server-python-linux-x64 \
+  --repo IndustriAgents/OPCUA-MCP \
+  --signer-workflow IndustriAgents/OPCUA-MCP/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$VERSION"
+```
+
+For an air-gapped machine, fetch the attestation and Sigstore's trust root on a
+connected one, carry them across with the file, and verify offline:
+
+```bash
+# connected machine
+gh attestation download opcua-mcp-server-python-linux-x64 --repo IndustriAgents/OPCUA-MCP
+gh attestation trusted-root > trusted_root.jsonl
+# air-gapped machine (the .jsonl is named after the file's digest)
+gh attestation verify opcua-mcp-server-python-linux-x64 --repo IndustriAgents/OPCUA-MCP \
+  --bundle sha256:<digest>.jsonl --custom-trusted-root trusted_root.jsonl
+```
+
+**4. What is inside it.** Each artifact's SBOM is attested against the artifact's
+digest, so the SBOM you read is provably the one for the file you have:
+
+```bash
+gh attestation verify opcua-mcp-server-python-linux-x64 \
+  --repo IndustriAgents/OPCUA-MCP --predicate-type https://cyclonedx.org/bom
+
+jq -r '.components[] | "\(.name) \(.version)"' opcua-mcp-server-python-linux-x64.cdx.json
+grype sbom:./opcua-mcp-server-python-linux-x64.cdx.json    # or any CycloneDX-aware scanner
+```
+
+The SBOMs are CycloneDX 1.5, generated from the lockfiles (`package-lock.json`,
+`uv.lock`), so each lists every platform's dependencies — `pywin32` appears in the
+Linux one. An executable's SBOM adds the runtime it embeds (Node, or CPython and
+the PyInstaller bootloader). Build inputs are under `metadata.properties`:
+lockfile digest, toolchain versions, and the source commit.
+
+**5. Platform signatures**, when the release notes say they were applied:
+
+```bash
+# macOS: expect "Authority=Developer ID Application: …"
+codesign --verify --strict --verbose=2 opcua-mcp-server-python-darwin-arm64
+codesign -dvv opcua-mcp-server-python-darwin-arm64 2>&1 | grep Authority
+```
+
+```powershell
+# Windows: expect Status "Valid"
+Get-AuthenticodeSignature .\opcua-mcp-server-python-win32-x64.exe | Format-List Status, SignerCertificate
+```
+
+### Packages from npm and PyPI
+
+The registry copies are built by `publish.yml` from the same commit, not
+downloaded from the release page, so verify them with the registries' own
+mechanisms rather than `SHA256SUMS`:
+
+```bash
+# npm: registry signatures and the provenance attestation, for everything installed
+npm install opcua-mcp-server
+npm audit signatures
+
+# PyPI: the PEP 740 attestation trusted publishing uploads with each file
+uvx pypi-attestations verify pypi --repository https://github.com/IndustriAgents/OPCUA-MCP \
+  "pypi:opcua_mcp_server-$VERSION-py3-none-any.whl"
+```
+
+The same attestations are shown on the package pages (npm's *Provenance* panel;
+PyPI's *Verified details*).
+
 ## Building the artifacts yourself
 
 None of the downloads are required; each is one command from a checkout.
@@ -364,3 +506,35 @@ one per operating system in
 
 `tests/smoke/` builds all of these and drives them against a live OPC UA server;
 see [testing.md](testing.md).
+
+### Reproducibility
+
+A build from source will not, in general, match the release's bytes, and
+nothing above depends on it doing so: the release is verified by who built it
+and from what (steps 1–4 of [Verifying a download](#verifying-a-download)), not
+by rebuilding it. What is pinned is the commit (in the provenance), the
+lockfiles (their digests are in every SBOM) and the toolchain versions (also in
+the SBOM). What is not:
+
+- **npm tarball, wheel, sdist.** `npm pack` and hatchling normalise timestamps
+  and file order, and in our testing two builds of one commit with one
+  toolchain are byte-identical. A different npm, TypeScript or hatchling
+  version can still change the output, which is why the registry copies are
+  verified by the registries' own attestations rather than `SHA256SUMS`.
+- **`.mcpb` bundle.** esbuild output is deterministic for the same inputs and
+  esbuild version, but the zip `mcpb pack` writes records file timestamps, so
+  two builds of one commit differ.
+- **Node single-file executable.** It is a copy of whichever Node 22 release
+  the runner installed that day, with the application injected. The Node patch
+  version moves between releases (the SBOM records which one), and a Developer
+  ID or Authenticode signature embeds a timestamp, so two signed builds always
+  differ.
+- **PyInstaller executable.** The bootloader is precompiled per PyInstaller
+  version, and the frozen archive embeds the interpreter build uv selected and
+  compiled bytecode whose headers depend on the build environment; the same
+  commit built twice, even on one runner image, is not byte-identical. The
+  signature point above applies here too.
+
+Bit-for-bit reproducible executables are out of scope for now (#145); the
+guarantees above are authenticated origin, recorded inputs, and integrity a
+consumer can check.

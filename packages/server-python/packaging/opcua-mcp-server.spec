@@ -82,6 +82,10 @@ exe = EXE(  # noqa: F821
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    # Left ad hoc here so a build never needs a keychain. release.yml signs the
+    # finished executable with a Developer ID when configured; the libraries
+    # it unpacks keep their ad-hoc signatures, which is why
+    # macos-entitlements.plist disables library validation.
     codesign_identity=None,
     entitlements_file=None,
 )

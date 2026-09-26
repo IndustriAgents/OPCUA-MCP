@@ -49,7 +49,19 @@ updates:
           - tomli
         update-types: [minor, patch]
 
+  # Every action is pinned to a full commit SHA with its tag as a trailing
+  # comment (`uses: owner/action@<sha> # v1.2.3`, #145). Dependabot updates the
+  # SHA and rewrites the comment to match, so keep that exact shape when adding
+  # an action. `/` covers .github/workflows; the composite action has to be
+  # listed on its own or its pins would never move.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/conformance
     schedule:
       interval: monthly
+    groups:
+      # One PR for every action bump: the same pins recur across all three
+      # workflows, and the merge gate takes PRs one at a time.
+      actions:
+        patterns: ["*"]

@@ -348,6 +348,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release requirement.
 
 ### Documentation
+- **An asyncua compatibility matrix, built from evidence**
+  ([docs/asyncua-compatibility.md](docs/asyncua-compatibility.md), part of #144,
+  work in progress). Runnable probes in `docs/asyncua-spike/` exercise asyncua
+  2.0.1 against the repository's mocks, a hostile transport server and the #169
+  open62541 lab. Every service the Python runtime uses is supported. The shared
+  write-coercion and value-encoding tables hold byte-for-byte on asyncua's types,
+  and AES policies, X.509 user identity and certificate pinning work and fail
+  closed. The matrix also records what the adapter must fix: an Acknowledge that
+  can widen or remove asyncua's receive limits (CVE-2022-25304 again),
+  MaxMessageSize never enforced, watchdogs that end a session after a 2 s stall
+  or re-create a subscription under a new id even with `auto_reconnect=False`,
+  and timeouts raised as a bare `Exception`. The probes also found that today's
+  Python runtime enforces the transport chunk *count* but neither `maxChunkSize`
+  nor `maxMessageSize`. Runtime code is unchanged.
 - **Both runtimes are first-class, and that is now a written promise rather
   than a habit** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md), #143).
   The Python and Node packages meet the same conformance suite, security

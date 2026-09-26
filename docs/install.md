@@ -6,7 +6,7 @@ Four ways in, roughly in order of how little you need already installed.
 |---|---|---|
 | [MCP bundle (`.mcpb`)](#1-mcp-bundle-mcpb--claude-desktop) | Claude Desktop | Claude Desktop users. Nothing else to install. |
 | [Single-file executable](#2-single-file-executable--no-runtime-at-all) | Nothing | Locked-down or air-gapped machines; MCP clients other than Claude Desktop. |
-| [`--install claude-desktop`](#3---install-claude-desktop--let-the-server-write-the-config) | Node or Python | You already have a runtime and want the config written for you. |
+| [`--install`](#3---install--let-the-server-write-the-config) | Node or Python | You already have a runtime and want a checked config written for you (Claude Desktop, Codex). |
 | [Editing the config by hand](#4-editing-the-config-by-hand) | Node or Python | Scripted rollouts, unusual clients, or auditing exactly what runs. |
 
 > [!WARNING]
@@ -14,9 +14,9 @@ Four ways in, roughly in order of how little you need already installed.
 > connection — fine for the bundled mock or a lab server, not for production
 > equipment. Set a security policy and credentials before pointing it at anything
 > real: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`, `OPCUA_CLIENT_CERT`,
-> `OPCUA_CLIENT_KEY`, `OPCUA_USERNAME` and `OPCUA_PASSWORD` (the `.mcpb` bundle
-> offers all of these as settings fields). Both servers warn on stderr while
-> running unsecured.
+> `OPCUA_CLIENT_KEY`, `OPCUA_SERVER_CERT` to pin the server, and a user identity
+> (the `.mcpb` bundle offers all of these as settings fields, and `--install`
+> as flags). Both servers warn on stderr while running unsecured.
 >
 > Note also that this server can **write nodes and call methods**, so scope the
 > OPC UA account it logs in as to exactly what you intend the assistant to be
@@ -84,49 +84,202 @@ xattr -d com.apple.quarantine opcua-mcp-server-python-darwin-arm64
 **Windows** SmartScreen will warn for the same reason: choose *More info → Run
 anyway*.
 
-## 3. `--install claude-desktop` — let the server write the config
+## 3. `--install` — let the server write the config
 
 If you already have Node or Python, install the package and let it register
-itself. This is worth preferring over editing JSON even if you are comfortable
-with JSON, because it writes **absolute paths** to the interpreter and the
-server. Claude Desktop is launched from the GUI and does not inherit your login
-shell's `PATH`, so a config that says `"command": "npx"` frequently works in a
-terminal and fails in the app — the single most common way MCP setup goes wrong,
-and `nvm` users hit it every time.
+itself with **Claude Desktop** (`--install claude-desktop`) or **Codex**
+(`--install codex`). This is worth preferring over editing a config file even if
+you are comfortable with one:
+
+- It writes **absolute paths** to the interpreter and the server. Claude Desktop
+  is launched from the GUI and does not inherit your login shell's `PATH`, so a
+  config that says `"command": "npx"` frequently works in a terminal and fails in
+  the app — the single most common way MCP setup goes wrong, and `nvm` users hit
+  it every time.
+- It can express the whole security model — channel security, a pinned server
+  certificate, user identity, tool profile, policy file, audit trail — and it
+  checks the result with **the server's own startup parsers** before writing
+  anything, so it cannot write a configuration the server would refuse.
+- It **fails closed**. The default profile is `observe` (read-only), written into
+  the config explicitly. A control profile has to be asked for with `--profile`,
+  and a control profile for a remote endpoint whose certificate is not pinned is
+  refused (see [Safety rules](#safety-rules)).
+
+The easy path, for a real device — read-only, encrypted, and talking only to the
+server whose certificate you pinned:
 
 ```bash
 # Node
 npm install -g opcua-mcp-server
-opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
-
 # Python
 uv tool install opcua-mcp-server        # or: pip install opcua-mcp-server
-opcua-mcp-server --install claude-desktop --url opc.tcp://192.168.0.10:4840
+
+opcua-mcp-server --install claude-desktop --dry-run \
+  --url opc.tcp://192.168.0.10:4840 \
+  --security-policy Basic256Sha256 \
+  --client-cert /etc/opcua/client.pem --client-key /etc/opcua/client_key.pem \
+  --server-cert /etc/opcua/server.pem
 ```
 
-Restart Claude Desktop afterwards.
+`--dry-run` validates everything — that each file exists, that the combination
+is one the server accepts — and prints the exact file it would write, a
+**redacted** preview of the result and a security summary, without opening an
+OPC UA connection or writing anything. Drop `--dry-run` to write it, then
+restart the client. Generating those certificates is covered in
+[certificates.md](certificates.md).
+
+Against the bundled mock or a lab server on this machine,
+`opcua-mcp-server --install claude-desktop` alone is enough.
+
+### Letting the assistant operate equipment
+
+Control tools (writes, method calls, alarm actions) need an explicit profile, an
+allowlist, and — for a remote endpoint — a pinned server certificate:
+
+```bash
+opcua-mcp-server --install claude-desktop \
+  --url opc.tcp://192.168.0.10:4840 \
+  --security-policy Basic256Sha256 \
+  --client-cert /etc/opcua/client.pem --client-key /etc/opcua/client_key.pem \
+  --server-cert /etc/opcua/server.pem \
+  --profile operator \
+  --policy-file /etc/opcua/policy.json \
+  --audit-file /var/log/opcua-mcp/audit.jsonl \
+  --operator-id line-1
+```
+
+The policy file format, and why each of these matters, is in
+[SECURITY.md](../SECURITY.md#tool-profiles-and-control-policy).
+
+### Flags
+
+The setting flags are generated from
+[`contract/config.json`](../contract/config.json), the one definition of every
+`OPCUA_*` variable both servers read: each is the setting's key with dashes, and
+`--help` lists them. Values are checked against the same schema — choices
+(case-insensitive, canonicalised), numeric minimums, file paths (made absolute,
+because the client starts the server from a directory nobody chose). A boolean
+setting flag takes no value: its presence means `true`.
+
+Two settings have no flag, and naming one is refused with a pointer here:
+`OPCUA_PASSWORD` (see [Passwords](#passwords)) and `OPCUA_AUDIT_CHAIN_KEY_FILE`,
+the HMAC key for `--audit-chain hmac-sha256`, which the schema keeps off command
+lines as it does a secret. For an HMAC chain, install with `--audit-chain sha256`
+(or none) and set both variables in the client config by hand, or use the
+`.mcpb` bundle.
+
+| Flag | Variable |
+|---|---|
+| `--server-url` (or `--url`) | `OPCUA_SERVER_URL`. Defaults to `$OPCUA_SERVER_URL`, else `opc.tcp://localhost:4840` |
+| `--security-policy`, `--security-mode` | `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE` |
+| `--client-cert`, `--client-key`, `--application-uri` | `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_APPLICATION_URI` |
+| `--server-cert` | `OPCUA_SERVER_CERT`, which pins the server |
+| `--username`, `--user-cert`, `--user-key` | `OPCUA_USERNAME`, `OPCUA_USER_CERT`, `OPCUA_USER_KEY` (for the password, see [Passwords](#passwords)) |
+| `--profile` | `OPCUA_PROFILE`: `observe` (also `read-only`; the default), `operator`, `full` |
+| `--policy-file`, `--allowed-tools`, `--allowed-write-nodes`, `--allowed-methods` | `OPCUA_POLICY_FILE`, `OPCUA_ALLOWED_TOOLS`, `OPCUA_ALLOWED_WRITE_NODES`, `OPCUA_ALLOWED_METHODS` |
+| `--allow-acknowledge-alarms`, `--allow-insecure-control`, `--allow-unverified-server-control`, `--allow-out-of-range-writes` | the matching `OPCUA_ALLOW_*` overrides |
+| `--audit-file`, `--audit-fsync`, `--audit-chain`, `--operator-id` | `OPCUA_AUDIT_FILE`, `OPCUA_AUDIT_FSYNC`, `OPCUA_AUDIT_CHAIN`, `OPCUA_OPERATOR_ID` |
+| `--reconnect-initial-delay-ms`, `--reconnect-max-delay-ms`, `--reconnect-max-retry`, `--session-timeout-ms` | the reconnection settings |
+
+And the installer's own:
 
 | Flag | Meaning |
 |---|---|
-| `--install <client>` | Currently `claude-desktop` |
-| `--url <endpoint>` | Endpoint to record. Defaults to `$OPCUA_SERVER_URL`, else `opc.tcp://localhost:4840` |
+| `--install <client>` | `claude-desktop` or `codex` |
+| `--dry-run` | Validate, print the target file, a redacted preview and the security summary; write nothing |
 | `--force` | Replace an existing `opcua` entry instead of refusing |
-| `--dry-run` | Print the resulting config instead of writing it |
+| `--store-password-in-config` | Copy `$OPCUA_PASSWORD` into the config file, in plain text. See [Passwords](#passwords) |
+| `--allow-unverified-remote-control` | Write a control profile for a remote endpoint with no pinned certificate. Lab networks only |
 | `--version`, `--help` | As expected |
 
+The two runtimes' installers take the same flags and write the same
+configuration for the same input: one shared table of cases,
+[`tests/fixtures/install-cases.json`](../tests/fixtures/install-cases.json), holds
+both to it. The one exception is a declared runtime difference. Each validates
+with its own server's parser, so the Python installer refuses the two AES
+security policies its runtime cannot negotiate.
+
+### Safety rules
+
+Refused outright (exit 1, nothing written):
+
+- **A configuration the server would refuse at startup**: a mode without a
+  policy, a policy without a client certificate, a pinned server certificate or
+  a user certificate with no channel security, a username with no password, an
+  unreadable policy file, an unknown tool name, a hash chain with no audit file.
+  The installer runs the server's own parsers on what it is about to write.
+- **A file that does not exist**, or an audit file in a directory that does not.
+- **`--profile operator` or `full` for a remote endpoint without
+  `--server-cert`**, unless `--allow-unverified-remote-control` is given. An
+  encrypted channel to an unpinned server is encrypted to whoever answers at that
+  address. "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an
+  address the installer cannot parse counts as remote. The server's own lab
+  override, `--allow-unverified-server-control`, does not stand in for this one:
+  it is written into the config and opens control at runtime, while
+  `--allow-unverified-remote-control` is only the acknowledgement that doing so
+  against a remote host is intended.
+
+Refused as usage errors (exit 2): an unknown flag or choice, a number below the
+schema's minimum, a blank value, key material pasted into a path flag, and any
+secret as a flag (`--password`), or a setting kept off the installer
+(`--audit-chain-key-file`).
+
+Written, with a `WARNING [code]` on stderr: a remote endpoint with no channel
+security (`no-channel-security`) or with an unpinned server (`server-not-pinned`);
+a password on an unencrypted channel; a password stored in the file; the
+`OPCUA_ALLOW_INSECURE_CONTROL`, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` or
+`OPCUA_ALLOW_OUT_OF_RANGE_WRITES` overrides; the `full` profile; a control profile
+with no audit file, or one the server would offer no control tool (the warning
+gives the server's own reason: no allowlist, no security policy, or no pinned
+certificate); and a policy file whose `profile` the explicit `observe` default
+overrides.
+
+### Passwords
+
+A password is never accepted as a flag: anything on a command line is visible to
+every local user and lands in shell history, so `--password` is refused and its
+value is never echoed. Private keys are passed as file paths, and a key pasted
+into a path flag is refused the same way. Nothing the installer prints (preview,
+summary, warnings, errors) contains a secret: `OPCUA_PASSWORD` and the
+private-key paths are shown as `<redacted>`, and so is every `env` and `headers`
+value of the other MCP servers in the file.
+
+How the password reaches the server depends on the client:
+
+- **Codex** passes named variables through from its own environment, so
+  `--install codex --username <name>` writes `env_vars = ["OPCUA_PASSWORD"]` and
+  no password at all. Export `OPCUA_PASSWORD` in the environment Codex runs in.
+- **Claude Desktop** has no way to hand a password to a server registered in its
+  config file except writing it there. The recommended routes are the
+  [`.mcpb` bundle](#1-mcp-bundle-mcpb--claude-desktop), which keeps the password
+  in the operating system's keychain, or X.509 user login
+  (`--user-cert`, `--user-key`), which needs no password. `--install
+  claude-desktop --username <name>` on its own is therefore refused.
+- To write it anyway, opt in explicitly. The password is read from the
+  installer's environment, never from its arguments, and the file is written
+  readable by its owner only:
+
+  ```bash
+  read -rs OPCUA_PASSWORD && export OPCUA_PASSWORD
+  opcua-mcp-server --install claude-desktop --username mcp-operator \
+    --store-password-in-config ...
+  unset OPCUA_PASSWORD
+  ```
+
+### Where it writes
+
 It merges into whatever is already in the file, leaving your other MCP servers
-untouched, and copies the previous config to `claude_desktop_config.json.bak-<timestamp>`
-before writing. A config it cannot parse is an error rather than something to
-overwrite. Run it with `--dry-run` first if you want to see the result before
-committing to it.
+untouched, and copies the previous config to `<file>.bak-<timestamp>` before
+writing. A config it cannot parse is an error rather than something to overwrite.
+For Codex it replaces only its own `[mcp_servers.opcua]` tables, and refuses an
+entry written as dotted keys or an inline table rather than guess at it.
 
-The config file it writes lives at:
-
-| OS | Path |
-|---|---|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json`, else `~/.config/Claude/...` |
+| Client | OS | Path |
+|---|---|---|
+| Claude Desktop | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Desktop | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Desktop | Linux | `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json`, else `~/.config/Claude/...` |
+| Codex | all | `$CODEX_HOME/config.toml`, else `~/.codex/config.toml` |
 
 ## 4. Editing the config by hand
 

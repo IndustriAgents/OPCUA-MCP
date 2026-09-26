@@ -13,7 +13,7 @@
     "watch": "tsc --watch",
     "start": "node build/index.js",
     "dev": "tsc && node build/index.js",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --throw-deprecation --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -47,7 +47,7 @@
     "url": "https://github.com/IndustriAgents/OPCUA-MCP/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "node-opcua-client": "^2.184.8",
     "node-opcua-crypto": "^6.0.0"
   },

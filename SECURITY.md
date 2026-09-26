@@ -515,6 +515,10 @@ fix for one ships in both. A difference in *safety* between the two runtimes —
 a refusal one makes and the other does not — is itself a vulnerability: report
 it as below, not as a public issue.
 
+Which runtime and dependency versions are supported, how quickly an advisory in
+a dependency is acted on, and which dependency changes are treated as security
+changes is set out in [docs/dependency-policy.md](docs/dependency-policy.md).
+
 ## Reporting a vulnerability
 
 Please **do not** open a public issue for security vulnerabilities.

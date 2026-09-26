@@ -7,6 +7,7 @@ Thanks for your interest in contributing! This repo provides **two MCP servers**
 - **[docs/architecture.md](docs/architecture.md)** — how the pieces fit, and the invariants to preserve
 - **[docs/testing.md](docs/testing.md)** — how to test (automated suite, MCP Inspector, AI agents)
 - **[docs/examples.md](docs/examples.md)** — per-tool inputs/outputs and node-ID reference
+- **[docs/dependency-policy.md](docs/dependency-policy.md)** — supported runtimes and dependency ranges, how both ends are tested, and what a dependency change needs before it merges
 
 ## Repository layout
 
@@ -173,6 +174,22 @@ Beyond what the tools check:
 - Reference related issues/PRs (e.g. "Fixes #1").
 - If a change was AI-assisted, keep the `Co-Authored-By:` trailer.
 - PRs from forks: enable **"Allow edits by maintainers"** so reviewers can rebase.
+
+## Changing a dependency
+
+Read **[docs/dependency-policy.md](docs/dependency-policy.md)** first. In short:
+every runtime dependency of both published packages carries a floor CI tests and
+a ceiling below the next major (`>=floor,<next-major` in Python, `^floor` in
+Node), `tests/unit/test_dependency_ranges.py` holds the manifests and the
+policy's table to that, and every runtime dependency counts as security-sensitive,
+so its update merges on the full E2E suite, never on unit tests alone.
+Editing a range means relocking (`uv lock`, or `npm install --package-lock-only`
+in `packages/server-node`) and updating the table in the policy.
+
+Deprecation warnings fail the tests. Fix one raised by our own code; for one
+raised inside a dependency, add an entry to
+`tests/fixtures/deprecation-allowlist.json` naming the issue, an owner and when
+it can be removed.
 
 ## Releasing
 

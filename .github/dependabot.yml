@@ -1,3 +1,17 @@
+# Implements the update half of docs/dependency-policy.md.
+#
+# Runtime dependencies are never grouped. Every one of them is security-sensitive
+# under that policy (OPC UA transport, certificates, the MCP protocol), so each
+# bump is its own PR: one diff to review, one revert if it goes wrong, and one
+# run of the full required suite — the E2E matrix and the artifact smoke tests
+# that ci.yml runs on every PR to main — to its name. Nothing here auto-merges;
+# the merge gate is those required checks, not a unit-test pass.
+#
+# Build and test tooling is grouped, minor and patch only: it never reaches a
+# user's install, and one weekly PR for it is less noise than six. Majors of
+# tooling still arrive one per PR. Packaging tools (esbuild, postject, mcpb,
+# typescript, pyinstaller) shape the downloadable artifacts, and the smoke job
+# that exercises those is a required check too.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -5,16 +19,35 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Stated rather than left to "auto", which currently resolves to the same:
+    # a release inside a declared range moves only the lockfile, so the range's
+    # floor stays where the lowest-dependency job keeps testing it; a release
+    # outside it (a new major) rewrites the range, which is the deliberate
+    # ceiling-widening PR the policy asks for.
+    versioning-strategy: increase-if-necessary
     groups:
-      # One PR for routine dev-tooling bumps instead of one per package.
       dev-dependencies:
         dependency-type: development
+        update-types: [minor, patch]
 
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # Test and build tooling from the workspace's `tests` member and the root
+      # dependency groups. The runtime set (cryptography, mcp, opcua) is left out
+      # on purpose — see the note at the top — and so is anyio: the tests pin it,
+      # but it is also the async layer under the MCP SDK's stdio transport.
+      dev-tooling:
+        patterns:
+          - pyinstaller
+          - pytest
+          - pytest-asyncio
+          - ruff
+          - tomli
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /

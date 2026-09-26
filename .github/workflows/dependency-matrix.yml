@@ -1,0 +1,194 @@
+name: Dependency matrix
+
+# The two dependency sets ci.yml cannot see. Every job there installs from the
+# lockfiles, which is exactly what a user running `npm install -g
+# opcua-mcp-server` or `pip install opcua-mcp-server` does NOT get: they resolve
+# from the ranges the manifests declare. So this runs the suite twice more, at
+# each end of those ranges:
+#
+#   lowest — every direct dependency at the floor of its declared range, on the
+#            oldest runtimes the manifests accept. A floor nobody tests is a
+#            claim, not a fact; this is what makes it one.
+#   latest — no lockfile: whatever a fresh install would pick today, within the
+#            declared ceilings. This is the first place a new upstream release
+#            shows up, before a Dependabot PR or a user does.
+#
+# The locked set is ci.yml's job and runs on every PR. The policy these three
+# implement, with its cadence and response times, is docs/dependency-policy.md.
+#
+# The steps are spelled out rather than calling .github/actions/conformance,
+# which is the locked set by construction: it runs `npm ci` and a plain
+# `uv sync`, and either would put the lockfiles back under the suite. The
+# install steps are what differs here; the test steps match the action's.
+#
+# NOTE: not a required status check, and the job names below are free to change.
+# It runs on a schedule and on dependency PRs only, so requiring it would block
+# every PR that does not touch a manifest.
+
+on:
+  schedule:
+    # Mondays, before the week's Dependabot PRs (also Monday) are looked at, so a
+    # red run here is already on the table when they are.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/server-node/package.json
+      - packages/server-node/package-lock.json
+      - packages/server-node/scripts/pin-dependency-floors.mjs
+      - packages/server-python/pyproject.toml
+      - packages/mock-server/pyproject.toml
+      - tests/pyproject.toml
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/dependency-matrix.yml
+
+concurrency:
+  group: dependency-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Fail rather than skip when a mock or toolchain is missing (#142). A run that
+  # quietly skipped the alarm tests would report a floor as tested when it was not.
+  OPCUA_TESTS_REQUIRED: "1"
+
+jobs:
+  lowest:
+    # Oldest runtimes the manifests accept — requires-python >=3.10 and
+    # engines.node >=22.13.0, the exact patch — because the lowest dependency
+    # set is most likely to be installed next to them, and ci.yml runs Node's
+    # newest 22.x rather than the floor.
+    name: Lowest supported dependencies — Python 3.10 / Node 22.13.0
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.10"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22.13.0"
+
+      # Rewrites package.json in this disposable checkout: `^2.184.8` becomes
+      # `2.184.8`. `npm install` (not `ci`) then re-resolves exactly the pinned
+      # packages and keeps the rest of the lockfile, so devDependencies stay
+      # where CI has them and a failure here is a runtime floor's fault.
+      - name: Pin Node runtime dependencies to their floors
+        working-directory: packages/server-node
+        run: |
+          node scripts/pin-dependency-floors.mjs
+          npm install --no-audit --no-fund
+          npm run build
+
+      # `npm ls` fails if what is installed is not what was pinned, so the job
+      # cannot pass on a lockfile entry the install step failed to replace. Then
+      # the committed manifests go back: node_modules and build/ keep the floors,
+      # and the suite's own checks of package.json and the lockfile (ranges,
+      # versions) judge what is actually committed, not the pinned rewrite.
+      - name: Show the Node set under test, then restore the manifests
+        working-directory: packages/server-node
+        run: |
+          npm ls --omit=dev --depth=0
+          git checkout -- package.json package-lock.json
+
+      - name: Install aggregate mock OPC UA server
+        working-directory: packages/mock-server-aggregate
+        run: npm ci
+
+      - name: Install alarms mock OPC UA server
+        working-directory: packages/mock-server-alarms
+        run: npm ci
+
+      # Direct dependencies of every workspace member at their floors, transitive
+      # ones at the newest version those floors allow — which is what a user
+      # constrained to an old direct dependency would get. uv rewrites uv.lock
+      # to do it; the committed one is restored once the environment is built.
+      - name: Resolve the Python set at its floors
+        run: |
+          uv sync --all-packages --resolution lowest-direct --python 3.10
+          git checkout -- uv.lock
+
+      - name: Show the Python set under test
+        run: uv pip list
+
+      - name: Unit tests (Node)
+        working-directory: packages/server-node
+        run: npm test
+
+      - name: Unit and end-to-end tests (Python, both servers)
+        working-directory: tests
+        run: uv run --no-sync pytest -v e2e/ unit/
+
+  latest:
+    # Newest runtimes ci.yml tests, so a failure here is a dependency's doing and
+    # not a runtime that has never been in CI at all.
+    name: Latest compatible dependencies — Python 3.13 / Node 24
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # No lockfile, so npm resolves every package — direct and transitive —
+      # afresh from the declared ranges, as `npm install -g` does for a user.
+      # devDependencies float with them; a failure in this step rather than in
+      # the tests is most likely the compiler, which a user never runs.
+      - name: Resolve the Node set without the lockfile
+        working-directory: packages/server-node
+        run: |
+          rm package-lock.json
+          npm install --no-audit --no-fund
+          npm run build
+
+      # The suite checks the committed lockfile's versions, so it goes back once
+      # node_modules has been resolved without it.
+      - name: Show the Node set under test, then restore the lockfile
+        working-directory: packages/server-node
+        run: |
+          npm ls --omit=dev --depth=0
+          git checkout -- package-lock.json
+
+      - name: Install aggregate mock OPC UA server
+        working-directory: packages/mock-server-aggregate
+        run: npm ci
+
+      - name: Install alarms mock OPC UA server
+        working-directory: packages/mock-server-alarms
+        run: npm ci
+
+      # `--upgrade` re-resolves everything to the newest versions the declared
+      # ranges allow, ignoring what uv.lock pinned (and rewriting it, hence the
+      # restore).
+      - name: Resolve the Python set at its newest
+        run: |
+          uv sync --all-packages --upgrade --python 3.13
+          git checkout -- uv.lock
+
+      - name: Show the Python set under test
+        run: uv pip list
+
+      - name: Unit tests (Node)
+        working-directory: packages/server-node
+        run: npm test
+
+      - name: Unit and end-to-end tests (Python, both servers)
+        working-directory: tests
+        run: uv run --no-sync pytest -v e2e/ unit/

@@ -4,15 +4,27 @@ version = "0.5.1"
 description = "MCP server exposing OPC UA read/write/browse/method/history tools (MCPServer + python-opcua)."
 readme = "README.md"
 requires-python = ">=3.10"
+# Every runtime dependency carries a floor and a ceiling, and both are tested:
+# the floor by the lowest-direct job in .github/workflows/dependency-matrix.yml,
+# the ceiling's side by its latest-compatible job. An open upper bound would let
+# a fresh `pip install` pick up a major nobody here has run, on a package that
+# is the security boundary for an OPC UA control system. Widening a ceiling is a
+# deliberate PR that runs the full suite — see docs/dependency-policy.md.
 dependencies = [
-    "cryptography>=50.0.1",
-    "httpx>=0.28.1",
+    # Parses the client certificate to derive the session's ApplicationUri, and
+    # is what python-opcua signs and encrypts the channel with. cryptography
+    # bumps its major on every feature release, so the ceiling moves often; the
+    # policy's response times are what keep it from pinning users to an old one.
+    "cryptography>=50.0.1,<51",
     # Upper bound is load-bearing: 2.x renamed FastMCP to MCPServer and moved the
     # client models to snake_case, and 3.x is free to do the same again. The
     # server targets the 2.x API (`mcp.server.mcpserver`), so 1.x no longer works
     # either — hence a floor, not just a ceiling.
     "mcp[cli]>=2.2.0,<3",
-    "opcua>=0.98.13",
+    # python-opcua is unmaintained and 0.98.13 is its final release (#144 moves
+    # off it). The ceiling is still stated: on a 0.x version the minor is the
+    # major, and a surprise 0.99 would be exactly the untested major this rules out.
+    "opcua>=0.98.13,<0.99",
 ]
 
 [project.scripts]

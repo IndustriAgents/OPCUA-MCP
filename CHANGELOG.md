@@ -260,6 +260,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that no longer exist, and `docs/mcp-registry.md` and `docs/releasing.md`
   described a four-manifest bump at 0.3.0. `uv.lock` recorded both workspace
   packages at 0.5.0 through the 0.5.1 release.
+- **The Node runtime logged a deprecation warning on every connect.** It passed
+  node-opcua the old `endpoint_must_exist` option; it now passes
+  `endpointMustExist`. Same behaviour, no warning — and the new e2e test is the
+  one that would have caught it: node-opcua reports this through its own logger,
+  not as a process warning, so no warnings filter could see it.
+
+### Changed — supported dependency ranges (#150)
+- **Every runtime dependency now has a tested floor and a ceiling below the next
+  major** (#150). The lockfiles made CI repeatable but never reached users: `pip
+  install` and `npm install -g` resolve from the declared ranges, and three of the
+  Python package's were open-ended, so a fresh install could pick up a major no
+  one here had run — on the package that is the security boundary in front of an
+  OPC UA control system. The ranges are now:
+
+  | Package | Dependency | Was | Now |
+  |---|---|---|---|
+  | PyPI | `cryptography` | `>=50.0.1` | `>=50.0.1,<51` |
+  | PyPI | `mcp[cli]` | `>=2.2.0,<3` | unchanged |
+  | PyPI | `opcua` | `>=0.98.13` | `>=0.98.13,<0.99` |
+  | PyPI | `httpx` | `>=0.28.1` | removed |
+  | npm | `@modelcontextprotocol/sdk` | `^1.0.4` | `^1.26.0` |
+  | npm | `node-opcua-client` | `^2.184.8` | unchanged |
+  | npm | `node-opcua-crypto` | `^6.0.0` | unchanged |
+
+  `httpx` was declared but never imported — the MCP SDK moved to `httpx2` — so
+  it is dropped rather than bounded, and takes `httpcore` and `certifi` out of
+  the Python install with it. The TypeScript SDK's floor rises from 1.0.4 to
+  1.26.0, the first release clear of three published high-severity advisories
+  (GHSA-w48q-cv73-mx4w, GHSA-8r9q-7v3j-jr4g, GHSA-345p-7cg4-v4c7). Those concern
+  HTTP transports and resource templates, which this stdio server does not use,
+  but a floor that admits flagged versions puts the reachability argument on
+  every user's scanner. `tests/unit/test_dependency_ranges.py` now fails if a
+  runtime range loses its floor or ceiling.
 
 ### Added
 - **A real-server conformance matrix, generated from dated results** (#147).
@@ -416,6 +449,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warnings go to stderr, so stdout remains only the preview or the report. Errors
   are printed as `Error [code]: …`, with exit code 1 for a refusal and 2 for a
   usage error, as before.
+
+- **A dependency support policy**, [docs/dependency-policy.md](docs/dependency-policy.md)
+  (#150): the supported Python and Node versions, the declared range of every
+  direct runtime dependency of both packages, the rules those ranges follow,
+  response times for advisories, failing jobs and end-of-life dependencies, and
+  which dependency changes are security-sensitive and so need the full E2E suite
+  rather than unit tests. Release SBOMs are left to #145. It is aligned with
+  ADR 0001's runtime floors, end-of-life rule and response targets.
+  [docs/releasing.md](docs/releasing.md) now puts `uv lock` in the version-bump
+  step next to the npm lockfile refresh, so `uv.lock` cannot fall behind a
+  release again, and asks for a green dependency-matrix run before tagging.
+- **A weekly dependency matrix**, `.github/workflows/dependency-matrix.yml`: the
+  full suite, both runtimes, against the *lowest* supported set (every direct
+  dependency at its floor — uv's `--resolution lowest-direct`, and
+  `scripts/pin-dependency-floors.mjs` for npm — on Python 3.10 and exactly Node
+  22.13.0) and the *latest* compatible set (no lockfile, on Python 3.13 and Node
+  24). It also runs on any PR that touches a manifest or lockfile. It is not a
+  required check. Running the lowest set before merging this showed the
+  declared floors resolve and pass, except the test suite's own
+  `pytest-asyncio>=0.24`, which can never resolve next to `pytest>=9.1.1`; that
+  floor is now the `1.3.0` it actually gets.
+- **Deprecation warnings fail the tests.** In the Python test process every
+  `DeprecationWarning` and `PendingDeprecationWarning` is an error; `npm test`
+  runs with `--throw-deprecation`; and a new e2e test starts both servers with
+  deprecation reporting on and fails on anything they print about one. Upstream
+  warnings we cannot fix are listed one by one in
+  `tests/fixtures/deprecation-allowlist.json`, each with an issue, an owner and a
+  removal condition. The one entry today is python-opcua's `datetime.utcnow()`
+  warnings on Python 3.12+, tracked by #144.
+- **Dependabot matches the policy**: runtime dependencies are never grouped, so
+  each bump gets its own PR and its own full-suite run; tooling is grouped for
+  minor and patch releases; npm's `increase-if-necessary` strategy is stated so a
+  floor stays put until a new major moves it.
+
+
+### Documentation
+- **Both runtimes are first-class, and that is now a written promise rather
+  than a habit** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md), #143).
+  The Python and Node packages meet the same conformance suite, security
+  baseline, artifact checks and release gate, and ship together at one version;
+  a divergence between them blocks the release of *both*, not only the runtime
+  at fault. The ADR records why this model won over a primary-plus-compatibility
+  tier and over retiring one runtime, what exactly is guaranteed to match (names,
+  schemas, behaviour, errors, configuration, security, bounds, release timing)
+  and what is not (speed, log wording, a client library's own error reason), the
+  runtime floors and end-of-life policy, the tests required before either
+  package ships, how a divergence is reported, and how the model itself would
+  be changed. It also settles the shared strategy for #138, #141 and #144. The
+  first ADR, so `docs/adr/` gains an index and a template.
+- **What the two runtimes do not share by design is declared, in one
+  machine-readable place.** `contract/runtime-differences.json` lists thirteen
+  deliberate differences — among them the two Node-only AES security policies,
+  the Python runtime's extension-based PEM/DER rule, the MCP protocol generation
+  each SDK speaks, the Node-only `.mcpb` bundle and registry listing, how each
+  repairs a dropped connection, and node-opcua's on-disk PKI folder — each with
+  the rationale that makes it allowed. Accidental divergences are deliberately
+  *not* in that file: the ones known today are bugs, tracked in #157 (about
+  thirty, found while writing the ADR — the most serious can make the two
+  runtimes write a different value or read a different time window for the same
+  call) and #136, and `docs/compatibility.md` now lists them with the input
+  habits that avoid them until they are fixed.
+  `tests/unit/test_runtime_differences.py` checks the file's shape and every
+  claim the repository can answer for itself — the policy lists, the runtime
+  floors in the manifests and the ADR, the SDK majors, the bundle, the registry
+  file, the installed commands, and the runtime-specific settings
+  `contract/config.json` records (today the AES entries of `runtimeChoices`) —
+  and that
+  [docs/compatibility.md](docs/compatibility.md#runtime-differences) lists
+  every entry.
+- **The docs no longer promise more interchangeability than CI enforces, or
+  less.** "Interchangeable, nothing depends on the choice" is now "first-class,
+  apart from the declared differences" in the README, `docs/install.md`,
+  `docs/architecture.md` and both package READMEs. The Python README no longer
+  implies the `.mcpb` bundle is Python. `docs/install.md` stops recommending the
+  Python executable unconditionally when SECURITY.md recommends Node for
+  untrusted networks. SECURITY.md's supported versions named only the npm
+  release; security fixes ship in both. And `docs/compatibility.md` and
+  `docs/certificates.md` still said the server certificate could not be pinned —
+  `OPCUA_SERVER_CERT` pins it, and the end-to-end suite checks that on both
+  runtimes. The README's overview also said thirteen tools; there are fifteen.
+- **A runtime divergence has somewhere to go.** The bug template gains a *both
+  runtimes, behaving differently* option, and CONTRIBUTING states the rule: a
+  behaviour change lands in both runtimes in the same PR, or is declared.
+
+## [0.5.1] — 2026-09-22
+
+0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for
+the same underlying reason: the repository moved to the IndustriAgents
+organisation on 2026-09-20, and while #125 updated the links in the prose, it
+touched no package manifest and no publishing account. 0.4.1 had shipped two days
+before the move, so 0.5.0 was the first release that could discover this.
+
+This release is 0.5.0 plus the fix, so **0.5.1 is the first published release of
+the 0.5 line** and the 0.5.0 notes below describe what is in it. Tags in this
+repository are immutable by ruleset, which is why this is a new version rather
+than a re-tag.
 
 ### Documentation
 - **Release notes link the conformance matrix at their tag** (#147).

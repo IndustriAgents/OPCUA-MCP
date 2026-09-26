@@ -11,7 +11,7 @@ way.
 
 For anything else, configure security through the environment (identical
 variables on both runtimes, documented in the
-[README](README.md#configuration)):
+[configuration guide](docs/configuration.md)):
 
 ```bash
 OPCUA_SECURITY_POLICY=Basic256Sha256   # implies SignAndEncrypt

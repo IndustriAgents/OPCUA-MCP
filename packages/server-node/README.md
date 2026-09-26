@@ -113,7 +113,7 @@ is the same request with a longer list, so it is one tool and one code path.
 OPC UA server — at most 500 nodes per read, 100 per write, 64 method arguments,
 1 MiB of arguments, and fewer where the OPC UA server publishes lower
 `OperationLimits`; the full list is in the
-[README](https://github.com/IndustriAgents/OPCUA-MCP#how-much-one-call-may-ask-for).
+[tools reference](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/tools.md#how-much-one-call-may-ask-for).
 A request over a bound is refused whole, never partly sent. And every result that
 can be partial — history, events, browse, subscriptions — carries a
 `completeness` object beside `result` in `structuredContent`: test
@@ -254,7 +254,7 @@ the node: `min`, `max`, `enum` and `max_change` narrow what an allowlisted node
 will accept, so a model that picks the right node and hallucinates `9999`
 instead of `99.9` is refused. The node's own published `EURange` applies on top,
 which is the only value bound that exists with no policy file at all. See
-[Bounding the value, not only the node](https://github.com/IndustriAgents/OPCUA-MCP#bounding-the-value-not-only-the-node).
+[Bounding the value, not only the node](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/configuration.md#bounding-the-value-not-only-the-node).
 
 Every control call is recorded — its targets, its outcome, the endpoint it went
 to, the session it rode on and the attempt number — to stderr and, with
@@ -285,7 +285,7 @@ rather than leaving the MCP client waiting on a server that never starts.
 `get_server_status` reports whether the connection is up and what the OPC UA
 server says about itself; it is the one tool that answers while the connection is
 down, and calling it is also what brings a dropped one back. See
-[Staying connected](https://github.com/IndustriAgents/OPCUA-MCP#staying-connected).
+[Staying connected](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/configuration.md#staying-connected).
 
 A control call whose session died before its response arrived is **not** silently
 re-sent. OPC UA lets a Write partially succeed and defines no operation order, so

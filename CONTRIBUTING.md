@@ -27,7 +27,7 @@ AI assistant / MCP client  ──stdio──►  MCP server (Python OR Node)  �
 
 The two MCP servers share a single tool contract ([`contract/tools.json`](contract/tools.json)): the Node server builds its `tools/list` from it and the Python server reads descriptions and capability node IDs from it, so they cannot drift (`tests/e2e/test_contract_parity.py` enforces this). The same file defines the **resource** surface, under `resources` — both servers build their `resources/list` from it.
 
-The **configuration** surface has its own contract, [`contract/config.json`](contract/config.json): every `OPCUA_*` variable, its type, default, secrecy and which runtimes read it. To add or change a setting, edit it there first, implement it in **both** runtimes, then run `npm run config:generate` in `packages/server-node` — that rewrites the settings form in `mcpb/manifest.json`, the environment variables in `server.json` and the configuration tables in the READMEs, which are generated and must not be edited by hand. `tests/unit/test_config_schema.py` fails if a runtime reads a variable the schema does not declare (or the reverse), or if a parser disagrees with a declared choice, minimum or default; CI runs `npm run config:check` for the generated files.
+The **configuration** surface has its own contract, [`contract/config.json`](contract/config.json): every `OPCUA_*` variable, its type, default, secrecy and which runtimes read it. To add or change a setting, edit it there first, implement it in **both** runtimes, then run `npm run config:generate` in `packages/server-node` — that rewrites the settings form in `mcpb/manifest.json`, the environment variables in `server.json` and the configuration tables in `docs/configuration.md` and the package READMEs, which are generated and must not be edited by hand. `tests/unit/test_config_schema.py` fails if a runtime reads a variable the schema does not declare (or the reverse), or if a parser disagrees with a declared choice, minimum or default; CI runs `npm run config:check` for the generated files.
 
 ### Generated documentation
 
@@ -38,8 +38,8 @@ the CI `lint` job — fails if any is out of date:
 
 | What | Where | Source |
 |---|---|---|
-| Tool table, count, access classes, annotations, capability gates | `README.md`, both package READMEs, `docs/examples.md` | `contract/tools.json` |
-| Configuration reference, grouped by category | `README.md`, both package READMEs (each narrowed to what its runtime reads) | `contract/config.json` |
+| Tool table, count, access classes, annotations, capability gates | `docs/tools.md`, both package READMEs, `docs/examples.md`; a summary by access class in `README.md` | `contract/tools.json` |
+| Configuration reference, grouped by category | `docs/configuration.md`, both package READMEs (each narrowed to what its runtime reads) | `contract/config.json` |
 | The release version | `ROADMAP.md`, `mcpb/manifest.json`, `server.json`, both `pyproject.toml`s, `package-lock.json`, `uv.lock` | `packages/server-node/package.json` |
 
 In Markdown, only what sits between a `<!-- BEGIN GENERATED: name ... -->` /
@@ -194,7 +194,7 @@ The servers **default** to `SecurityPolicy.None` / `MessageSecurityMode.None`
 for local development against the mock. Do **not** use that default against
 production OPC UA systems — configure `OPCUA_SECURITY_POLICY`,
 `OPCUA_CLIENT_CERT`/`OPCUA_CLIENT_KEY` and credentials
-([Configuration](README.md#configuration)), pin the server with
+([Configuration](docs/configuration.md)), pin the server with
 `OPCUA_SERVER_CERT`, and note the gaps listed in [SECURITY.md](SECURITY.md)
 (notably that there is no CA trust list for the server certificate, only
 pinning, and that a written value is bounded only where the node publishes an

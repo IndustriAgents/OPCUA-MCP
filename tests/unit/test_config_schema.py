@@ -231,10 +231,10 @@ def test_server_json_exposes_every_applicable_setting():
 # --- the documentation names no setting the servers do not read ----------------
 #
 # That every setting is *documented* is no longer a test here: the configuration
-# tables in the three READMEs are generated from the schema between markers
-# (#149), and `npm run config:check` fails if one is stale or its markers are
-# gone. What generation cannot cover is prose, which is where a renamed or
-# removed variable survives.
+# tables in the package READMEs and docs/configuration.md are generated from the
+# schema between markers (#149), and `npm run config:check` fails if one is stale
+# or its markers are gone. What generation cannot cover is prose, which is where a
+# renamed or removed variable survives.
 
 #: User-facing docs that mention settings; checked for stale names.
 USER_DOCS = [
@@ -247,9 +247,11 @@ USER_DOCS = [
     ROOT / "docs" / "architecture.md",
     ROOT / "docs" / "certificates.md",
     ROOT / "docs" / "compatibility.md",
+    ROOT / "docs" / "configuration.md",
     ROOT / "docs" / "examples.md",
     ROOT / "docs" / "install.md",
     ROOT / "docs" / "mcp-registry.md",
+    ROOT / "docs" / "tools.md",
     # Not docs/testing.md: it also names the test suite's own OPCUA_* variables.
 ]
 

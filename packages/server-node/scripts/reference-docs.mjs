@@ -4,6 +4,7 @@
 //
 //   tool-reference     tool table, count and access classes    contract/tools.json
 //   tool-index         the same, linked to docs/examples.md    contract/tools.json
+//   tool-summary       tool names by access class, and count   contract/tools.json
 //   config-reference   OPCUA_* tables, grouped by category     contract/config.json
 //   version            the release version, inline             packages/server-node/package.json
 //
@@ -170,6 +171,47 @@ export function renderToolReference(contract, { link, anchors }) {
   ].join("\n");
 }
 
+/** Which profile offers each access class, in the words the summary uses. */
+const OFFERED_UNDER = {
+  read: "every profile, including the default `observe`",
+  monitor: "every profile, including the default `observe`",
+  "alarm-action": "`operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`",
+  control: "`operator`, for allowlisted targets only, or `full`",
+};
+
+/**
+ * The tool summary: one row per access class, naming its tools — the front
+ * page's view of the surface, with the full table left to `reference`.
+ */
+export function renderToolSummary(contract, { link, reference }) {
+  const tools = contract.tools;
+  for (const tool of tools) {
+    if (!OFFERED_UNDER[tool.accessClass]) {
+      throw new Error(`${tool.name}: access class ${tool.accessClass} has no explanation here`);
+    }
+  }
+  const rows = ACCESS_ORDER.map((access) => [access, tools.filter((t) => t.accessClass === access)])
+    .filter(([, inClass]) => inClass.length > 0)
+    .map(([access, inClass]) => [
+      `**${access}**`,
+      OFFERED_UNDER[access],
+      inClass
+        .map((tool) => code(tool.name) + (tool.capabilities.length > 0 ? " †" : ""))
+        .join(" · "),
+    ]);
+  return [
+    `**${tools.length} tools**, identical on both runtimes and defined once in ` +
+      `[${code("contract/tools.json")}](${link("contract/tools.json")}). ` +
+      `Arguments, results and limits: [${reference}](${link(reference)}).`,
+    "",
+    table(["Access", "Offered under", "Tools"], rows),
+    "",
+    "Control and alarm tools also need a verified server (a secured channel and a " +
+      "pinned `OPCUA_SERVER_CERT`) unless a lab override is set. " +
+      "† Works only on a server that advertises the feature it needs, such as historical access.",
+  ].join("\n");
+}
+
 /** The anchor of each tool's section in a Markdown document: the first heading
  *  that names the tool in code. A tool with no section is an error, because
  *  docs/examples.md is where CONTRIBUTING says every tool is documented. */
@@ -278,8 +320,10 @@ function linker(file, repoUrl) {
 export const DOC_TARGETS = [
   {
     file: "README.md",
-    blocks: { "tool-reference": { tools: {} }, "config-reference": { config: {} } },
+    blocks: { "tool-summary": { tools: { summary: "docs/tools.md" } } },
   },
+  { file: "docs/tools.md", blocks: { "tool-reference": { tools: {} } } },
+  { file: "docs/configuration.md", blocks: { "config-reference": { config: {} } } },
   {
     file: "packages/server-node/README.md",
     blocks: {
@@ -303,6 +347,7 @@ const GENERATOR = "packages/server-node/scripts/config-artifacts.mjs";
 const SOURCES = {
   "tool-reference": "contract/tools.json",
   "tool-index": "contract/tools.json",
+  "tool-summary": "contract/tools.json",
   "config-reference": "contract/config.json",
 };
 
@@ -336,6 +381,13 @@ export function renderDocument(target, markdown, { schema, contract, version, re
     seen.push(name);
     if (spec.version) return wrap(name, `**${version}**`, true);
     if (spec.config) return wrap(name, renderConfigReference(schema, spec.config), false);
+    if (spec.tools.summary) {
+      return wrap(
+        name,
+        renderToolSummary(contract, { link, reference: spec.tools.summary }),
+        false
+      );
+    }
     const anchors = spec.tools.linked ? toolAnchors(contract, markdown, target.file) : undefined;
     return wrap(name, renderToolReference(contract, { link, anchors }), false);
   });

@@ -1,0 +1,101 @@
+{
+  "$comment": "Conformance config for the Eclipse Milo example server (milo-examples/server-examples, org.eclipse.milo.examples.server.ExampleServer), run unmodified from Milo's own source. Build it with compatibility/labs/milo/build.sh and export MILO_CLASSPATH as it says. Milo's example hard-codes its demo accounts in its source; the harness still takes them from the environment (MILO_EXAMPLE_USERNAME / MILO_EXAMPLE_PASSWORD) so no config file ever carries a credential.",
+  "schemaVersion": 1,
+  "server": {
+    "id": "milo-example",
+    "name": "Eclipse Milo example server",
+    "implementation": "Eclipse Milo (Java)",
+    "language": "Java",
+    "independent": true,
+    "source": "https://github.com/eclipse-milo/milo/tree/v1.1.7/milo-examples/server-examples"
+  },
+  "endpoint": "opc.tcp://127.0.0.1:12686/milo",
+  "lab": {
+    "variables": {
+      "classpath": { "env": "MILO_CLASSPATH" }
+    },
+    "command": [
+      "java", "-Djava.io.tmpdir={state}", "-cp", "{classpath}",
+      "org.eclipse.milo.examples.server.ExampleServer"
+    ],
+    "trustDirectories": ["{state}/server/security/pki/trusted/certs"],
+    "startupSeconds": 60,
+    "warmupSeconds": 5
+  },
+  "security": {
+    "policy": "Basic256Sha256",
+    "modes": ["None", "Sign", "SignAndEncrypt"],
+    "default": { "policy": "None", "mode": "None" },
+    "clientTrust": "enforced"
+  },
+  "identities": {
+    "anonymous": true,
+    "user": {
+      "username": { "env": "MILO_EXAMPLE_USERNAME" },
+      "password": { "env": "MILO_EXAMPLE_PASSWORD" }
+    },
+    "x509": true
+  },
+  "namespaces": { "hello-world": "urn:eclipse:milo:hello-world" },
+  "nodes": {
+    "browseRoot": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld",
+    "scalars": {
+      "Boolean": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Boolean",
+      "Byte": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Byte",
+      "SByte": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/SByte",
+      "Int16": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Int16",
+      "Int32": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Int32",
+      "Int64": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Int64",
+      "UInt16": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/UInt16",
+      "UInt32": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/UInt32",
+      "UInt64": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/UInt64",
+      "Float": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Float",
+      "Double": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Double",
+      "String": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/String",
+      "DateTime": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/DateTime",
+      "Guid": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Guid",
+      "ByteString": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/ByteString",
+      "XmlElement": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/XmlElement",
+      "LocalizedText": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/LocalizedText",
+      "QualifiedName": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/QualifiedName",
+      "NodeId": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/NodeId"
+    },
+    "arrays": {
+      "Boolean": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/BooleanArray",
+      "Int32": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/Int32Array",
+      "UInt64": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/UInt64Array",
+      "Double": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/DoubleArray",
+      "String": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/StringArray",
+      "DateTime": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/DateTimeArray",
+      "LocalizedText": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ArrayTypes/LocalizedTextArray"
+    },
+    "structures": {
+      "CustomStructType": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/CustomStructTypeVariable",
+      "CustomUnionType": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/CustomUnionTypeVariable"
+    },
+    "writable": [
+      { "node": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Double", "value": 12.5 },
+      { "node": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/ScalarTypes/Int32", "value": -7 }
+    ],
+    "deniedWrite": { "node": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/OnlyAdminCanWrite/String", "value": "conformance" },
+    "deniedRead": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/OnlyAdminCanRead/String",
+    "unknown": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/DoesNotExist",
+    "method": {
+      "object": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld",
+      "method": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/sqrt(x)",
+      "arguments": [16.0],
+      "outputTypes": ["Double"]
+    },
+    "historized": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/Dynamic/Double",
+    "changing": "nsu=urn:eclipse:milo:hello-world;s=HelloWorld/Dynamic/Double",
+    "events": { "source": "ns=0;i=2253" }
+  },
+  "triage": [
+    {
+      "scenario": "values.structure",
+      "outcome": "project-bug",
+      "summary": "Milo's custom structure and union come back as a string, not an object, on both runtimes: the shared value codec has no ExtensionObject rule, so each runtime returns its client library's own text for the value, and neither decodes a server-defined type from its DataTypeDefinition.",
+      "tracking": "#171"
+    }
+  ]
+}

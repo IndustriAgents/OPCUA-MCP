@@ -46,3 +46,6 @@ build-pyinstaller/
 # Local Claude Code config (machine-specific)
 .mcp.json
 .claude/settings.local.json
+
+# Conformance lab builds (compatibility/labs/*/build.sh)
+.conformance/

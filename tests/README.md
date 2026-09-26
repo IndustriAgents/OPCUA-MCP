@@ -199,6 +199,23 @@ uv run --no-sync pytest -v -k "[node]"
 The brackets matter: they match the parametrisation id. A plain `-k node` would
 also match test *names* like `test_read_opcua_node`.
 
+## Real-server conformance (opt-in)
+
+`conformance/` is not a pytest tier: it drives both runtimes against an OPC UA
+server *you* point it at, described by a JSON config, and writes a result file
+rather than passing or failing. It is how `docs/compatibility.md`'s server matrix
+is produced — see [Real-server conformance](../docs/compatibility.md#real-server-conformance)
+for the config format and what the outcomes mean.
+
+```bash
+uv run --no-sync python -m conformance run --config ../compatibility/labs/milo.json
+uv run --no-sync python -m conformance render
+```
+
+What the unit tier does check, in `unit/test_conformance.py`: that a config
+cannot hold a credential, that a result cannot hold an endpoint, node id or
+secret, and that the committed matrix is exactly what the committed results say.
+
 ## Notes
 
 - The mock server's method callbacks update internal state; OPC UA node values

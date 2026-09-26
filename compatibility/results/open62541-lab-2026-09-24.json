@@ -1,0 +1,851 @@
+{
+  "schemaVersion": 1,
+  "server": {
+    "id": "open62541-lab",
+    "name": "open62541 conformance lab server",
+    "implementation": "open62541 (C)",
+    "language": "C",
+    "independent": true,
+    "source": "compatibility/labs/open62541/lab_server.c",
+    "build_info": {
+      "product_name": "open62541 conformance lab server",
+      "product_uri": "http://open62541.org",
+      "manufacturer_name": "open62541",
+      "software_version": "1.5.8",
+      "build_number": "Sep 24 2026 19:13:27",
+      "build_date": "2026-09-24T18:24:35.735737Z"
+    }
+  },
+  "endpoint_features": {
+    "endpoints": [
+      {
+        "policy": "Aes128_Sha256_RsaOaep",
+        "mode": "Sign",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "Aes128_Sha256_RsaOaep",
+        "mode": "SignAndEncrypt",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "Aes256_Sha256_RsaPss",
+        "mode": "Sign",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "Aes256_Sha256_RsaPss",
+        "mode": "SignAndEncrypt",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "Basic256Sha256",
+        "mode": "Sign",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "Basic256Sha256",
+        "mode": "SignAndEncrypt",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      },
+      {
+        "policy": "None",
+        "mode": "None",
+        "user_tokens": [
+          "Anonymous",
+          "Certificate",
+          "UserName"
+        ]
+      }
+    ],
+    "discovery_error": null
+  },
+  "configuration": {
+    "security_modes": [
+      "None",
+      "Sign",
+      "SignAndEncrypt"
+    ],
+    "security_policy": "Basic256Sha256",
+    "default_channel": "None/None",
+    "client_trust": "enforced",
+    "identities": [
+      "anonymous",
+      "user",
+      "x509"
+    ],
+    "lab_server_controlled": true,
+    "node_map": [
+      "alarms",
+      "arrays",
+      "browseRoot",
+      "changing",
+      "deniedMethod",
+      "deniedRead",
+      "deniedWrite",
+      "events",
+      "historized",
+      "historyPaging",
+      "largeFolder",
+      "method",
+      "scalars",
+      "structures",
+      "unknown",
+      "writable"
+    ]
+  },
+  "harness": {
+    "git_commit": "929edec",
+    "config": "compatibility/labs/open62541.json"
+  },
+  "started": "2026-09-24T18:25:05Z",
+  "finished": "2026-09-24T18:26:58Z",
+  "runs": [
+    {
+      "runtime": "python",
+      "runtime_version": "3.13.3",
+      "package_version": "0.5.1",
+      "opcua_library": "opcua 0.98.13",
+      "mcp_sdk": "mcp 2.2.0",
+      "started": "2026-09-24T18:25:06Z",
+      "scenarios": [
+        {
+          "id": "connect.status",
+          "detail": "connected; ServerStatus and BuildInfo read",
+          "evidence": {
+            "server_state": "Running",
+            "diagnostics_published": true
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "connect.namespaces",
+          "detail": "all 1 configured namespace URIs resolved",
+          "evidence": {
+            "namespace_count": 3
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "connect.endpoint-discovery",
+          "detail": "Basic256Sha256/SignAndEncrypt with the certificate from GetEndpoints",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.none",
+          "detail": "None/None: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.sign",
+          "detail": "Basic256Sha256/Sign: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.sign-and-encrypt",
+          "detail": "Basic256Sha256/SignAndEncrypt: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.server-pinned",
+          "detail": "pinned server certificate accepted and reported as authenticated",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "security.server-impostor",
+          "detail": "an impostor server certificate was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: not yet known)"
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "security.client-untrusted",
+          "detail": "an untrusted client certificate was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: not yet known)"
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "identity.anonymous",
+          "detail": "anonymous session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username",
+          "detail": "username/password session",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "identity.username-rejected",
+          "detail": "a wrong password was refused",
+          "evidence": {
+            "reason": "Still connecting to the OPC UA server at <endpoint>; a connection attempt is in progress (last failure: \"User does not have permission to perform the requested operation.\"(BadUserAccessDenied))"
+          },
+          "outcome": "pass",
+          "duration_s": 3.4
+        },
+        {
+          "id": "identity.x509",
+          "detail": "X.509 user session",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "browse.children",
+          "detail": "9 children",
+          "evidence": {
+            "truncated": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "browse.continuation",
+          "detail": "1200 children (expected at least 1200)",
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "values.scalar",
+          "detail": "11 scalar types read with the right data_type",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "ByteString",
+              "DateTime",
+              "Double",
+              "Float",
+              "Guid",
+              "Int32",
+              "Int64",
+              "LocalizedText",
+              "String",
+              "UInt16"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.array",
+          "detail": "4 array types read as JSON arrays",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "Double",
+              "Int32",
+              "String"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.5
+        },
+        {
+          "id": "values.structure",
+          "detail": "Range: String, not an object; EUInformation: String, not an object",
+          "evidence": {
+            "shapes": {
+              "Range": "String",
+              "EUInformation": "String"
+            }
+          },
+          "outcome": "project-bug",
+          "triage": {
+            "summary": "Structured values \u2014 even namespace-0 types both libraries know, Range and EUInformation \u2014 come back as a string, not an object: python-opcua's unformatted repr on Python ('Range(Low:{self.Low}, High:{self.High})', so the field values are lost) and node-opcua's debug dump on Node. The shared value codec has no ExtensionObject rule, so the two runtimes also disagree.",
+            "tracking": "#171"
+          },
+          "duration_s": 0.4
+        },
+        {
+          "id": "write.readback",
+          "detail": "2 nodes written in one batch and read back",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.read",
+          "detail": "50 nodes in one call (server limit 40)",
+          "evidence": {
+            "server_max_nodes_per_read": 40,
+            "batch": 50,
+            "good": 50
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.write",
+          "detail": "25-node write refused whole, naming the server's limit of 20",
+          "evidence": {
+            "refused_before_sending": true,
+            "server_max_nodes_per_write": 20,
+            "batch": 25,
+            "good": 0
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "method.call",
+          "detail": "2 input and 2 output arguments",
+          "evidence": {
+            "output_kinds": [
+              "String",
+              "Number"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.raw",
+          "detail": "9 raw values, plus 1 BadBoundNotFound bound placeholder(s)",
+          "evidence": {
+            "count": 9,
+            "bound_placeholders": 1
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.continuation",
+          "detail": "first response 24 of 100, reported incomplete; the continuation reached all 100 in 5 calls",
+          "evidence": {
+            "requested": 100,
+            "server_page_size": 25,
+            "first_response": 24,
+            "bound_placeholders": 1,
+            "completeness_reported": true,
+            "reasons": [
+              "serverLimit"
+            ],
+            "calls": 5,
+            "collected": 116,
+            "reached_end": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.aggregate",
+          "detail": "server advertises no aggregate functions",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "subscription.data-change",
+          "detail": "17 data changes in 4 s",
+          "evidence": {
+            "changes": 17
+          },
+          "outcome": "pass",
+          "duration_s": 4.4
+        },
+        {
+          "id": "subscription.deadband",
+          "detail": "absolute deadband accepted; 17 changes",
+          "evidence": {
+            "changes": 17
+          },
+          "outcome": "pass",
+          "duration_s": 4.5
+        },
+        {
+          "id": "events.subscribe",
+          "detail": "1 events received",
+          "evidence": {
+            "event_types": 1
+          },
+          "outcome": "pass",
+          "duration_s": 1.4
+        },
+        {
+          "id": "events.history",
+          "detail": "server does not advertise AccessHistoryEventsCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "alarms.list",
+          "detail": "1 retained conditions",
+          "evidence": {
+            "with_condition_id": 1
+          },
+          "outcome": "pass",
+          "duration_s": 1.7
+        },
+        {
+          "id": "alarms.acknowledge",
+          "detail": "acknowledged a retained condition by event_id",
+          "outcome": "pass",
+          "duration_s": 1.7
+        },
+        {
+          "id": "authz.denied-write",
+          "detail": "refused per item with BadUserAccessDenied; session intact",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-read",
+          "detail": "refused per item with BadUserAccessDenied",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-method",
+          "detail": "refused: Failed to call method <node> on object <node> Method call failed with status: BadUserAccessDenied",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.unknown-node",
+          "detail": "unknown node answered per item with BadNodeIdUnknown",
+          "evidence": {
+            "status": "BadNodeIdUnknown"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "recovery.restart",
+          "detail": "read failed cleanly while down and recovered on the same MCP session",
+          "evidence": {
+            "answered_while_down_s": 11.8
+          },
+          "outcome": "pass",
+          "duration_s": 12.5
+        },
+        {
+          "id": "recovery.subscription",
+          "detail": "subscription resumed; 12 changes after the restart",
+          "evidence": {
+            "changes_after": 12
+          },
+          "outcome": "pass",
+          "duration_s": 9.8
+        },
+        {
+          "id": "recovery.namespace-reorder",
+          "detail": "namespace index moved 2 -> 3 and was re-resolved",
+          "evidence": {
+            "index_before": 2,
+            "index_after": 3
+          },
+          "outcome": "pass",
+          "duration_s": 5.0
+        }
+      ],
+      "finished": "2026-09-24T18:26:10Z",
+      "summary": {
+        "pass": 35,
+        "project-bug": 1,
+        "unsupported-optional": 2
+      }
+    },
+    {
+      "runtime": "node",
+      "runtime_version": "22.14.0",
+      "package_version": "0.5.1",
+      "opcua_library": "node-opcua-client 2.186.0",
+      "mcp_sdk": "@modelcontextprotocol/sdk 1.30.0",
+      "started": "2026-09-24T18:26:10Z",
+      "scenarios": [
+        {
+          "id": "connect.status",
+          "detail": "connected; ServerStatus and BuildInfo read",
+          "evidence": {
+            "server_state": "Running",
+            "diagnostics_published": true
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "connect.namespaces",
+          "detail": "all 1 configured namespace URIs resolved",
+          "evidence": {
+            "namespace_count": 3
+          },
+          "outcome": "pass",
+          "duration_s": 0.3
+        },
+        {
+          "id": "connect.endpoint-discovery",
+          "detail": "Basic256Sha256/SignAndEncrypt with the certificate from GetEndpoints",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.none",
+          "detail": "None/None: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.sign",
+          "detail": "Basic256Sha256/Sign: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.sign-and-encrypt",
+          "detail": "Basic256Sha256/SignAndEncrypt: connected and read",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.server-pinned",
+          "detail": "pinned server certificate accepted and reported as authenticated",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.server-impostor",
+          "detail": "an impostor server certificate was refused",
+          "evidence": {
+            "reason": "The connection may have been rejected by server, Err = (ClientTCP_transport1: socket has been disconnected by third party)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "security.client-untrusted",
+          "detail": "an untrusted client certificate was refused",
+          "evidence": {
+            "reason": "The connection may have been rejected by server, Err = (ClientTCP_transport3: socket has been disconnected by third party)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.anonymous",
+          "detail": "anonymous session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username",
+          "detail": "username/password session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.username-rejected",
+          "detail": "a wrong password was refused",
+          "evidence": {
+            "reason": "serviceResult = BadUserAccessDenied (0x801f0000)"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "identity.x509",
+          "detail": "X.509 user session",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "browse.children",
+          "detail": "9 children",
+          "evidence": {
+            "truncated": false
+          },
+          "outcome": "pass",
+          "duration_s": 0.3
+        },
+        {
+          "id": "browse.continuation",
+          "detail": "1200 children (expected at least 1200)",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.scalar",
+          "detail": "11 scalar types read with the right data_type",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "ByteString",
+              "DateTime",
+              "Double",
+              "Float",
+              "Guid",
+              "Int32",
+              "Int64",
+              "LocalizedText",
+              "String",
+              "UInt16"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.array",
+          "detail": "4 array types read as JSON arrays",
+          "evidence": {
+            "types": [
+              "Boolean",
+              "Double",
+              "Int32",
+              "String"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "values.structure",
+          "detail": "Range: String, not an object; EUInformation: String, not an object",
+          "evidence": {
+            "shapes": {
+              "Range": "String",
+              "EUInformation": "String"
+            }
+          },
+          "outcome": "project-bug",
+          "triage": {
+            "summary": "Structured values \u2014 even namespace-0 types both libraries know, Range and EUInformation \u2014 come back as a string, not an object: python-opcua's unformatted repr on Python ('Range(Low:{self.Low}, High:{self.High})', so the field values are lost) and node-opcua's debug dump on Node. The shared value codec has no ExtensionObject rule, so the two runtimes also disagree.",
+            "tracking": "#171"
+          },
+          "duration_s": 0.4
+        },
+        {
+          "id": "write.readback",
+          "detail": "2 nodes written in one batch and read back",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.read",
+          "detail": "50 nodes in one call (server limit 40)",
+          "evidence": {
+            "server_max_nodes_per_read": 40,
+            "batch": 50,
+            "good": 50
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "limits.write",
+          "detail": "25-node write refused whole, naming the server's limit of 20",
+          "evidence": {
+            "refused_before_sending": true,
+            "server_max_nodes_per_write": 20,
+            "batch": 25,
+            "good": 0
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "method.call",
+          "detail": "2 input and 2 output arguments",
+          "evidence": {
+            "output_kinds": [
+              "String",
+              "Number"
+            ]
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.raw",
+          "detail": "9 raw values, plus 1 BadBoundNotFound bound placeholder(s)",
+          "evidence": {
+            "count": 9,
+            "bound_placeholders": 1
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.continuation",
+          "detail": "first response 24 of 100, reported incomplete; the continuation reached the end of the server's 35 values in 2 calls",
+          "evidence": {
+            "requested": 100,
+            "server_page_size": 25,
+            "first_response": 24,
+            "bound_placeholders": 1,
+            "completeness_reported": true,
+            "reasons": [
+              "serverLimit"
+            ],
+            "calls": 2,
+            "collected": 35,
+            "reached_end": true
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "history.aggregate",
+          "detail": "server advertises no aggregate functions",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.3
+        },
+        {
+          "id": "subscription.data-change",
+          "detail": "17 data changes in 4 s",
+          "evidence": {
+            "changes": 17
+          },
+          "outcome": "pass",
+          "duration_s": 4.4
+        },
+        {
+          "id": "subscription.deadband",
+          "detail": "absolute deadband accepted; 17 changes",
+          "evidence": {
+            "changes": 17
+          },
+          "outcome": "pass",
+          "duration_s": 4.4
+        },
+        {
+          "id": "events.subscribe",
+          "detail": "1 events received",
+          "evidence": {
+            "event_types": 1
+          },
+          "outcome": "pass",
+          "duration_s": 1.4
+        },
+        {
+          "id": "events.history",
+          "detail": "server does not advertise AccessHistoryEventsCapability",
+          "outcome": "unsupported-optional",
+          "duration_s": 0.4
+        },
+        {
+          "id": "alarms.list",
+          "detail": "1 retained conditions",
+          "evidence": {
+            "with_condition_id": 1
+          },
+          "outcome": "pass",
+          "duration_s": 1.6
+        },
+        {
+          "id": "alarms.acknowledge",
+          "detail": "acknowledged a retained condition by event_id",
+          "outcome": "pass",
+          "duration_s": 1.6
+        },
+        {
+          "id": "authz.denied-write",
+          "detail": "refused per item with BadUserAccessDenied; session intact",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-read",
+          "detail": "refused per item with BadUserAccessDenied",
+          "evidence": {
+            "status": "BadUserAccessDenied"
+          },
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.denied-method",
+          "detail": "refused: Failed to call method <node> on object <node> Method call failed with status: BadUserAccessDenied",
+          "outcome": "pass",
+          "duration_s": 0.4
+        },
+        {
+          "id": "authz.unknown-node",
+          "detail": "unknown node answered per item with BadNodeIdUnknown",
+          "evidence": {
+            "status": "BadNodeIdUnknown"
+          },
+          "outcome": "pass",
+          "duration_s": 0.3
+        },
+        {
+          "id": "recovery.restart",
+          "detail": "read failed cleanly while down and recovered on the same MCP session",
+          "evidence": {
+            "answered_while_down_s": 15.6
+          },
+          "outcome": "pass",
+          "duration_s": 16.2
+        },
+        {
+          "id": "recovery.subscription",
+          "detail": "subscription resumed; 12 changes after the restart",
+          "evidence": {
+            "changes_after": 12
+          },
+          "outcome": "pass",
+          "duration_s": 6.5
+        },
+        {
+          "id": "recovery.namespace-reorder",
+          "detail": "namespace index moved 2 -> 3 and was re-resolved",
+          "evidence": {
+            "index_before": 2,
+            "index_after": 3
+          },
+          "outcome": "pass",
+          "duration_s": 1.7
+        }
+      ],
+      "finished": "2026-09-24T18:26:58Z",
+      "summary": {
+        "pass": 35,
+        "project-bug": 1,
+        "unsupported-optional": 2
+      }
+    }
+  ]
+}

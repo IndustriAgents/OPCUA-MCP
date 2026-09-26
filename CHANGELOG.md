@@ -262,6 +262,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packages at 0.5.0 through the 0.5.1 release.
 
 ### Added
+- **A real-server conformance matrix, generated from dated results** (#147).
+  `python -m conformance` (in `tests/`) drives both runtimes over stdio through
+  38 scenarios — discovery, every security mode, pinning, an impostor server
+  certificate, an untrusted client certificate, username, wrong password and
+  X.509 users, browse across continuation points, scalar, array and structured
+  values, batched writes, operation limits, methods, raw and aggregate history,
+  subscriptions and deadbands, events, retained alarms and acknowledgement,
+  server-side permission refusals, and a server restart under an open session,
+  including one that reorders the namespaces — against any endpoint a JSON
+  config describes, and writes one result per run to `compatibility/results/`.
+  A config maps the vendor's own nodes onto the scenarios and takes credentials
+  only as environment references; a result records BuildInfo, runtime and
+  package versions, timestamps and a classified outcome per scenario, and never
+  an endpoint, node id, value or credential. The server table in
+  `docs/compatibility.md` is rendered from those files, with the meaning of
+  *supported*, *partially supported* and *unverified* written down beside it,
+  and a unit test fails if it drifts or a failure is published unclassified.
+  First results: **open62541 1.5.8** and **Eclipse Milo 1.1.7**, both built from
+  source and run on both runtimes, both *partially supported* for one reason:
+  a structured (ExtensionObject) value comes back as a library-specific string
+  rather than an object, on Python with its field values lost
+  ([#171](https://github.com/IndustriAgents/OPCUA-MCP/issues/171)). The same
+  runs confirm the #139/#137 behaviour against a real server: reads are chunked
+  at the server's `MaxNodesPerRead`, an over-limit write is refused whole
+  naming `MaxNodesPerWrite`, and a paged history read reports itself
+  incomplete with a continuation that reaches every value. History bounding
+  values are tracked in
+  [#172](https://github.com/IndustriAgents/OPCUA-MCP/issues/172). A manual **Real-server conformance**
+  workflow builds both servers in CI and runs the harness there; it is not a
+  required check.
 - **The identity status is reported everywhere control is decided.**
   `get_server_status` carries a new `server_identity` object
   (`channel_secured`, `server_authenticated`, `authentication_method`, and
@@ -348,6 +378,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release requirement.
 
 ### Documentation
+- **Release notes link the conformance matrix at their tag** (#147).
+  [docs/releasing.md](docs/releasing.md#the-conformance-matrix-in-the-release-notes)
+  says how, and when a release may be called production-qualified for a server:
+  only with a result at the version being released.
 - **Both runtimes are first-class, and that is now a written promise rather
   than a habit** ([ADR 0001](docs/adr/0001-two-first-class-runtimes.md), #143).
   The Python and Node packages meet the same conformance suite, security

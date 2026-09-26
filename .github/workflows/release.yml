@@ -589,7 +589,7 @@ jobs:
       # SLSA build provenance for every asset and for the manifest itself, tied
       # to this run, its commit and its workflow file. `gh attestation verify`
       # checks it with any GitHub account; no write access needed.
-      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: steps.state.outputs.released != 'true'
         with:
           subject-path: |

@@ -37,6 +37,8 @@ const CONTEXT = {
 
 const README = DOC_TARGETS.find((target) => target.file === "README.md");
 const readme = () => normalizeEol(readFileSync(targetPath(README), "utf8"));
+const CONFIGURATION = DOC_TARGETS.find((target) => target.file === "docs/configuration.md");
+const configuration = () => normalizeEol(readFileSync(targetPath(CONFIGURATION), "utf8"));
 
 describe("generated reference docs", () => {
   it("rewrites a stale tool count", () => {
@@ -50,10 +52,17 @@ describe("generated reference docs", () => {
   });
 
   it("restores a variable deleted from a configuration table", () => {
-    const current = readme();
+    const current = configuration();
     const row = current.split("\n").find((line) => line.startsWith("| `OPCUA_AUDIT_FILE` |"));
-    assert.ok(row, "the README's table has an OPCUA_AUDIT_FILE row");
+    assert.ok(row, "docs/configuration.md's table has an OPCUA_AUDIT_FILE row");
     const stale = current.replace(`${row}\n`, "");
+    assert.equal(renderDocument(CONFIGURATION, stale, CONTEXT), current);
+  });
+
+  it("restores a tool deleted from the README's summary", () => {
+    const current = readme();
+    const stale = current.replace(" · `act_on_alarm`", "");
+    assert.notEqual(stale, current, "the README's summary names act_on_alarm");
     assert.equal(renderDocument(README, stale, CONTEXT), current);
   });
 
@@ -74,11 +83,8 @@ describe("generated reference docs", () => {
   });
 
   it("refuses a file whose marker pair was deleted", () => {
-    const stale = readme().replace(/<!-- (BEGIN|END) GENERATED: tool-reference[^>]*-->\n?/g, "");
-    assert.throws(
-      () => renderDocument(README, stale, CONTEXT),
-      /no generated tool-reference block/
-    );
+    const stale = readme().replace(/<!-- (BEGIN|END) GENERATED: tool-summary[^>]*-->\n?/g, "");
+    assert.throws(() => renderDocument(README, stale, CONTEXT), /no generated tool-summary block/);
   });
 
   it("refuses a generated block the file does not declare", () => {

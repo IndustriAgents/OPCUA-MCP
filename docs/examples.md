@@ -139,7 +139,7 @@ write_opcua_nodes argument nodes[0].value is a string of 131073 bytes, over the 
 ```
 
 The numbers are in `../contract/tools.json` -> `limits` and in the
-[README](../README.md#how-much-one-call-may-ask-for). The connected server's own
+[tools reference](tools.md#how-much-one-call-may-ask-for). The connected server's own
 `OperationLimits` can only lower them: reads go out in chunks of its
 `MaxNodesPerRead`, and a write batch over its `MaxNodesPerWrite` is refused rather
 than split. The bundled mock publishes 100 and 50, so both happen against it.
@@ -483,7 +483,7 @@ This is the one tool that never fails for being disconnected — it reports it:
 ```
 
 Calling it is also what re-establishes a dropped connection, so it doubles as
-"try again now". See [Staying connected](../README.md#staying-connected).
+"try again now". See [Staying connected](configuration.md#staying-connected).
 
 ---
 

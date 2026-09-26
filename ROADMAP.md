@@ -126,7 +126,7 @@ are the part that would have to change, and they were only just stabilised at
 equipment first: whether sessions are actually scarce, and whether anyone is
 trying to run this for a line rather than for themselves, decides whether this is
 worth the tool-surface break. Until then, one process per endpoint is not a
-workaround, it is the design, and [README.md](README.md#overview) now says so
+workaround, it is the design, and [the configuration guide](docs/configuration.md#one-process-one-endpoint) now says so
 where someone would meet it.
 
 **Reopen when** a compatibility report or a user says they are running this

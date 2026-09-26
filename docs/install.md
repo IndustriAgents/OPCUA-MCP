@@ -130,8 +130,8 @@ The config file it writes lives at:
 
 ## 4. Editing the config by hand
 
-The form the [README quick start](../README.md#quick-start) documents, and the
-right one for Claude Code (`claude mcp add …`), Cursor, or anything scripted:
+The form the [README](../README.md#connect-your-agent) documents, and the
+right one for Cursor, Gemini CLI, Antigravity, Windsurf, or anything scripted:
 
 ```json
 {

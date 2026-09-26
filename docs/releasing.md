@@ -35,7 +35,8 @@ A release whose changes touch authentication, authorisation, the audit trail or
 a default — anything in `contract/config.json` with `securityRelevant: true`,
 the policy layer, or a `guard` in `contract/tools.json` — gets one more item in
 its release PR: re-read [SECURITY.md](../SECURITY.md), the Security sections of
-the README and both package READMEs, the security notes in
+the README (Going to production), `docs/configuration.md` and both package
+READMEs, the security notes in
 [CONTRIBUTING.md](../CONTRIBUTING.md) and the `long_description` in
 `mcpb/manifest.json`, and say in the PR that they still describe what ships.
 Stale security documentation gives users the wrong threat model, and none of it

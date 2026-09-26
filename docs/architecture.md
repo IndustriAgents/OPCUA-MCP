@@ -772,7 +772,7 @@ examples/                    standalone demo scripts
 Connection security is configured through the environment, by the same variables
 on both runtimes: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`,
 `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_USERNAME` and `OPCUA_PASSWORD`
-(see [Configuration](../README.md#configuration)). Each runtime parses and
+(see [Configuration](configuration.md)). Each runtime parses and
 validates them in one module — `security.ts` / `security.py` — which the client
 factory, the capability probes and the startup check all go through, so a
 probe cannot end up on a different security footing than the session it

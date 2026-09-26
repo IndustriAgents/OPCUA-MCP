@@ -11,7 +11,7 @@ runtime connects, even unsecured; it is never used for a secured channel, which
 refuses to start without `OPCUA_CLIENT_CERT`. See the
 [runtime differences](compatibility.md#runtime-differences).)
 
-Which variables to set: [Configuration](../README.md#configuration). What the
+Which variables to set: [Configuration](configuration.md). What the
 servers verify and what they do not: [SECURITY.md](../SECURITY.md). A rehearsal
 against a secured mock, with throwaway certificates:
 [testing.md §4](testing.md#4-a-secured-connection-by-hand).

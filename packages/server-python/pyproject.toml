@@ -20,11 +20,13 @@ dependencies = [
     # client models to snake_case, and 3.x is free to do the same again. The
     # server targets the 2.x API (`mcp.server.mcpserver`), so 1.x no longer works
     # either — hence a floor, not just a ceiling.
+    "jsonschema>=4.23,<5",
     "mcp[cli]>=2.2.0,<3",
     # python-opcua is unmaintained and 0.98.13 is its final release (#144 moves
     # off it). The ceiling is still stated: on a 0.x version the minor is the
     # major, and a surprise 0.99 would be exactly the untested major this rules out.
     "opcua>=0.98.13,<0.99",
+    "typing-extensions>=4.12,<5",
 ]
 
 [project.scripts]
@@ -51,3 +53,7 @@ include = ["src", "hatch_build.py", "pyproject.toml", "README.md"]
 [tool.hatch.build.targets.sdist.force-include]
 "../../contract/tools.json" = "contract/tools.json"
 "../../contract/config.json" = "contract/config.json"
+
+"../../contract/contract.schema.json" = "contract/contract.schema.json"
+"../../contract/schemas.json" = "contract/schemas.json"
+"../../contract/schema-profile.json" = "contract/schema-profile.json"

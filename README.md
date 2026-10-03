@@ -339,3 +339,7 @@ you are authorised to use, and keep writes and method calls to a simulator or la
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Tool inputs and structured results use JSON Schema draft 2020-12 with generated
+TypeScript/Python types and CI drift checks. See
+[contract generation](docs/contract-generation.md) for the authoring workflow.

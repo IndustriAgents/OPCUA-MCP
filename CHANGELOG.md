@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both runtimes consume native continuation points with the original query,
   preserving interval boundaries. A stalled or oversized aggregate fails
   explicitly instead of returning an unfinished range; held points are released.
+### Changed — standard schemas and generated runtime types (#138)
+- Declare JSON Schema draft 2020-12 for tool inputs and results; validate the
+  metadata and reject unsupported schema keywords in CI. Generate both runtimes’
+  input/result types and tool-name registries, with deterministic drift checks.
+- Replace custom input validators with Ajv and jsonschema, translating failures
+  into stable project codes and messages. Optional null defaults are now explicit
+  in the advertised schemas. Result parity checks use the standard validator.
 
 ### Security — enforce all Python receive bounds (#175)
 - Reject chunks over `maxChunkSize` before reading their bodies and reject

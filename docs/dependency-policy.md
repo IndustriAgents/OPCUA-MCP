@@ -55,6 +55,8 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 | Package | Range | What it does here | Security-sensitive |
 |---|---|---|---|
 | `cryptography` | `>=50.0.1,<51` | X.509 parsing for the ApplicationUri; python-opcua's channel signing and encryption | Certificates |
+| `jsonschema` | `>=4.23,<5` | Draft 2020-12 input and result validation | Schema validation |
+| `typing-extensions` | `>=4.12,<5` | Generated TypedDict types on Python 3.10 | Static contract types |
 | `mcp[cli]` | `>=2.2.0,<3` | MCP protocol, stdio transport, tool input-schema validation | MCP protocol, schema validation |
 | `opcua` | `>=0.98.13,<0.99` | OPC UA client stack (python-opcua) | OPC UA transport, certificates |
 
@@ -63,10 +65,11 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 | Package | Range | What it does here | Security-sensitive |
 |---|---|---|---|
 | `@modelcontextprotocol/sdk` | `^1.26.0` | MCP protocol, stdio transport, request validation | MCP protocol, schema validation |
+| `ajv` | `^8.20.0` | Draft 2020-12 tool argument validation | Schema validation |
 | `node-opcua-client` | `^2.184.8` | OPC UA client stack | OPC UA transport, certificates |
 | `node-opcua-crypto` | `^6.0.0` | Certificate and key loading, X.509 user-identity signing | Certificates |
 
-Every runtime dependency is security-sensitive under the definition below; that
+Every runtime dependency is treated as security-sensitive under the definition below; that
 is a property of what this project is, not an accident of the list.
 
 Floor notes:

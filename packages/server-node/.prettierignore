@@ -4,3 +4,4 @@ package-lock.json
 build-mcpb/
 build-sea/
 dist/
+src/generated/

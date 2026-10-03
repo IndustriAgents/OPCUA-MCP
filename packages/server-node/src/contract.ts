@@ -5,6 +5,9 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
+import type { ToolName } from "./generated/contract-types.js";
+import type { Schema } from "./validation.js";
+
 export const BUILD_DIR = dirname(fileURLToPath(import.meta.url));
 
 export type { AccessClass } from "./access-classes.js";
@@ -47,7 +50,7 @@ export interface CapabilitySpec {
 }
 
 export interface ToolSpec {
-  name: string;
+  name: ToolName;
   accessClass: AccessClass;
   /** Capabilities of which the server must report at least one for a call to be
    *  served; empty means always. They never hide the tool (#140). */
@@ -56,7 +59,7 @@ export interface ToolSpec {
    *  capabilities of which the server must report at least one. */
   argumentCapabilities?: Record<string, string[]>;
   description: string;
-  inputSchema: any;
+  inputSchema: Schema & { type: "object" };
   resultShape?: string;
   /** Whether the result can be partial, and so carries `completeness` beside
    *  `result`; see completeness.ts. */
@@ -78,7 +81,7 @@ export interface ToolSpec {
 }
 
 export const CONTRACT: {
-  resultShapes: Record<string, any>;
+  resultShapes: Record<string, Schema>;
   history: { rawReturnBounds: boolean };
   /** Optional server features, keyed by name; `$`-prefixed keys are prose. See
    *  capabilities.ts. */

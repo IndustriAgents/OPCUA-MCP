@@ -24,20 +24,14 @@ protection:
    this client asks for in the OPC UA Hello. A conforming server then stays
    inside them. That is protocol hygiene, and it binds only a server that
    chooses to obey — which a hostile one does not.
-2. :func:`install_receive_guard` is the enforcement: it wraps
-   ``SecureConnection._receive`` so a message that exceeds ``maxChunkCount``
-   chunks raises instead of being accumulated. The channel then fails the way any
-   other protocol violation does, and the connection layer reconnects.
+2. :func:`install_receive_guard` checks the advertised chunk size before reading
+   its body, and bounds both the chunk count and cumulative wire size during
+   reassembly. Refused messages release their buffered chunks and fail the channel.
 
-**On patching a dependency.** This reaches into a third-party class, which is
-worth being uneasy about. It is done because the alternative is shipping a client
-that a compromised PLC can exhaust, against a library that will not be fixed: the
-patch is one wrapper, applied once, over a method whose whole body is quoted
-above, and ``tests/unit/test_transport_limits.py`` drives real chunk sequences
-through it so a change in the library that moves the ground under it fails a test
-rather than silently disabling the guard. The Node runtime needs none of this —
-``node-opcua`` takes the same two bounds as transport settings and enforces them
-itself.
+The patch is installed once over the library's receive paths. Tests exercise
+actual wire headers and reassembly, including hostile headers whose bodies must
+never be read. Node enforces the same contract bounds through node-opcua.
+
 """
 
 from __future__ import annotations
@@ -59,6 +53,11 @@ TOO_MANY_CHUNKS = (
     "OPC UA server sent more than {limit} chunks in one message without "
     "terminating it; refusing to buffer more (CVE-2022-25304). The channel will "
     "be rebuilt."
+)
+
+TOO_LARGE = (
+    "OPC UA server exceeded {name} ({limit} bytes); refusing to buffer more "
+    "(CVE-2022-25304). The channel will be rebuilt."
 )
 
 _installed = False
@@ -85,7 +84,7 @@ def chunk_count_exceeded(parts: int) -> bool:
 
 
 def install_receive_guard() -> bool:
-    """Bound ``SecureConnection._incoming_parts``. True if this call installed it.
+    """Bound inbound chunks before buffering and during reassembly. True if this call installed it.
 
     Idempotent, and safe to call before any connection exists. Installed at
     import of the connection layer rather than per client, because the list being
@@ -95,24 +94,63 @@ def install_receive_guard() -> bool:
     with _install_lock:
         if _installed:
             return False
+        from opcua import ua
         from opcua.common.connection import SecureConnection
+        from opcua.ua.ua_binary import header_from_binary
 
         original = SecureConnection._receive
+        original_socket = SecureConnection.receive_from_socket
+
+        def size_of(chunk):
+            # Real inbound chunks carry packet_size. The fallback also bounds
+            # chunks constructed directly by an adapter or test.
+            return chunk.MessageHeader.packet_size or len(chunk.Body) + 24
+
+        def refuse(self, message):
+            self._incoming_parts = []
+            raise ua.UaError(message)
+
+        def check(self, size, secure=True):
+            if size > MAX_CHUNK_SIZE:
+                refuse(self, TOO_LARGE.format(name="maxChunkSize", limit=MAX_CHUNK_SIZE))
+            if secure:
+                if chunk_count_exceeded(len(self._incoming_parts) + 1):
+                    refuse(self, TOO_MANY_CHUNKS.format(limit=MAX_CHUNK_COUNT))
+                if sum(size_of(part) for part in self._incoming_parts) + size > MAX_MESSAGE_SIZE:
+                    refuse(self, TOO_LARGE.format(name="maxMessageSize", limit=MAX_MESSAGE_SIZE))
 
         def guarded(self, msg):
-            # Counted *before* the library appends, so the cap is the number of
-            # chunks held rather than one more than it.
-            if chunk_count_exceeded(len(self._incoming_parts) + 1):
-                # Drop what was accumulated: the message is being refused, and
-                # keeping it would leak the memory this exists to protect.
+            check(self, size_of(msg))
+            try:
+                return original(self, msg)
+            except Exception:
                 self._incoming_parts = []
-                from opcua import ua
+                raise
 
-                raise ua.UaError(TOO_MANY_CHUNKS.format(limit=MAX_CHUNK_COUNT))
-            return original(self, msg)
+        def guarded_socket(self, socket):
+            header = header_from_binary(socket)
+            if header.body_size < 0:
+                refuse(self, "Invalid OPC UA chunk size; the channel will be rebuilt.")
+            check(
+                self,
+                header.packet_size,
+                header.MessageType
+                in (
+                    ua.MessageType.SecureMessage,
+                    ua.MessageType.SecureOpen,
+                    ua.MessageType.SecureClose,
+                ),
+            )
+            # No attacker-controlled body is read until all limits pass.
+            body = socket.read(header.body_size)
+            if len(body) != header.body_size:
+                refuse(self, f"{header.body_size} bytes expected, {len(body)} available")
+            return self.receive_from_header_and_body(header, ua.utils.Buffer(body))
 
         guarded.__wrapped__ = original
+        guarded_socket.__wrapped__ = original_socket
         SecureConnection._receive = guarded
+        SecureConnection.receive_from_socket = guarded_socket
         _installed = True
         return True
 

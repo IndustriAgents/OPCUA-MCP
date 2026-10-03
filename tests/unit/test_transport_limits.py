@@ -17,7 +17,9 @@ nothing.
 from __future__ import annotations
 
 import json
+import struct
 
+import opcua_mcp_server.transport_limits as limits
 import pytest
 from conftest import ROOT
 from opcua import ua
@@ -145,3 +147,86 @@ def test_the_real_client_factory_advertises_them():
         "create_client must advertise the transport bounds, or the Hello goes out "
         "with python-opcua's unlimited defaults"
     )
+
+
+class HeaderOnlySocket:
+    """A hostile peer providing a header, with no body to allocate or wait for."""
+
+    def __init__(self, size, message_type=ua.MessageType.SecureMessage):
+        self.data = struct.pack("<3scI", message_type, ua.ChunkType.Single, size)
+        if message_type in (ua.MessageType.SecureMessage, ua.MessageType.SecureOpen):
+            self.data += struct.pack("<I", 0)
+        self.reads = []
+
+    def read(self, size):
+        self.reads.append(size)
+        assert size <= len(self.data), "the hostile body must not be read"
+        data, self.data = self.data[:size], self.data[size:]
+        return data
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ua.MessageType.SecureMessage,
+        ua.MessageType.SecureOpen,
+        ua.MessageType.Acknowledge,
+        ua.MessageType.Error,
+    ],
+)
+def test_oversize_chunk_is_rejected_before_reading_its_body(kind):
+    connection = _connection()
+    connection._receive(_chunk(ua.ChunkType.Intermediate))
+    peer = HeaderOnlySocket(MAX_CHUNK_SIZE + 1, kind)
+    with pytest.raises(ua.UaError, match="maxChunkSize"):
+        connection.receive_from_socket(peer)
+    assert peer.reads == (
+        [8, 4] if kind in (ua.MessageType.SecureMessage, ua.MessageType.SecureOpen) else [8]
+    )
+    assert connection._incoming_parts == []
+
+
+def test_oversize_decoded_chunk_is_rejected_too():
+    chunk = _chunk(ua.ChunkType.Single)
+    chunk.MessageHeader.packet_size = MAX_CHUNK_SIZE + 1
+    with pytest.raises(ua.UaError, match="maxChunkSize"):
+        _connection()._receive(chunk)
+
+
+def test_cumulative_message_size_is_checked_before_the_next_body(monkeypatch):
+    monkeypatch.setattr(limits, "MAX_MESSAGE_SIZE", 56)
+    connection = _connection()
+    # Each chunk fits independently: 24 bytes of headers + 4 bytes of body.
+    for seq in (1, 2):
+        connection._receive(_chunk(ua.ChunkType.Intermediate, sequence=seq))
+    peer = HeaderOnlySocket(28)
+    with pytest.raises(ua.UaError, match="maxMessageSize"):
+        connection.receive_from_socket(peer)
+    assert peer.reads == [8, 4]
+    assert connection._incoming_parts == []
+
+
+def test_message_size_boundary_and_counter_reset(monkeypatch):
+    monkeypatch.setattr(limits, "MAX_MESSAGE_SIZE", 56)
+    connection = _connection()
+    assert connection._receive(_chunk(ua.ChunkType.Intermediate)) is None
+    assert connection._receive(_chunk(ua.ChunkType.Single, sequence=2)) is not None
+    assert connection._receive(_chunk(ua.ChunkType.Single, request_id=2, sequence=3)) is not None
+
+
+def test_abort_releases_the_message_size_budget(monkeypatch):
+    monkeypatch.setattr(limits, "MAX_MESSAGE_SIZE", 64)
+    connection = _connection()
+    connection._receive(_chunk(ua.ChunkType.Intermediate))
+    abort = _chunk(ua.ChunkType.Abort, sequence=2)
+    from opcua.ua.ua_binary import struct_to_binary
+
+    abort.Body = struct_to_binary(ua.ErrorMessage())
+    assert connection._receive(abort) is None
+    assert connection._incoming_parts == []
+    assert connection._receive(_chunk(ua.ChunkType.Single, request_id=2, sequence=3)) is not None
+
+
+def test_invalid_negative_body_size_is_rejected():
+    with pytest.raises(ua.UaError, match="Invalid OPC UA chunk size"):
+        _connection().receive_from_socket(HeaderOnlySocket(8))

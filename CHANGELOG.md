@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve a known standard datatype when a browsed value cannot be read; custom
   datatype identifiers are no longer mislabeled as builtins by their number alone.
 
+### Fixed — canonical result text and refusal numbers (#157 B15–17)
+- Both runtimes render JSON text with sorted object keys, two-space indentation,
+  literal Unicode and the same numeric spelling, while retaining structured
+  results and completeness notices. Whole and millisecond-aligned timestamps
+  now render identically; native Python microsecond precision is explicitly
+  declared instead of discarded. Refusal values use the shared JSON spelling.
+
 ### Fixed — recover consistently from service timeouts (#157 B14)
 - Node now recognizes transaction timeouts, socket error codes and wrapped
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic

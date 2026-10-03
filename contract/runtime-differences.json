@@ -221,6 +221,22 @@
         "packages/server-node/src/audit.ts",
         "SECURITY.md"
       ]
+    },
+    {
+      "id": "timestamp-precision",
+      "area": "protocol",
+      "summary": "Native OPC UA timestamps retain microseconds on Python and milliseconds on Node.",
+      "python": "A decoded datetime with a submillisecond component keeps all six fractional digits; whole seconds and millisecond-aligned values use exactly three digits.",
+      "node": "JavaScript Date retains milliseconds and renders exactly three fractional digits.",
+      "observable": true,
+      "rationale": "Preserve the precision the client library actually provides rather than discarding native Python microseconds. ADR 0001 permits an extra capability. Request timestamps are independently truncated to milliseconds on both runtimes so history windows and writes still target the same instant.",
+      "evidence": [
+        "packages/server-python/src/opcua_mcp_server/datetimes.py",
+        "packages/server-node/src/records.ts",
+        "tests/fixtures/result-text.json",
+        "tests/unit/test_result_text.py",
+        "packages/server-node/test/result-text.test.mjs"
+      ]
     }
   ]
 }

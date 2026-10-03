@@ -584,3 +584,34 @@ def test_every_tool_family_is_represented():
         "write_opcua_nodes",
     }
     assert required <= compared, f"not compared across runtimes: {sorted(required - compared)}"
+
+
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("write_opcua_nodes", {"nodes": [{"node_id": NODE["ScratchDouble"], "value": 1000.0}]}),
+        ("write_opcua_nodes", {"nodes": [{"node_id": "ns=2;i=999999", "value": 1.0}]}),
+    ],
+)
+async def test_result_text_is_identical_on_both_runtimes(both, name, arguments):
+    texts = {}
+    for impl, params in both.items():
+        async with connect(params) as session:
+            result = await session.call_tool(name, arguments)
+            assert not result.is_error, text_of(result)
+            assert result.structured_content is not None
+            texts[impl] = [block.text for block in result.content if block.type == "text"]
+    assert texts["python"] == texts["node"]
+
+
+async def test_unicode_units_are_literal_in_result_text(both):
+    for params in both.values():
+        async with connect(params) as session:
+            result = await session.call_tool(
+                "read_opcua_nodes", {"node_ids": [NODE["ScratchAnalog"]]}
+            )
+            assert not result.is_error, text_of(result)
+            text = text_of(result)
+            assert "°C" in text
+            assert "\\u00b0" not in text
+            assert list(json.loads(text)) == sorted(json.loads(text))

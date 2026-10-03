@@ -19,7 +19,7 @@ from typing import Any
 from .contract import CONTRACT
 from .errors import message
 from .node_ids import namespace_uri_form, resolve_node_id
-from .numeric import parse_numeric_string
+from .numeric import js_number, json_text, parse_numeric_string
 
 PROFILES = ("observe", "operator", "full")
 ACCESS_CLASSES = ("read", "monitor", "alarm-action", "control")
@@ -159,7 +159,7 @@ def _non_empty(value: Any) -> bool:
 
 def _json(value: Any) -> str:
     """A value as ``JSON.stringify`` spells it, for a message both runtimes share."""
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return json_text(value)
 
 
 @dataclass(frozen=True)
@@ -543,9 +543,7 @@ def format_number(value: float) -> str:
         return "infinity"
     if value == float("-inf"):
         return "-infinity"
-    if float(value).is_integer() and abs(value) < 1e16:
-        return str(int(value))
-    return repr(float(value))
+    return js_number(value)
 
 
 def _same_json_value(value: Any, candidate: Any) -> bool:

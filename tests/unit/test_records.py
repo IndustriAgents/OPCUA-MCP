@@ -186,7 +186,7 @@ def test_arrays_are_encoded_element_wise():
 
 def test_flattens_a_data_value():
     assert history_records([data_value(ua.Variant(51.25, ua.VariantType.Double))]) == [
-        {"value": 51.25, "timestamp": "2026-09-09T13:36:01.468000Z", "status": "Good"}
+        {"value": 51.25, "timestamp": "2026-09-09T13:36:01.468Z", "status": "Good"}
     ]
 
 
@@ -211,12 +211,12 @@ def test_no_data_values_is_an_empty_record_list():
 
 def test_naive_timestamps_are_labelled_utc_not_reinterpreted_as_local():
     """python-opcua decodes OPC UA DateTimes to naive datetimes already in UTC."""
-    assert format_iso_utc(TIMESTAMP) == "2026-09-09T13:36:01.468000Z"
+    assert format_iso_utc(TIMESTAMP) == "2026-09-09T13:36:01.468Z"
 
 
 def test_aware_timestamps_are_converted_to_utc():
     kolkata = timezone(timedelta(hours=5, minutes=30))
-    assert format_iso_utc(TIMESTAMP.replace(tzinfo=kolkata)) == "2026-09-09T08:06:01.468000Z"
+    assert format_iso_utc(TIMESTAMP.replace(tzinfo=kolkata)) == "2026-09-09T08:06:01.468Z"
 
 
 def test_none_passes_through():

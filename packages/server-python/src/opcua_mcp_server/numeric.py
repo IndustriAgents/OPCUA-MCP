@@ -124,6 +124,14 @@ def js_number(value: float) -> str:
     return sign + text
 
 
+def array_index(key: str) -> int | None:
+    """ECMAScript array-index property names, without parsing unbounded integers."""
+    if not (key.isascii() and key.isdigit() and len(key) <= 10):
+        return None
+    number = int(key)
+    return number if str(number) == key and number < 2**32 - 1 else None
+
+
 def json_text(value: Any) -> str:
     """``value`` as ``JSON.stringify`` would write it, for echoing in a message.
 
@@ -148,8 +156,11 @@ def json_text(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(json_text(item) for item in value) + "]"
     if isinstance(value, dict):
-        members = (
-            f"{json.dumps(str(k), ensure_ascii=False)}:{json_text(v)}" for k, v in value.items()
+        # JSON.stringify enumerates index keys first, then other keys in insertion order.
+        keys = sorted(
+            value,
+            key=lambda k: (0, array_index(str(k))) if array_index(str(k)) is not None else (1, 0),
         )
+        members = (f"{json.dumps(str(k), ensure_ascii=False)}:{json_text(value[k])}" for k in keys)
         return "{" + ",".join(members) + "}"
     return json.dumps(str(value), ensure_ascii=False)

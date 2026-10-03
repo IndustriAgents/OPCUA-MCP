@@ -1,0 +1,633 @@
+{
+  "$comment": "One table of method calls and the verdict each must get from the two nodes' own attributes, driven through BOTH runtimes: tests/unit/test_method_plan.py and packages/server-node/test/method-plan.test.mjs call planCall / plan_call on each `input` and assert `expect` — null to call, or the exact refusal, nothing sent. `declared_arguments` is the length of the method's InputArguments when it publishes them, null when it does not; `on_object` is whether the method was found among the object's or its type's references, null when that could not be determined. A fact that could not be read skips its check.",
+  "cases": [
+    {
+      "name": "an executable method of the object, with the right arguments",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "the method node is a Variable",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": "Node ns=2;i=28 is a Variable node, not a Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
+    },
+    {
+      "name": "the object node is a Variable",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": "Node ns=2;i=27 is a Variable node; a method is called on an Object or ObjectType. Nothing was sent."
+    },
+    {
+      "name": "an ObjectType may own a method",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "ObjectType",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "Executable is false",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": false,
+          "user_executable": false,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": "Method ns=2;i=28 is not executable right now (its Executable attribute is false). Nothing was sent."
+    },
+    {
+      "name": "UserExecutable is false",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": false,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": "Method ns=2;i=28 is not executable by the OPC UA user this server is logged in as (its UserExecutable attribute is false). Nothing was sent."
+    },
+    {
+      "name": "an Executable that could not be read is left to the server",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "not a method of the object or its type",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": false
+      },
+      "expect": "Method ns=2;i=28 is not a method of object ns=2;i=27 or of its type, so the OPC UA server would not run it there. Nothing was sent. Browse the object to find its methods."
+    },
+    {
+      "name": "ownership that could not be determined is left to the server",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": null
+      },
+      "expect": null
+    },
+    {
+      "name": "too few arguments",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 0,
+        "on_object": true
+      },
+      "expect": "Method ns=2;i=28 takes 1 argument(s) (its InputArguments) and was given 0. Nothing was sent."
+    },
+    {
+      "name": "too many arguments",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 0,
+        "given_arguments": 2,
+        "on_object": true
+      },
+      "expect": "Method ns=2;i=28 takes 0 argument(s) (its InputArguments) and was given 2. Nothing was sent."
+    },
+    {
+      "name": "a method that publishes no InputArguments is not counted",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Method",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": true,
+          "user_executable": true,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": null,
+        "given_arguments": 3,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "an unknown method node is left to the server",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "BadNodeIdUnknown",
+          "node_class": null,
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "an unknown method node still has its arguments counted",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "BadNodeIdUnknown",
+          "node_class": null,
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 2,
+        "on_object": true
+      },
+      "expect": "Method ns=2;i=28 takes 1 argument(s) (its InputArguments) and was given 2. Nothing was sent."
+    },
+    {
+      "name": "facts that could not be read at all are left to the server",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": null,
+        "method_facts": null,
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": null
+    },
+    {
+      "name": "not a Method is reported before not executable",
+      "input": {
+        "object_node_id": "ns=2;i=27",
+        "method_node_id": "ns=2;i=28",
+        "object_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "method_facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": false,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "declared_arguments": 1,
+        "given_arguments": 1,
+        "on_object": true
+      },
+      "expect": "Node ns=2;i=28 is a Object node, not a Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
+    }
+  ]
+}

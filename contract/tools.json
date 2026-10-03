@@ -55,7 +55,7 @@
               },
               "instrument_range": {
                 "type": ["object", "null"],
-                "description": "What the instrument can physically return, which is usually wider than eu_range: a sensor may read below zero on a scale whose normal operation starts there. Reported, never enforced — the edge of what a device can represent is not the same as what the process expects. null when the node publishes none.",
+                "description": "What the instrument can physically return, which is usually wider than eu_range: a sensor may read below zero on a scale whose normal operation starts there. A write outside it is refused even when OPCUA_ALLOW_OUT_OF_RANGE_WRITES lifts the eu_range check — that override is for writing outside normal operation, not outside what the device can represent. null when the node publishes none.",
                 "properties": {
                   "low": { "type": "number", "description": "The bottom of the range, inclusive." },
                   "high": { "type": "number", "description": "The top of the range, inclusive." }
@@ -66,6 +66,35 @@
             },
             "required": ["unit", "unit_description", "eu_range", "instrument_range"],
             "additionalProperties": false
+          },
+          "write_access": {
+            "type": ["object", "null"],
+            "description": "Whether this node can be written, and what a write to it must look like — only when read_opcua_nodes was called with include_write_access, null otherwise. Answers from the node's own attributes (NodeClass, AccessLevel, UserAccessLevel, DataType, ValueRank, its enumeration states) and from this server's policy, so an agent can get a write right the first time instead of learning the rules from refusals. It is what is known before trying, not a promise: the OPC UA server still decides.",
+            "properties": {
+              "allowed": { "type": "boolean", "description": "True when nothing known here would stop a write: the policy allows it and the node says it is writable by this OPC UA user." },
+              "reason": { "type": ["string", "null"], "description": "Why a write would not go through, when allowed is false; null when it is true." },
+              "data_type": { "type": ["string", "null"], "description": "The OPC UA data type a written value is converted to, from the node's DataType attribute ('Double', 'Int32', …). null when the node declares an abstract type or it could not be read; the write then converts to the type of the current value." },
+              "array": { "type": ["boolean", "null"], "description": "True when the node holds an array (write a list), false for a single value, null when the node allows either or it is unknown." },
+              "states": {
+                "type": ["array", "null"],
+                "description": "The values an enumerated or two-state node may hold, with their labels: [{ value, label }]. A write may name a state by its label exactly as listed. null for a node that is not one.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "value": { "type": ["integer", "boolean"], "description": "The value as written to the node." },
+                    "label": { "type": "string", "description": "The name the server gives it." }
+                  },
+                  "required": ["value", "label"],
+                  "additionalProperties": false
+                }
+              },
+              "min": { "type": ["number", "null"], "description": "The lowest value a write may carry: the tightest of the node's EURange (unless OPCUA_ALLOW_OUT_OF_RANGE_WRITES), its InstrumentRange and the operator policy's min. null when nothing bounds it." },
+              "max": { "type": ["number", "null"], "description": "The highest value a write may carry, from the same three bounds as min." },
+              "allowed_values": { "type": ["array", "null"], "description": "The only values the operator policy allows for this node (its enum), or null.", "items": {} },
+              "max_change": { "type": ["number", "null"], "description": "The largest move from the current value the operator policy allows in one write, or null." }
+            },
+            "required": ["allowed", "reason", "data_type", "array", "states", "min", "max", "allowed_values", "max_change"],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -75,7 +104,8 @@
           "status",
           "source_timestamp",
           "server_timestamp",
-          "engineering"
+          "engineering",
+          "write_access"
         ],
         "additionalProperties": false
       }
@@ -470,6 +500,32 @@
           },
           "required": ["session_generation", "checked_at", "support", "aggregate_functions"],
           "additionalProperties": false
+        },
+        "policy_check": {
+          "type": ["object", "null"],
+          "description": "The deployment's policy measured against this server's own address space, from the check run on every session (contract policyCheck): what the allowlists, browse paths and writable_subtrees resolved to, how much deny_read hides, and anything the policy names that the server says cannot work. null when not connected, or before the first check.",
+          "properties": {
+            "generation": { "type": ["integer", "null"], "description": "The session generation the check ran on, as in capabilities." },
+            "writable_nodes": { "type": "array", "items": { "type": "string" }, "description": "Every node the operator profile may write, resolved: writable_nodes entries and writable_subtrees matches, as canonical node IDs, sorted. Empty under observe and full." },
+            "callable_methods": { "type": "array", "items": { "type": "string" }, "description": "Every method the operator profile may call, resolved, as 'object_node_id|method_node_id', sorted. Empty under observe and full." },
+            "read_denied": { "type": "integer", "description": "How many nodes deny_read hides: its entries and everything under them." },
+            "read_policy_complete": { "type": "boolean", "description": "False when deny_read could not be resolved in full, in which case every read is refused until it is." },
+            "findings": {
+              "type": "array",
+              "description": "One per problem found, in policy order. Empty when the policy and the server agree.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entry": { "type": "string", "description": "The policy entry, as written." },
+                  "problem": { "type": "string", "description": "What is wrong with it, worded by contract policyCheck.messages." }
+                },
+                "required": ["entry", "problem"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["generation", "writable_nodes", "callable_methods", "read_denied", "read_policy_complete", "findings"],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -484,7 +540,8 @@
         "diagnostics",
         "namespaces",
         "error",
-        "capabilities"
+        "capabilities",
+        "policy_check"
       ],
       "additionalProperties": false
     },
@@ -841,7 +898,7 @@
     }
   },
   "analog": {
-    "$comment": "Where a node says what its number means. OPC UA Part 8 §5.3 defines AnalogItemType and introduces EngineeringUnits by citing the Mars Climate Orbiter; these three properties are how a server publishes the unit and the two ranges. Both runtimes resolve them with one TranslateBrowsePathsToNodeIds for the whole batch and one Read of whatever resolved, in chunks of `maxPropertiesPerRequest` (a 500-node read is 1500 browse paths, and MaxNodesPerTranslateBrowsePathsToNodeIds is an operational limit servers publish and enforce, so one request that large is one a conformant server may refuse), then cache the answer for the life of the session — a node's unit does not change while a session lasts, and re-reading it per call would put two round trips on every read. The cache is dropped when the session is replaced, because a restarted server may be a different server. `enforceEuRangeOnWrite` is the safety half: a value outside the range the plant itself published is refused before anything is sent, which is a bound the equipment declares rather than one a human retyped into a policy file. OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true turns it off for deployments that have to write outside normal operation on purpose.",
+    "$comment": "Where a node says what its number means. OPC UA Part 8 §5.3 defines AnalogItemType and introduces EngineeringUnits by citing the Mars Climate Orbiter; these three properties are how a server publishes the unit and the two ranges. Both runtimes resolve them with one TranslateBrowsePathsToNodeIds for the whole batch and one Read of whatever resolved, in chunks of `maxPropertiesPerRequest` (a 500-node read is 1500 browse paths, and MaxNodesPerTranslateBrowsePathsToNodeIds is an operational limit servers publish and enforce, so one request that large is one a conformant server may refuse), then cache the answer for the life of the session — a node's unit does not change while a session lasts, and re-reading it per call would put two round trips on every read. The cache is dropped when the session is replaced, because a restarted server may be a different server. `enforceEuRangeOnWrite` is the safety half: a value outside the range the plant itself published is refused before anything is sent, which is a bound the equipment declares rather than one a human retyped into a policy file. OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true turns it off for deployments that have to write outside normal operation on purpose. InstrumentRange, where published, is enforced whatever that override says: it is the edge of what the device can represent, and no deployment writes past it on purpose.",
     "engineeringUnitsBrowseName": "0:EngineeringUnits",
     "euRangeBrowseName": "0:EURange",
     "instrumentRangeBrowseName": "0:InstrumentRange",
@@ -929,7 +986,64 @@
     "unknownEventId": "Unknown event_id \"{event_id}\". Call list_active_alarms first, or pass the condition_id of the alarm to acknowledge.",
     "unknownSubscription": "No such subscription: {subscription_id}",
     "unknownSubscriptions": "No such subscriptions: {subscription_ids}. Nothing was cancelled.",
-    "subscriptionDeleteFailed": "Cancelled {subscription_id} here, but the OPC UA server did not accept the delete: {reason}. It may keep publishing until the subscription's lifetime expires."
+    "subscriptionDeleteFailed": "Cancelled {subscription_id} here, but the OPC UA server did not accept the delete: {reason}. It may keep publishing until the subscription's lifetime expires.",
+    "valueNotAState": "{value} is not a state node {node_id} defines ({allowed}). Nothing was written. Write one of the numbers, or its label exactly as listed.",
+    "methodNotAMethod": "Node {method_node_id} is a {node_class} node, not a Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods.",
+    "methodObjectNotAnObject": "Node {object_node_id} is a {node_class} node; a method is called on an Object or ObjectType. Nothing was sent.",
+    "methodNotExecutable": "Method {method_node_id} is not executable right now (its Executable attribute is false). Nothing was sent.",
+    "methodNotExecutableForUser": "Method {method_node_id} is not executable by the OPC UA user this server is logged in as (its UserExecutable attribute is false). Nothing was sent.",
+    "methodNotOnObject": "Method {method_node_id} is not a method of object {object_node_id} or of its type, so the OPC UA server would not run it there. Nothing was sent. Browse the object to find its methods.",
+    "methodArgumentCount": "Method {method_node_id} takes {expected} argument(s) (its InputArguments) and was given {count}. Nothing was sent.",
+    "historyNotRecordedHint": "(Node {node_id} does not advertise HistoryRead in its AccessLevel, so the OPC UA server may not record its history at all; subscribe_opcua_nodes collects values from now on.)",
+    "readDenied": "Node {node_id} is not readable under the read policy (deny_read). Nothing was read.",
+    "readPolicyIncomplete": "Reads are refused until the read policy (deny_read) is fully resolved: {reason}. get_server_status reports it under policy_check.",
+    "alarmScopeUnreadable": "Condition {condition_id} could not be checked against the operator policy's alarm scope ({reason}), so nothing was acknowledged or changed.",
+    "alarmSourceNotAllowed": "Condition {condition_id} is raised by {source_node_id}, which is not in the operator policy's alarm_sources. Nothing was acknowledged or changed.",
+    "alarmTooSevere": "Condition {condition_id} has severity {severity}, above the operator policy's alarm_max_severity of {limit}, so a person has to handle it. Nothing was acknowledged or changed.",
+    "preconditionNotMet": "The operator policy allows changing {target} only while {requirement}; {node_id} is {current} now. Nothing was sent."
+  },
+  "writeSkips": {
+    "$comment": "Why write_opcua_nodes did not send one node's write, as that record's `error`, with the status named beside each in the spec. Decided from the node's own attributes (NodeClass, AccessLevel, UserAccessLevel, DataType, ValueRank, ArrayDimensions), read once per session and cached. These are per-node, like a value that will not convert: the node cannot take this write whoever asks, and the other writes in the batch still go. A missing attribute skips its check and leaves the decision to the OPC UA server. Pinned by tests/fixtures/write-plan.json for both runtimes. Placeholders are {name}.",
+    "notVariable": "Node {node_id} is a {node_class} node, not a Variable, so it has no value to write. Nothing was sent to it.",
+    "notWritable": "Node {node_id} is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it.",
+    "notWritableForUser": "Node {node_id} is writable, but not by the OPC UA user this server is logged in as (its UserAccessLevel does not include CurrentWrite). Nothing was sent to it.",
+    "typeMismatch": "Node {node_id} holds {node_type}, and data_type {data_type} does not match it. Drop data_type to write it as {node_type}. Nothing was sent to it.",
+    "needsScalar": "Node {node_id} holds a single value (ValueRank -1); write one value, not a list. Nothing was sent to it.",
+    "needsArray": "Node {node_id} holds an array (ValueRank {value_rank}); write a list, even of one element. Nothing was sent to it.",
+    "arrayTooLong": "Node {node_id} holds at most {limit} elements (its ArrayDimensions); got {count}. Nothing was sent to it."
+  },
+  "writeAccessReasons": {
+    "$comment": "Why read_opcua_nodes reports write_access.allowed false for a node, when include_write_access is set. The first that applies; a policy refusal is quoted verbatim from errors. Pinned by tests/fixtures/write-access.json.",
+    "unknown": "the node's attributes could not be read, so whether it can be written is unknown",
+    "unreadable": "the node could not be inspected ({status})",
+    "notVariable": "it is a {node_class} node, not a Variable",
+    "readOnly": "it is read-only on the OPC UA server (AccessLevel)",
+    "readOnlyForUser": "it is not writable by the OPC UA user this server is logged in as (UserAccessLevel)"
+  },
+  "policyCheck": {
+    "$comment": "What the policy check on connect says about the deployment's policy, measured against the connected server's own address space. It runs on every session after the NamespaceArray is bound and browse-path entries, writable_subtrees and deny_read are resolved, prints each finding to stderr and reports them in get_server_status under policy_check. A finding never widens anything and never disables an entry: the entry already allows nothing the server will accept, and saying so is the point. The limits bound the walks that resolve writable_subtrees and deny_read; an over-large deny_read refuses every read until it is narrowed, because a confidentiality rule that could not be applied in full must not be applied in part. Pinned by tests/fixtures/policy-check.json.",
+    "defaultSubtreeNodes": 200,
+    "maxSubtreeNodes": 1000,
+    "maxDenyNodes": 5000,
+    "messages": {
+      "unresolved": "{entry} does not resolve to a node on this server, so it allows or hides nothing.",
+      "pathAmbiguous": "{entry} is ambiguous: more than one child of {parent} matches \"{segment}\", so it allows or hides nothing. Qualify the segment with its namespace index, or use a node ID.",
+      "unknownNode": "{entry} names {node_id}, which the server does not have ({status}).",
+      "notVariable": "{entry} names {node_id}, a {node_class} node; only a Variable can be written.",
+      "readOnly": "{entry} names {node_id}, which is read-only on the server (AccessLevel), so every write to it will fail.",
+      "readOnlyForUser": "{entry} names {node_id}, which the OPC UA user this server is logged in as may not write (UserAccessLevel), so every write to it will fail.",
+      "boundOutsideRange": "{entry} has {key} {value}, outside the node's EURange ({low} to {high}); the EURange still applies.",
+      "enumNotAState": "{entry} lists {value} in its enum, which is not a state the node defines ({allowed}).",
+      "methodNotAMethod": "{entry} names {method_node_id}, a {node_class} node, not a Method.",
+      "methodObjectNotAnObject": "{entry} names {object_node_id}, a {node_class} node, as the object; a method is called on an Object or ObjectType.",
+      "methodNotExecutable": "{entry} names a method that is not executable (Executable is false), so every call to it will fail.",
+      "methodNotExecutableForUser": "{entry} names a method the OPC UA user this server is logged in as may not execute (UserExecutable), so every call to it will fail.",
+      "methodNotOnObject": "{entry}: {method_node_id} is not a method of {object_node_id} or of its type, so calling it there will fail.",
+      "subtreeEmpty": "writable_subtrees rule {entry} matched no Variables, so it allows nothing.",
+      "subtreeTooLarge": "writable_subtrees rule {entry} matches more than {limit} nodes, so it was ignored and allows nothing. Narrow the root or the type_definition, or raise max_nodes.",
+      "denyTooLarge": "deny_read entry {entry} takes the read policy past {limit} nodes, so every read is refused until deny_read is narrowed.",
+      "denyFailed": "deny_read entry {entry} could not be resolved ({reason}), so every read is refused until it is."
+    }
   },
   "notices": {
     "$comment": "Messages a tool adds beside a successful result, rather than instead of one. They are returned as a trailing plain-text content block and are deliberately NOT part of structuredContent: a notice is not a record, and a client reading the structured result must not have to filter it out. Since issue #137 they repeat what the structured `completeness` object already says, for a reader that only has the text; they are no longer the only place it is said. They fire when the loss is one the caller did not ask for — a cap of this server's, the OPC UA server's, or a buffer overflow — and not when a count the caller chose was reached, which `completeness` reports on its own. Worded here for the same reason the errors are — read_events carried two hand-mirrored copies of the dropped-events sentence before this block existed. Placeholders are {name}.",
@@ -960,6 +1074,7 @@
       "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "retryPolicy": "resend",
       "capabilities": [],
+      "readGuard": { "$comment": "Node ids this call reads, checked against deny_read under every profile, before anything is sent and again once the connection is up. A read tool with no readGuard reads nothing deny_read can name.", "nodeIdPaths": ["node_ids[]"] },
       "resultShape": "nodeValues",
       "description": "Read the current value of one or more OPC UA nodes in a single request. Pass every node you need in one call: the OPC UA server answers them together, so reading fifty nodes costs one round trip rather than fifty. Each node comes back as its own record with the value, its data type, the OPC UA status code, and the source and server timestamps — the quality and the age are what decide whether a value can be acted on, and a bare number carries neither. A node the server rejects is one 'Bad…' status among the results, not a failure of the call.",
       "inputSchema": {
@@ -971,6 +1086,10 @@
             "maxItems": 500,
             "items": { "type": "string" },
             "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
+          },
+          "include_write_access": {
+            "type": "boolean",
+            "description": "Also report, per node, whether it can be written and what a write must look like (write_access): its type, whether it is an array, its enumeration states and labels, and the bounds a value must stay within. Set it before writing a node you have not written before. Costs one extra read of the nodes' attributes the first time a node is asked about in a session. Default false."
           }
         },
         "required": ["node_ids"],
@@ -983,6 +1102,7 @@
       "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "retryPolicy": "resend",
       "capabilities": [],
+      "readGuard": { "$comment": "Node ids this call reads, checked against deny_read under every profile, before anything is sent and again once the connection is up. A read tool with no readGuard reads nothing deny_read can name.", "nodeIdPaths": ["node_id"] },
       "resultShape": "nodeRefs",
       "reportsCompleteness": true,
       "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every node also reports its `type_definition` \u2014 what it *is*, as against what class it belongs to: 'AnalogItemType' for a tag that publishes a unit and a range, a subtype of 'AlarmConditionType' for something act_on_alarm applies to, 'FolderType' for structure. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
@@ -1040,6 +1160,7 @@
       "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true },
       "retryPolicy": "resend",
       "capabilities": ["history", "aggregate"],
+      "readGuard": { "$comment": "Node ids this call reads, checked against deny_read under every profile, before anything is sent and again once the connection is up. A read tool with no readGuard reads nothing deny_read can name.", "nodeIdPaths": ["node_id"] },
       "argumentCapabilities": { "aggregate_function": ["aggregate"] },
       "resultShape": "historyRecords",
       "reportsCompleteness": true,
@@ -1208,7 +1329,7 @@
                   "description": "The OPC UA node ID to write to. Example: 'ns=2;i=2'."
                 },
                 "value": {
-                  "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. A value that does not convert is reported for that node and not written."
+                  "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. An enumerated or two-state node also takes a state's label exactly as the server names it ('Running', 'Open') — read it with include_write_access to see them. A value that does not convert, a list for a single-valued node or a write to a read-only node is reported for that node and not written."
                 },
                 "data_type": {
                   "type": "string",
@@ -1229,7 +1350,7 @@
                     "Guid",
                     "ByteString"
                   ],
-                  "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
+                  "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Unset, the node's own DataType attribute decides, and the current value's type only for a node that declares an abstract one (BaseDataType, Number). Set, it must match the node's DataType where that is concrete: a mismatch is reported for that node and not written."
                 }
               },
               "required": ["node_id", "value"],
@@ -1281,6 +1402,7 @@
       "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
       "retryPolicy": "reconnectOnly",
       "capabilities": [],
+      "readGuard": { "$comment": "Node ids this call reads, checked against deny_read under every profile, before anything is sent and again once the connection is up. A read tool with no readGuard reads nothing deny_read can name.", "nodeIdPaths": ["node_ids[]"] },
       "resultShape": "subscriptionRecords",
       "reportsCompleteness": true,
       "description": "Watch one or more OPC UA nodes for value changes instead of polling them. The OPC UA server pushes each new value into a buffer this MCP server keeps; collect them with list_subscriptions or the 'opcua://subscriptions' resource. This is the right way to answer 'tell me when this changes' or 'what has this been doing' over a short window — repeatedly calling read_opcua_nodes both misses changes between calls and costs a round trip each time. Each node gets its own subscription record and its own ID; cancel them with unsubscribe_opcua_nodes. Subscriptions are re-established automatically if the connection drops.",

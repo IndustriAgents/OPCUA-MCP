@@ -1,0 +1,1038 @@
+{
+  "$comment": "What the policy check on connect finds, driven through BOTH runtimes: tests/unit/test_policy_check.py and packages/server-node/test/policy-check.test.mjs call policyFindings / policy_findings on each `input` and assert the findings list exactly, in order. The input is what resolving the policy against a live server produced — each entry as written, what it resolved to, and the node's facts — so the rules are tested here and the resolving is tested end to end. Sections are reported in policy order (writable, methods, subtrees, deny, alarm_sources, preconditions); a writable entry stops after unresolved, unknown or not-a-Variable, and otherwise reports everything that applies. Every sentence is contract policyCheck.messages.",
+  "cases": [
+    {
+      "name": "a policy that matches the server says nothing",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=41",
+            "node_id": "ns=2;i=41",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [
+          {
+            "entry": "ns=2;i=27|ns=2;i=28",
+            "object_node_id": "ns=2;i=27",
+            "method_node_id": "ns=2;i=28",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": true,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          }
+        ],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": []
+    },
+    {
+      "name": "an entry that does not resolve",
+      "input": {
+        "writable": [
+          {
+            "entry": "nsu=urn:missing;i=5",
+            "node_id": null,
+            "unresolved_reason": "unresolved",
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": null,
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "nsu=urn:missing;i=5",
+          "problem": "nsu=urn:missing;i=5 does not resolve to a node on this server, so it allows or hides nothing."
+        }
+      ]
+    },
+    {
+      "name": "an ambiguous browse path",
+      "input": {
+        "writable": [
+          {
+            "entry": "/Objects/Plant/Pump",
+            "node_id": null,
+            "unresolved_reason": "pathAmbiguous",
+            "segment": "Pump",
+            "parent": "ns=2;i=7",
+            "bound": null,
+            "facts": null,
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "/Objects/Plant/Pump",
+          "problem": "/Objects/Plant/Pump is ambiguous: more than one child of ns=2;i=7 matches \"Pump\", so it allows or hides nothing. Qualify the segment with its namespace index, or use a node ID."
+        }
+      ]
+    },
+    {
+      "name": "a node the server does not have",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=999999",
+            "node_id": "ns=2;i=999999",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": {
+              "status": "BadNodeIdUnknown",
+              "node_class": null,
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=999999",
+          "problem": "ns=2;i=999999 names ns=2;i=999999, which the server does not have (BadNodeIdUnknown)."
+        }
+      ]
+    },
+    {
+      "name": "an Object on the write allowlist",
+      "input": {
+        "writable": [
+          {
+            "entry": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble",
+            "node_id": "ns=2;i=40",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble",
+          "problem": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble names ns=2;i=40, a Object node; only a Variable can be written."
+        }
+      ]
+    },
+    {
+      "name": "a read-only node on the write allowlist",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=3",
+            "node_id": "ns=2;i=3",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 5,
+              "user_access_level": 5,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=3",
+          "problem": "ns=2;i=3 names ns=2;i=3, which is read-only on the server (AccessLevel), so every write to it will fail."
+        }
+      ]
+    },
+    {
+      "name": "a node this user may not write",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=41",
+            "node_id": "ns=2;i=41",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 1,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=41",
+          "problem": "ns=2;i=41 names ns=2;i=41, which the OPC UA user this server is logged in as may not write (UserAccessLevel), so every write to it will fail."
+        }
+      ]
+    },
+    {
+      "name": "a bound outside the EURange on both sides",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=90",
+            "node_id": "ns=2;i=90",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": { "min": -10, "max": 200, "enum": null, "max_change": null },
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": {
+              "unit": "°C",
+              "unit_description": "degree Celsius",
+              "eu_range": { "low": 0, "high": 150 },
+              "instrument_range": { "low": -50, "high": 250 }
+            }
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=90",
+          "problem": "ns=2;i=90 has min -10, outside the node's EURange (0 to 150); the EURange still applies."
+        },
+        {
+          "entry": "ns=2;i=90",
+          "problem": "ns=2;i=90 has max 200, outside the node's EURange (0 to 150); the EURange still applies."
+        }
+      ]
+    },
+    {
+      "name": "a bound inside the EURange says nothing",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=90",
+            "node_id": "ns=2;i=90",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": { "min": null, "max": 100, "enum": null, "max_change": 5 },
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": {
+              "unit": "°C",
+              "unit_description": "degree Celsius",
+              "eu_range": { "low": 0, "high": 150 },
+              "instrument_range": { "low": -50, "high": 250 }
+            }
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": []
+    },
+    {
+      "name": "enum values the node does not define",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=103",
+            "node_id": "ns=2;i=103",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": {
+              "min": null,
+              "max": null,
+              "enum": [0, "Open", 7, "Shut"],
+              "max_change": null
+            },
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "UInt32",
+              "data_type_id": "ns=0;i=7",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": [
+                { "value": 0, "label": "Closed" },
+                { "value": 1, "label": "Open" },
+                { "value": 2, "label": "Auto" }
+              ],
+              "two_state": null
+            },
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=103",
+          "problem": "ns=2;i=103 lists 7 in its enum, which is not a state the node defines (0 = Closed, 1 = Open, 2 = Auto)."
+        },
+        {
+          "entry": "ns=2;i=103",
+          "problem": "ns=2;i=103 lists \"Shut\" in its enum, which is not a state the node defines (0 = Closed, 1 = Open, 2 = Auto)."
+        }
+      ]
+    },
+    {
+      "name": "facts that could not be read say nothing",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=41",
+            "node_id": "ns=2;i=41",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": null,
+            "engineering": null
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": []
+    },
+    {
+      "name": "a read-only node with a bound outside its range reports both",
+      "input": {
+        "writable": [
+          {
+            "entry": "ns=2;i=90",
+            "node_id": "ns=2;i=90",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "bound": { "min": null, "max": 200, "enum": null, "max_change": null },
+            "facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 1,
+              "user_access_level": 1,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "engineering": {
+              "unit": "°C",
+              "unit_description": "degree Celsius",
+              "eu_range": { "low": 0, "high": 150 },
+              "instrument_range": { "low": -50, "high": 250 }
+            }
+          }
+        ],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=90",
+          "problem": "ns=2;i=90 names ns=2;i=90, which is read-only on the server (AccessLevel), so every write to it will fail."
+        },
+        {
+          "entry": "ns=2;i=90",
+          "problem": "ns=2;i=90 has max 200, outside the node's EURange (0 to 150); the EURange still applies."
+        }
+      ]
+    },
+    {
+      "name": "every method problem, one entry each",
+      "input": {
+        "writable": [],
+        "methods": [
+          {
+            "entry": "a|b",
+            "object_node_id": null,
+            "method_node_id": null,
+            "unresolved_reason": "unresolved",
+            "segment": null,
+            "parent": null,
+            "object_facts": null,
+            "method_facts": null,
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=999|ns=2;i=28",
+            "object_node_id": "ns=2;i=999",
+            "method_node_id": "ns=2;i=28",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "BadNodeIdUnknown",
+              "node_class": null,
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": true,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=27|ns=2;i=998",
+            "object_node_id": "ns=2;i=27",
+            "method_node_id": "ns=2;i=998",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "BadNodeIdUnknown",
+              "node_class": null,
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=27|ns=2;i=41",
+            "object_node_id": "ns=2;i=27",
+            "method_node_id": "ns=2;i=41",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=41|ns=2;i=28",
+            "object_node_id": "ns=2;i=41",
+            "method_node_id": "ns=2;i=28",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Variable",
+              "data_type": "Double",
+              "data_type_id": "ns=0;i=11",
+              "enumeration": false,
+              "value_rank": -1,
+              "array_dimensions": null,
+              "access_level": 3,
+              "user_access_level": 3,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": true,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=27|ns=2;i=109",
+            "object_node_id": "ns=2;i=27",
+            "method_node_id": "ns=2;i=109",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": false,
+              "user_executable": false,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=27|ns=2;i=29",
+            "object_node_id": "ns=2;i=27",
+            "method_node_id": "ns=2;i=29",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": false,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": true
+          },
+          {
+            "entry": "ns=2;i=1|ns=2;i=28",
+            "object_node_id": "ns=2;i=1",
+            "method_node_id": "ns=2;i=28",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": true,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": false
+          },
+          {
+            "entry": "ns=2;i=2|ns=2;i=28",
+            "object_node_id": "ns=2;i=2",
+            "method_node_id": "ns=2;i=28",
+            "unresolved_reason": null,
+            "segment": null,
+            "parent": null,
+            "object_facts": {
+              "status": "Good",
+              "node_class": "Object",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": null,
+              "user_executable": null,
+              "states": null,
+              "two_state": null
+            },
+            "method_facts": {
+              "status": "Good",
+              "node_class": "Method",
+              "data_type": null,
+              "data_type_id": null,
+              "enumeration": false,
+              "value_rank": null,
+              "array_dimensions": null,
+              "access_level": null,
+              "user_access_level": null,
+              "executable": true,
+              "user_executable": true,
+              "states": null,
+              "two_state": null
+            },
+            "on_object": null
+          }
+        ],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "a|b",
+          "problem": "a|b does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "ns=2;i=999|ns=2;i=28",
+          "problem": "ns=2;i=999|ns=2;i=28 names ns=2;i=999, which the server does not have (BadNodeIdUnknown)."
+        },
+        {
+          "entry": "ns=2;i=27|ns=2;i=998",
+          "problem": "ns=2;i=27|ns=2;i=998 names ns=2;i=998, which the server does not have (BadNodeIdUnknown)."
+        },
+        {
+          "entry": "ns=2;i=27|ns=2;i=41",
+          "problem": "ns=2;i=27|ns=2;i=41 names ns=2;i=41, a Variable node, not a Method."
+        },
+        {
+          "entry": "ns=2;i=41|ns=2;i=28",
+          "problem": "ns=2;i=41|ns=2;i=28 names ns=2;i=41, a Variable node, as the object; a method is called on an Object or ObjectType."
+        },
+        {
+          "entry": "ns=2;i=27|ns=2;i=109",
+          "problem": "ns=2;i=27|ns=2;i=109 names a method that is not executable (Executable is false), so every call to it will fail."
+        },
+        {
+          "entry": "ns=2;i=27|ns=2;i=29",
+          "problem": "ns=2;i=27|ns=2;i=29 names a method the OPC UA user this server is logged in as may not execute (UserExecutable), so every call to it will fail."
+        },
+        {
+          "entry": "ns=2;i=1|ns=2;i=28",
+          "problem": "ns=2;i=1|ns=2;i=28: ns=2;i=28 is not a method of ns=2;i=1 or of its type, so calling it there will fail."
+        }
+      ]
+    },
+    {
+      "name": "writable_subtrees outcomes",
+      "input": {
+        "writable": [],
+        "methods": [],
+        "subtrees": [
+          { "entry": "/Objects/IndustrialControlSystem/Line1", "outcome": "ok", "limit": 200 },
+          { "entry": "ns=2;i=118", "outcome": "empty", "limit": 200 },
+          { "entry": "ns=2;i=1", "outcome": "tooLarge", "limit": 200 },
+          { "entry": "/Objects/Nowhere", "outcome": "unresolved", "limit": 200 }
+        ],
+        "deny": [],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "ns=2;i=118",
+          "problem": "writable_subtrees rule ns=2;i=118 matched no Variables, so it allows nothing."
+        },
+        {
+          "entry": "ns=2;i=1",
+          "problem": "writable_subtrees rule ns=2;i=1 matches more than 200 nodes, so it was ignored and allows nothing. Narrow the root or the type_definition, or raise max_nodes."
+        },
+        {
+          "entry": "/Objects/Nowhere",
+          "problem": "/Objects/Nowhere does not resolve to a node on this server, so it allows or hides nothing."
+        }
+      ]
+    },
+    {
+      "name": "deny_read outcomes",
+      "input": {
+        "writable": [],
+        "methods": [],
+        "subtrees": [],
+        "deny": [
+          { "entry": "ns=2;i=118", "outcome": "ok", "limit": 5000, "reason": null },
+          { "entry": "/Objects/Nowhere", "outcome": "unresolved", "limit": 5000, "reason": null },
+          { "entry": "ns=0;i=85", "outcome": "tooLarge", "limit": 5000, "reason": null },
+          { "entry": "ns=2;i=1", "outcome": "failed", "limit": 5000, "reason": "BadTimeout" }
+        ],
+        "alarm_sources": [],
+        "preconditions": []
+      },
+      "expect": [
+        {
+          "entry": "/Objects/Nowhere",
+          "problem": "/Objects/Nowhere does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "ns=0;i=85",
+          "problem": "deny_read entry ns=0;i=85 takes the read policy past 5000 nodes, so every read is refused until deny_read is narrowed."
+        },
+        {
+          "entry": "ns=2;i=1",
+          "problem": "deny_read entry ns=2;i=1 could not be resolved (BadTimeout), so every read is refused until it is."
+        }
+      ]
+    },
+    {
+      "name": "alarm sources and precondition nodes that do not resolve",
+      "input": {
+        "writable": [],
+        "methods": [],
+        "subtrees": [],
+        "deny": [],
+        "alarm_sources": [
+          { "entry": "ns=1;s=Temperature", "node_id": "ns=1;s=Temperature" },
+          { "entry": "nsu=urn:missing;i=5", "node_id": null }
+        ],
+        "preconditions": [
+          { "entry": "/Objects/Permit", "node_id": null },
+          { "entry": "ns=2;i=110", "node_id": "ns=2;i=110" }
+        ]
+      },
+      "expect": [
+        {
+          "entry": "nsu=urn:missing;i=5",
+          "problem": "nsu=urn:missing;i=5 does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "/Objects/Permit",
+          "problem": "/Objects/Permit does not resolve to a node on this server, so it allows or hides nothing."
+        }
+      ]
+    },
+    {
+      "name": "sections are reported in policy order",
+      "input": {
+        "writable": [
+          {
+            "entry": "nsu=urn:missing;i=5",
+            "node_id": null,
+            "unresolved_reason": "unresolved",
+            "segment": null,
+            "parent": null,
+            "bound": null,
+            "facts": null,
+            "engineering": null
+          }
+        ],
+        "methods": [
+          {
+            "entry": "a|b",
+            "object_node_id": null,
+            "method_node_id": null,
+            "unresolved_reason": "unresolved",
+            "segment": null,
+            "parent": null,
+            "object_facts": null,
+            "method_facts": null,
+            "on_object": true
+          }
+        ],
+        "subtrees": [],
+        "deny": [
+          { "entry": "/Objects/Nowhere", "outcome": "unresolved", "limit": 5000, "reason": null }
+        ],
+        "alarm_sources": [],
+        "preconditions": [{ "entry": "/Objects/Permit", "node_id": null }]
+      },
+      "expect": [
+        {
+          "entry": "nsu=urn:missing;i=5",
+          "problem": "nsu=urn:missing;i=5 does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "a|b",
+          "problem": "a|b does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "/Objects/Nowhere",
+          "problem": "/Objects/Nowhere does not resolve to a node on this server, so it allows or hides nothing."
+        },
+        {
+          "entry": "/Objects/Permit",
+          "problem": "/Objects/Permit does not resolve to a node on this server, so it allows or hides nothing."
+        }
+      ]
+    }
+  ]
+}

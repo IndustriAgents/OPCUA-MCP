@@ -1,0 +1,1455 @@
+{
+  "$comment": "One table of writes and the plan each must get from the target node's own attributes, driven through BOTH runtimes: tests/unit/test_write_plan.py and packages/server-node/test/write-plan.test.mjs call planWrite / plan_write on each case and assert the same plan. `facts` is what the node's attributes said (NodeClass, DataType resolved to a built-in, ValueRank, ArrayDimensions, AccessLevel, UserAccessLevel, enumeration states, two-state labels) or null when they could not be read; `engineering` is the existing EngineeringUnits/EURange/InstrumentRange record. A `send` plan is what is converted and written — `data_type` null means the type comes from the node's current value, as it always did, and `array` null means array-ness comes from wherever the type came from. A `skip` is that node's record, nothing sent to it, the rest of the batch unaffected. A `refuse` is the whole batch, nothing written. Every sentence is from contract/tools.json -> writeSkips or errors.",
+  "cases": [
+    {
+      "name": "a writable Double scalar takes the value as given",
+      "request": { "node_id": "ns=2;i=41", "value": 42.5 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 42.5 }
+    },
+    {
+      "name": "a numeric string is passed on for the codec to parse",
+      "request": { "node_id": "ns=2;i=41", "value": "42.5" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": "42.5" }
+    },
+    {
+      "name": "no facts at all: send exactly as before, inferring from the current value",
+      "request": { "node_id": "ns=2;i=41", "value": 1 },
+      "facts": null,
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": null, "array": null, "value": 1 }
+    },
+    {
+      "name": "no facts, explicit data_type: send with it, array-ness from the value",
+      "request": { "node_id": "ns=2;i=41", "value": 1, "data_type": "Double" },
+      "facts": null,
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": null, "value": 1 }
+    },
+    {
+      "name": "an unknown node is left to the server to answer",
+      "request": { "node_id": "ns=2;i=999999", "value": 1 },
+      "facts": {
+        "status": "BadNodeIdUnknown",
+        "node_class": null,
+        "data_type": null,
+        "data_type_id": null,
+        "enumeration": false,
+        "value_rank": null,
+        "array_dimensions": null,
+        "access_level": null,
+        "user_access_level": null,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": null, "array": null, "value": 1 }
+    },
+    {
+      "name": "an unknown node keeps its explicit data_type",
+      "request": { "node_id": "ns=2;i=999999", "value": 1, "data_type": "Int32" },
+      "facts": {
+        "status": "BadNodeIdUnknown",
+        "node_class": null,
+        "data_type": null,
+        "data_type_id": null,
+        "enumeration": false,
+        "value_rank": null,
+        "array_dimensions": null,
+        "access_level": null,
+        "user_access_level": null,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": null, "value": 1 }
+    },
+    {
+      "name": "an Object has no value to write",
+      "request": { "node_id": "ns=2;i=1", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Object",
+        "data_type": null,
+        "data_type_id": null,
+        "enumeration": false,
+        "value_rank": null,
+        "array_dimensions": null,
+        "access_level": null,
+        "user_access_level": null,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadNodeClassInvalid",
+        "error": "Node ns=2;i=1 is a Object node, not a Variable, so it has no value to write. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a Method has no value to write",
+      "request": { "node_id": "ns=2;i=28", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Method",
+        "data_type": null,
+        "data_type_id": null,
+        "enumeration": false,
+        "value_rank": null,
+        "array_dimensions": null,
+        "access_level": null,
+        "user_access_level": null,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadNodeClassInvalid",
+        "error": "Node ns=2;i=28 is a Method node, not a Variable, so it has no value to write. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "CurrentRead only is read-only",
+      "request": { "node_id": "ns=2;i=3", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 1,
+        "user_access_level": 1,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadNotWritable",
+        "error": "Node ns=2;i=3 is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it."
+      }
+    },
+    {
+      "name": "CurrentRead and HistoryRead is still read-only",
+      "request": { "node_id": "ns=2;i=3", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 5,
+        "user_access_level": 5,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadNotWritable",
+        "error": "Node ns=2;i=3 is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it."
+      }
+    },
+    {
+      "name": "writable, but not for this user",
+      "request": { "node_id": "ns=2;i=41", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 1,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadUserAccessDenied",
+        "error": "Node ns=2;i=41 is writable, but not by the OPC UA user this server is logged in as (its UserAccessLevel does not include CurrentWrite). Nothing was sent to it."
+      }
+    },
+    {
+      "name": "an AccessLevel that could not be read is left to the server",
+      "request": { "node_id": "ns=2;i=41", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": null,
+        "user_access_level": null,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 1 }
+    },
+    {
+      "name": "a write-only node is typed from its DataType attribute, with no read of its value",
+      "request": { "node_id": "ns=2;i=120", "value": 7 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 2,
+        "user_access_level": 2,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 7 }
+    },
+    {
+      "name": "an explicit data_type that contradicts the node's DataType",
+      "request": { "node_id": "ns=2;i=41", "value": 1, "data_type": "Float" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadTypeMismatch",
+        "error": "Node ns=2;i=41 holds Double, and data_type Float does not match it. Drop data_type to write it as Double. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "an explicit data_type that matches",
+      "request": { "node_id": "ns=2;i=41", "value": 1, "data_type": "Double" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 1 }
+    },
+    {
+      "name": "an abstract DataType accepts the explicit data_type",
+      "request": { "node_id": "ns=2;i=41", "value": 1, "data_type": "Int32" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": null,
+        "data_type_id": "ns=0;i=26",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 1 }
+    },
+    {
+      "name": "an abstract DataType without data_type infers from the current value",
+      "request": { "node_id": "ns=2;i=41", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": null,
+        "data_type_id": "ns=0;i=24",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": null, "array": false, "value": 1 }
+    },
+    {
+      "name": "a list for a scalar node",
+      "request": { "node_id": "ns=2;i=41", "value": [1, 2] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadTypeMismatch",
+        "error": "Node ns=2;i=41 holds a single value (ValueRank -1); write one value, not a list. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a scalar for a one-dimensional array node",
+      "request": { "node_id": "ns=2;i=108", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": [3],
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadTypeMismatch",
+        "error": "Node ns=2;i=108 holds an array (ValueRank 1); write a list, even of one element. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a scalar for a OneOrMoreDimensions node",
+      "request": { "node_id": "ns=2;i=108", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 0,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadTypeMismatch",
+        "error": "Node ns=2;i=108 holds an array (ValueRank 0); write a list, even of one element. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a list within ArrayDimensions",
+      "request": { "node_id": "ns=2;i=108", "value": [1, 2, 3] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": [3],
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": true, "value": [1, 2, 3] }
+    },
+    {
+      "name": "a list past ArrayDimensions",
+      "request": { "node_id": "ns=2;i=108", "value": [1, 2, 3, 4] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": [3],
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadOutOfRange",
+        "error": "Node ns=2;i=108 holds at most 3 elements (its ArrayDimensions); got 4. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "ArrayDimensions of 0 means no stated maximum",
+      "request": { "node_id": "ns=2;i=108", "value": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": [0],
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "send",
+        "data_type": "Double",
+        "array": true,
+        "value": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+      }
+    },
+    {
+      "name": "ValueRank Any takes a scalar",
+      "request": { "node_id": "ns=2;i=41", "value": 1 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -2,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 1 }
+    },
+    {
+      "name": "ValueRank Any takes a list",
+      "request": { "node_id": "ns=2;i=41", "value": [1] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -2,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": true, "value": [1] }
+    },
+    {
+      "name": "ValueRank ScalarOrOneDimension takes a list",
+      "request": { "node_id": "ns=2;i=41", "value": [1, 2] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -3,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": true, "value": [1, 2] }
+    },
+    {
+      "name": "a two-dimensional node takes its type and dimensions from the current value",
+      "request": { "node_id": "ns=2;i=41", "value": [1, 2] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 2,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": null, "array": null, "value": [1, 2] }
+    },
+    {
+      "name": "a two-dimensional node with an explicit data_type is an array of it",
+      "request": { "node_id": "ns=2;i=41", "value": [1, 2], "data_type": "Double" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 2,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": true, "value": [1, 2] }
+    },
+    {
+      "name": "an enumeration takes a state's label",
+      "request": { "node_id": "ns=2;i=102", "value": "Failed" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 1 }
+    },
+    {
+      "name": "an enumeration takes a state's number",
+      "request": { "node_id": "ns=2;i=102", "value": 3 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 3 }
+    },
+    {
+      "name": "an enumeration takes a state's number as a numeric string, as a number",
+      "request": { "node_id": "ns=2;i=102", "value": "2" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 2 }
+    },
+    {
+      "name": "a label is matched exactly, not case-insensitively",
+      "request": { "node_id": "ns=2;i=102", "value": "failed" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "\"failed\" is not a state node ns=2;i=102 defines (0 = Running, 1 = Failed, 2 = NoConfiguration, 3 = Suspended, 4 = Shutdown, 5 = Test, 6 = CommunicationFault, 7 = Unknown). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "a number that is not a state",
+      "request": { "node_id": "ns=2;i=102", "value": 9 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "9 is not a state node ns=2;i=102 defines (0 = Running, 1 = Failed, 2 = NoConfiguration, 3 = Suspended, 4 = Shutdown, 5 = Test, 6 = CommunicationFault, 7 = Unknown). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "a fraction is not a state",
+      "request": { "node_id": "ns=2;i=102", "value": 1.5 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "1.5 is not a state node ns=2;i=102 defines (0 = Running, 1 = Failed, 2 = NoConfiguration, 3 = Suspended, 4 = Shutdown, 5 = Test, 6 = CommunicationFault, 7 = Unknown). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "a boolean is not a state",
+      "request": { "node_id": "ns=2;i=102", "value": true },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "true is not a state node ns=2;i=102 defines (0 = Running, 1 = Failed, 2 = NoConfiguration, 3 = Suspended, 4 = Shutdown, 5 = Test, 6 = CommunicationFault, 7 = Unknown). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "a MultiStateDiscrete label",
+      "request": { "node_id": "ns=2;i=103", "value": "Open" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "UInt32",
+        "data_type_id": "ns=0;i=7",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Closed" },
+          { "value": 1, "label": "Open" },
+          { "value": 2, "label": "Auto" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "UInt32", "array": false, "value": 1 }
+    },
+    {
+      "name": "EnumValues with gaps: a label maps to its own value",
+      "request": { "node_id": "ns=2;i=41", "value": "High" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 1, "label": "Low" },
+          { "value": 5, "label": "High" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 5 }
+    },
+    {
+      "name": "EnumValues with gaps: a number between them is not a state",
+      "request": { "node_id": "ns=2;i=41", "value": 2 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 1, "label": "Low" },
+          { "value": 5, "label": "High" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "2 is not a state node ns=2;i=41 defines (1 = Low, 5 = High). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "an array of labels is mapped element by element",
+      "request": { "node_id": "ns=2;i=103", "value": ["Open", "Closed"] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "UInt32",
+        "data_type_id": "ns=0;i=7",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Closed" },
+          { "value": 1, "label": "Open" },
+          { "value": 2, "label": "Auto" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "UInt32", "array": true, "value": [1, 0] }
+    },
+    {
+      "name": "one bad element refuses the batch, naming that element",
+      "request": { "node_id": "ns=2;i=103", "value": ["Open", "Shut"] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "UInt32",
+        "data_type_id": "ns=0;i=7",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Closed" },
+          { "value": 1, "label": "Open" },
+          { "value": 2, "label": "Auto" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "\"Shut\" is not a state node ns=2;i=103 defines (0 = Closed, 1 = Open, 2 = Auto). Nothing was written. Write one of the numbers, or its label exactly as listed."
+      }
+    },
+    {
+      "name": "an enumeration with an explicit Int32 still takes a label",
+      "request": { "node_id": "ns=2;i=102", "value": "Running", "data_type": "Int32" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Int32",
+        "data_type_id": "ns=0;i=852",
+        "enumeration": true,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Int32", "array": false, "value": 0 }
+    },
+    {
+      "name": "a two-state node takes its TrueState label",
+      "request": { "node_id": "ns=2;i=105", "value": "Locked" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Boolean",
+        "data_type_id": "ns=0;i=1",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": { "true": "Locked", "false": "Unlocked" }
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Boolean", "array": false, "value": true }
+    },
+    {
+      "name": "a two-state node takes its FalseState label",
+      "request": { "node_id": "ns=2;i=105", "value": "Unlocked" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Boolean",
+        "data_type_id": "ns=0;i=1",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": { "true": "Locked", "false": "Unlocked" }
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Boolean", "array": false, "value": false }
+    },
+    {
+      "name": "a two-state node still takes true/false strings for the codec",
+      "request": { "node_id": "ns=2;i=105", "value": "true" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Boolean",
+        "data_type_id": "ns=0;i=1",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": { "true": "Locked", "false": "Unlocked" }
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Boolean", "array": false, "value": "true" }
+    },
+    {
+      "name": "a two-state label is exact; anything else is left to the codec",
+      "request": { "node_id": "ns=2;i=105", "value": "locked" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Boolean",
+        "data_type_id": "ns=0;i=1",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": { "true": "Locked", "false": "Unlocked" }
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Boolean", "array": false, "value": "locked" }
+    },
+    {
+      "name": "above the EURange",
+      "request": { "node_id": "ns=2;i=90", "value": 200 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "200 is outside the range node ns=2;i=90 accepts (0 to 150 °C), set by the OPC UA server's own EURange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "inside the EURange",
+      "request": { "node_id": "ns=2;i=90", "value": 100 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 100 }
+    },
+    {
+      "name": "the override lifts the EURange, not the InstrumentRange",
+      "request": { "node_id": "ns=2;i=90", "value": 200 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": true },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": 200 }
+    },
+    {
+      "name": "past the InstrumentRange even with the override",
+      "request": { "node_id": "ns=2;i=90", "value": 300 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": true },
+      "expect": {
+        "outcome": "refuse",
+        "error": "300 is outside the range node ns=2;i=90 accepts (-50 to 250 °C), set by the instrument's own InstrumentRange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "past both: the EURange is reported first",
+      "request": { "node_id": "ns=2;i=90", "value": 300 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "300 is outside the range node ns=2;i=90 accepts (0 to 150 °C), set by the OPC UA server's own EURange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "an InstrumentRange with no EURange and no unit",
+      "request": { "node_id": "ns=2;i=41", "value": 11 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": null,
+        "unit_description": null,
+        "eu_range": null,
+        "instrument_range": { "low": -10, "high": 10 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "11 is outside the range node ns=2;i=41 accepts (-10 to 10), set by the instrument's own InstrumentRange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "a numeric string is range-checked as the number it is",
+      "request": { "node_id": "ns=2;i=90", "value": "200" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "200 is outside the range node ns=2;i=90 accepts (0 to 150 °C), set by the OPC UA server's own EURange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "an array is range-checked element by element",
+      "request": { "node_id": "ns=2;i=90", "value": [0, 9999] },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": 1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "refuse",
+        "error": "9999 is outside the range node ns=2;i=90 accepts (0 to 150 °C), set by the OPC UA server's own EURange. Nothing was written. Read the node to see where it is now, or widen the bound if this is deliberate."
+      }
+    },
+    {
+      "name": "a read-only node is skipped before its range is looked at",
+      "request": { "node_id": "ns=2;i=90", "value": 9999 },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 1,
+        "user_access_level": 1,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": {
+        "unit": "°C",
+        "unit_description": "degree Celsius",
+        "eu_range": { "low": 0, "high": 150 },
+        "instrument_range": { "low": -50, "high": 250 }
+      },
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadNotWritable",
+        "error": "Node ns=2;i=90 is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a type mismatch is reported before the rank",
+      "request": { "node_id": "ns=2;i=41", "value": [1], "data_type": "Float" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": {
+        "outcome": "skip",
+        "status": "BadTypeMismatch",
+        "error": "Node ns=2;i=41 holds Double, and data_type Float does not match it. Drop data_type to write it as Double. Nothing was sent to it."
+      }
+    },
+    {
+      "name": "a boolean for a Double node is left to the codec",
+      "request": { "node_id": "ns=2;i=41", "value": true },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": "Double",
+        "data_type_id": "ns=0;i=11",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": "Double", "array": false, "value": true }
+    },
+    {
+      "name": "a DataType outside the writable spellings: inferred from the current value",
+      "request": { "node_id": "ns=2;i=41", "value": "x" },
+      "facts": {
+        "status": "Good",
+        "node_class": "Variable",
+        "data_type": null,
+        "data_type_id": "ns=0;i=21",
+        "enumeration": false,
+        "value_rank": -1,
+        "array_dimensions": null,
+        "access_level": 3,
+        "user_access_level": 3,
+        "executable": null,
+        "user_executable": null,
+        "states": null,
+        "two_state": null
+      },
+      "engineering": null,
+      "options": { "allow_out_of_range": false },
+      "expect": { "outcome": "send", "data_type": null, "array": false, "value": "x" }
+    }
+  ]
+}

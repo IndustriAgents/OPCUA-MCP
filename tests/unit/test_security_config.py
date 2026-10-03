@@ -413,34 +413,23 @@ def test_the_application_uri_defaults_to_the_certificates_own(tmp_path):
     assert client.application_uri == "urn:plant:mcp-client"
 
 
-def test_an_explicit_application_uri_wins(tmp_path):
-    """Configuration is never silently ignored — certificates without a URI need it."""
+def test_an_explicit_application_uri_that_contradicts_the_certificate_is_refused(tmp_path):
     cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
-    client = make_client(
-        {
-            "OPCUA_CLIENT_CERT": str(cert),
-            "OPCUA_CLIENT_KEY": str(key),
-            "OPCUA_APPLICATION_URI": "urn:plant:something-else",
-        }
-    )
-    assert client.application_uri == "urn:plant:something-else"
+    with pytest.raises(
+        ValueError, match="refusing to connect with conflicting application identities"
+    ):
+        make_client(
+            {
+                "OPCUA_CLIENT_CERT": str(cert),
+                "OPCUA_CLIENT_KEY": str(key),
+                "OPCUA_APPLICATION_URI": "urn:plant:something-else",
+            }
+        )
 
 
-def test_an_explicit_application_uri_that_contradicts_the_certificate_warns(tmp_path, capsys):
-    """It is announced as asked, but a server checking the two will refuse the session."""
-    cert, key = write_self_signed(tmp_path, "client", "urn:plant:mcp-client")
-    make_client(
-        {
-            "OPCUA_CLIENT_CERT": str(cert),
-            "OPCUA_CLIENT_KEY": str(key),
-            "OPCUA_APPLICATION_URI": "urn:plant:something-else",
-        }
-    )
-    printed = capsys.readouterr()
-    assert "BadCertificateUriInvalid" in printed.err
-    assert "urn:plant:mcp-client" in printed.err
-    # stdout is the MCP stdio transport; anything printed there corrupts it.
-    assert printed.out == ""
+def test_an_explicit_application_uri_without_a_certificate_is_honored():
+    client = make_client({"OPCUA_APPLICATION_URI": "urn:plant:mcp-client"})
+    assert client.application_uri == "urn:plant:mcp-client"
 
 
 def test_a_matching_application_uri_says_nothing(tmp_path, capsys):

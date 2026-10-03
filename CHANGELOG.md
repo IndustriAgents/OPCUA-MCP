@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now render identically; native Python microsecond precision is explicitly
   declared instead of discarded. Refusal values use the shared JSON spelling.
 
+### Fixed — consistent OPC UA client identity and channel requests (#157 C23)
+- Both runtimes announce `OPC UA MCP Client` and request the configured session
+  timeout as their secure-channel lifetime; servers may revise those requests.
+- Reject an application URI override that contradicts the client certificate
+  before connecting, instead of Python announcing it and Node ignoring it.
+- Declare the certificate-less default URI difference caused by Node’s generated
+  application certificate; configured certificate identities remain identical.
+
 ### Fixed — recover consistently from service timeouts (#157 B14)
 - Node now recognizes transaction timeouts, socket error codes and wrapped
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic

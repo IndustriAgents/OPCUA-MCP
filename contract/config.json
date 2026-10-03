@@ -166,7 +166,7 @@
       "key": "application_uri",
       "category": "security",
       "title": "Application URI",
-      "description": "Application URI announced to the server. Set it only for a certificate that carries no URI of its own: a server may reject a session whose URI does not match the certificate.",
+      "description": "Application URI announced to the server. Set it only for a certificate that carries no URI of its own. A configured URI that conflicts with the certificate is refused before connecting.",
       "type": "string",
       "default": null,
       "defaultDescription": "the subjectAltName URI of the client certificate",

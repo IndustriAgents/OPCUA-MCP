@@ -21,6 +21,7 @@ import {
 } from "node-opcua-crypto";
 
 import { existsSync } from "fs";
+import { applicationUriProblem } from "./client-identity.js";
 
 /** Policies both runtimes accept. */
 export const SHARED_POLICIES = ["None", "Basic128Rsa15", "Basic256", "Basic256Sha256"] as const;
@@ -356,7 +357,23 @@ export function pinnedCertificateProblem(path: string, now: Date = new Date()): 
  * the extra endpoint round-trip it otherwise makes to fetch one — the two
  * runtimes end up doing the same thing for the same reason.
  */
+/** The first SAN URI, matching the library's CreateSession identity. */
+export function certificateApplicationUri(path: string): string | undefined {
+  try {
+    return exploreCertificate(readCertificate(path)).tbsCertificate.extensions?.subjectAltName
+      ?.uniformResourceIdentifier?.[0];
+  } catch {
+    // The library reports unreadable certificates when it loads the channel key.
+    return undefined;
+  }
+}
+
 export function clientSecurityOptions(config: SecurityConfig) {
+  const certificateUri = config.clientCert
+    ? certificateApplicationUri(config.clientCert)
+    : undefined;
+  const problem = applicationUriProblem(config.applicationUri, certificateUri);
+  if (problem !== null) throw new Error(problem);
   if (config.serverCert) {
     const problem = pinnedCertificateProblem(config.serverCert);
     if (problem !== null) throw new Error(problem);

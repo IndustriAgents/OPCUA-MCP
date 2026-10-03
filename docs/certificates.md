@@ -78,6 +78,9 @@ OPCUA_CLIENT_CERT=/etc/opcua/client.pem
 OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
 ```
 
+A conflicting `OPCUA_APPLICATION_URI` is refused locally before connecting;
+unset it or set it to the certificate’s own URI.
+
 `OPCUA_APPLICATION_URI` is not needed: both runtimes take the URI out of
 `OPCUA_CLIENT_CERT`. Set it only for a certificate with no URI in its
 `subjectAltName`, and expect a warning if it contradicts one that has it — the
@@ -165,7 +168,7 @@ all, and whichever is in force is named in the startup line, in
 
 | Status code | What it means here |
 |---|---|
-| `BadCertificateUriInvalid` | The announced ApplicationUri is not the certificate's `subjectAltName` URI — usually an `OPCUA_APPLICATION_URI` left over from another certificate. Unset it. |
+| `BadCertificateUriInvalid` | The announced ApplicationUri is not the certificate's `subjectAltName` URI — usually an `OPCUA_APPLICATION_URI` left over from another certificate. Unset it; conflicting overrides now fail locally before connecting. |
 | `BadCertificateUntrusted`, `BadSecurityChecksFailed` | The certificate is not in the server's trust list yet — see above. |
 | `BadCertificateTimeInvalid` | Expired, or not valid yet: check both ends of the validity window, and the clocks. |
 | `BadCertificateUseNotAllowed` | `keyUsage` or `extendedKeyUsage` is missing what the server insists on. Regenerate with all four key usages. |

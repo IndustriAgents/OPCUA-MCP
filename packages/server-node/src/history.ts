@@ -19,10 +19,24 @@
 import {
   ClientSession,
   HistoryReadRequest,
+  ReadRawModifiedDetails,
   HistoryReadValueId,
   TimestampsToReturn,
   resolveNodeId,
 } from "node-opcua-client";
+
+import { CONTRACT } from "./contract.js";
+
+/** Raw stored readings, without the library's implicit bounding values. */
+export function rawDetails(start: Date | undefined, end: Date | undefined, count: number) {
+  return new ReadRawModifiedDetails({
+    startTime: start,
+    endTime: end,
+    numValuesPerNode: count,
+    returnBounds: CONTRACT.history.rawReturnBounds,
+    isReadModified: false,
+  });
+}
 
 /** Whether a history result carries a continuation point. */
 export function continues(continuationPoint: Buffer | null | undefined): boolean {

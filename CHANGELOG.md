@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SIGINT/SIGTERM delivered to a worker thread still trigger bounded subscription
   and session cleanup while the main thread is idle. Restore prior handlers on EOF.
 
+### Fixed — raw history contains only stored readings (#172)
+- Both runtimes explicitly request `ReturnBounds=false`. History no longer
+  includes unrequested preceding/following values or `BadBoundNotFound`
+  placeholders; forward continuation repeats only the boundary timestamp.
+
 ### Changed — the tool catalogue no longer moves with the plant (#140)
 - **`tools/list` advertises every tool the contract defines, with the same
   schema, whatever the OPC UA endpoint is doing.** It used to be filtered by

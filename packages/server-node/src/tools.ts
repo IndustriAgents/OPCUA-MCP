@@ -15,7 +15,6 @@ import {
   BrowseDirection,
   ClientSession,
   ReadProcessedDetails,
-  ReadRawModifiedDetails,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
@@ -57,7 +56,7 @@ import {
   historyCompleteness,
   traversalCompleteness,
 } from "./completeness.js";
-import { continues, releaseContinuationPoint } from "./history.js";
+import { continues, rawDetails, releaseContinuationPoint } from "./history.js";
 import {
   ServerOperationLimits,
   UNSTATED,
@@ -1412,6 +1411,7 @@ export class OpcuaTools {
         const end = toDate(request.end);
         const historyReadings = await session.readHistoryValue([nodeId], start as any, end as any, {
           numValuesPerNode: wanted,
+          returnBounds: CONTRACT.history.rawReturnBounds,
         });
         if (historyReadings.length !== 1) throw new Error("Read history failed");
         const reading = historyReadings[0];
@@ -1425,13 +1425,7 @@ export class OpcuaTools {
           session,
           nodeId,
           reading.continuationPoint,
-          new ReadRawModifiedDetails({
-            startTime: start,
-            endTime: end,
-            numValuesPerNode: wanted,
-            returnBounds: true,
-            isReadModified: false,
-          })
+          rawDetails(start, end, wanted)
         );
         const records = toHistoryRecords(dataValues);
         return historyResult(

@@ -675,6 +675,10 @@
       "priority": 10
     }
   },
+  "history": {
+    "$comment": "Raw reads return stored readings only, never bounding values or BadBoundNotFound placeholders (#172). Follow-up start_time is inclusive; callers discard records at that boundary timestamp.",
+    "rawReturnBounds": false
+  },
   "transport": {
     "$comment": "Bounds on what the OPC UA server on the other end may send us, advertised in the OPC UA Hello and enforced on receipt. CVE-2022-25304 is a missing limit on the number of chunks one message may be split into: python-opcua appends every intermediate chunk to a list with nothing counting them, so a hostile or compromised server can stream chunks until the client runs out of memory. The advisory has no fixed version and will not get one — python-opcua is unmaintained, and the same advisory names asyncua. Both runtimes therefore advertise these bounds and, because advertising only binds a server that chooses to obey, enforce them on what actually arrives. maxChunkCount * maxChunkSize is the largest message either runtime will assemble: 1024 * 64KiB = 64MiB, which is far above any real OPC UA response and far below a memory-exhaustion attack. See SECURITY.md.",
     "maxChunkCount": 1024,
@@ -1038,7 +1042,7 @@
       "argumentCapabilities": { "aggregate_function": ["aggregate"] },
       "resultShape": "historyRecords",
       "reportsCompleteness": true,
-      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
+      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings, with ReturnBounds=false: no preceding/following boundary values or BadBoundNotFound placeholders. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -7,7 +7,7 @@ is the only evidence a read has that it stopped short of the range — the reaso
 before, so a read the server cut short was reported as the whole range: here,
 python-opcua's ``Node.read_raw_history`` returns the values and drops the
 continuation point on the floor, so the raw read now goes through
-``Node.history_read`` with exactly the details ``read_raw_history`` would build.
+``Node.history_read`` with bounds explicitly disabled by the shared contract.
 
 Nor did either give it back. A continuation point is state the server keeps for
 this session until it is released or the session ends, and a server holds only
@@ -26,6 +26,8 @@ from typing import Any
 
 from opcua import ua
 
+from .contract import CONTRACT
+
 
 def continues(continuation_point: bytes | None) -> bool:
     """Whether a history result carries a continuation point."""
@@ -33,17 +35,13 @@ def continues(continuation_point: bytes | None) -> bool:
 
 
 def raw_details(start: datetime | None, end: datetime | None, num_values: int) -> Any:
-    """The ReadRawModifiedDetails ``Node.read_raw_history`` sends, field for field.
-
-    Built here rather than by that method only because it discards the
-    continuation point; the request on the wire is unchanged.
-    """
+    """Raw stored readings, without the library's implicit bounding values."""
     details = ua.ReadRawModifiedDetails()
     details.IsReadModified = False
     details.StartTime = start or ua.get_win_epoch()
     details.EndTime = end or ua.get_win_epoch()
     details.NumValuesPerNode = num_values
-    details.ReturnBounds = True
+    details.ReturnBounds = CONTRACT["history"]["rawReturnBounds"]
     return details
 
 

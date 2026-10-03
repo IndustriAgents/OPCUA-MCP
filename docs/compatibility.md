@@ -14,6 +14,17 @@ here and they answer different questions:
 
 Neither is a vendor certification.
 
+## Per-release runtime evidence
+
+Every release publishes `runtime-compatibility.json`, tied to its source commit,
+with successful test counts for both first-class runtimes on every supported CI
+matrix leg, the shared contract/fixture/lockfile digests, and the declared runtime
+differences. The report and raw evidence also appear in CI's
+`conformance-<python>-<node>` artifacts. See
+[the report format and release gate](releasing.md#compatibility-evidence-for-each-release).
+Its repository/mock evidence and dated independent-server results answer
+different questions; passing the former does not refresh the latter.
+
 ## OPC UA servers
 
 ### Repository mocks

@@ -58,9 +58,40 @@ runs:
       shell: bash
       run: uv sync --all-packages --python ${{ inputs.python-version }}
 
+    - name: Lint, typecheck and generated contracts
+      shell: bash
+      run: |
+        uv run --no-sync ruff check .
+        uv run --no-sync ruff format --check .
+        npm run format:check --prefix packages/server-node
+        npm run typecheck --prefix packages/server-node
+        npm run config:check --prefix packages/server-node
+
+    - name: Node unit evidence
+      shell: bash
+      working-directory: packages/server-node
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/.context/conformance"
+        node --throw-deprecation --test --test-reporter=junit \
+          --test-reporter-destination="$GITHUB_WORKSPACE/.context/conformance/node-unit.xml" test/*.test.mjs
+
     - name: Run unit and end-to-end tests (required mode)
       shell: bash
       working-directory: tests
       env:
         OPCUA_TESTS_REQUIRED: "1"
+        OPCUA_SUITE_REPORT: ${{ github.workspace }}/.context/conformance/pytest.json
       run: uv run --no-sync pytest -v e2e/ unit/
+
+    - name: Build compatibility evidence
+      shell: bash
+      run: |
+        uv run --no-sync python scripts/compatibility_report.py \
+          --pytest .context/conformance/pytest.json --node-junit .context/conformance/node-unit.xml \
+          --output .context/conformance/runtime-compatibility.json
+
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: conformance-${{ inputs.python-version }}-${{ inputs.node-version }}
+        path: .context/conformance/*
+        if-no-files-found: error

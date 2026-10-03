@@ -85,7 +85,17 @@ jobs:
   # The suite CI's E2E jobs and publish.yml run, in required mode: nothing is
   # built or attached for a tag the full suite has not passed on (#142).
   conformance:
-    name: Conformance suite
+    name: Conformance — Python ${{ matrix.python-version }} / Node ${{ matrix.node-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            node-version: "22"
+          - python-version: "3.13"
+            node-version: "22"
+          - python-version: "3.13"
+            node-version: "24"
     needs: verify-tag
     runs-on: ubuntu-latest
     permissions:
@@ -97,6 +107,37 @@ jobs:
 
       - name: Conformance suite
         uses: ./.github/actions/conformance
+        with:
+          python-version: ${{ matrix.python-version }}
+          node-version: ${{ matrix.node-version }}
+
+  compatibility-report:
+    name: Release compatibility report
+    needs: conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: conformance-*
+          path: evidence
+
+      - name: Require all tested runtime legs from this commit
+        run: |
+          python3 scripts/compatibility_report.py \
+            --merge evidence/*/runtime-compatibility.json \
+            --output staged/runtime-compatibility.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: asset-compatibility
+          path: staged/runtime-compatibility.json
+          if-no-files-found: error
 
   # Platform-independent: the bundle contains no compiled code, only the server
   # and its dependencies as one JavaScript file. Claude Desktop supplies Node.
@@ -490,7 +531,7 @@ jobs:
   # Everything from here runs only for a tag.
   manifest:
     name: Checksums, signature and provenance
-    needs: [mcpb, packages, binaries]
+    needs: [mcpb, packages, binaries, compatibility-report]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -547,11 +588,13 @@ jobs:
           # out of a release (v0.3.0), and would not be in the manifest either.
           test -z "$(find . -mindepth 1 -not -type f -print -quit)" || {
             echo "::error::assets contains something other than regular files"; find . ; exit 1; }
-          artifacts=$(find . -type f ! -name '*.cdx.json' | wc -l)
+          test -f runtime-compatibility.json || { echo '::error::compatibility report is missing'; exit 1; }
+          jq -e '.matrixComplete == true and .sourceCommit == env.GITHUB_SHA' runtime-compatibility.json >/dev/null
+          artifacts=$(find . -type f ! -name '*.cdx.json' ! -name runtime-compatibility.json | wc -l)
           test "$artifacts" -eq "$EXPECTED_ARTIFACTS" || {
             echo "::error::expected $EXPECTED_ARTIFACTS artifacts, found $artifacts"; ls -l; exit 1; }
           for file in *; do
-            case "$file" in *.cdx.json) continue ;; esac
+            case "$file" in *.cdx.json|runtime-compatibility.json) continue ;; esac
             test -f "$file.cdx.json" || { echo "::error::$file has no SBOM"; exit 1; }
           done
           test "$(find . -name '*.cdx.json' | wc -l)" -eq "$EXPECTED_ARTIFACTS" || {

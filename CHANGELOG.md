@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field names and values, including nested structures and arrays, on both runtimes.
   LocalizedText fields retain Locale and Text. Opaque or unsupported structures
   carry `{"$opcua":"undecodableExtensionObject"}` instead of a library debug string.
+### Added — per-release first-class runtime evidence (#143)
+- Publish a compatibility report with exact tested versions, source/input digests,
+  group counts and declared differences. Release/publish gates exercise every
+  supported runtime matrix leg, with lint and Node unit checks as well as E2E.
+  The report is checksum-signed and attested; dated vendor evidence stays explicit.
 
 ### Changed — the tool catalogue no longer moves with the plant (#140)
 - **`tools/list` advertises every tool the contract defines, with the same

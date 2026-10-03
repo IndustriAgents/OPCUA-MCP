@@ -30,8 +30,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify before publishing
+  verify-tag:
+    name: Tag matches the manifests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,12 +51,53 @@ jobs:
           fi
         if: startsWith(github.ref, 'refs/tags/v')
 
-      # The same action CI's E2E jobs run, in required mode: every mock is
-      # installed, and a skip fails the job. This gate once installed only the
-      # aggregate mock, so every Alarms & Conditions test skipped on every
-      # release and the job stayed green (#142).
-      - name: Conformance suite
-        uses: ./.github/actions/conformance
+  conformance:
+    needs: verify-tag
+    name: Conformance — Python ${{ matrix.python-version }} / Node ${{ matrix.node-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            node-version: "22"
+          - python-version: "3.13"
+            node-version: "22"
+          - python-version: "3.13"
+            node-version: "24"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/conformance
+        with:
+          python-version: ${{ matrix.python-version }}
+          node-version: ${{ matrix.node-version }}
+
+  verify:
+    name: Verify before publishing
+    needs: conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Conformance has passed on every supported runtime leg. This runner
+      # still needs the toolchains to build and exercise the final artifacts.
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Install Node dependencies
+        run: |
+          npm ci --prefix packages/server-node
+          npm ci --prefix packages/mock-server-aggregate
+          npm ci --prefix packages/mock-server-alarms
 
       # `--group packaging` brings in PyInstaller for the executables; required
       # mode makes a missing one a failure here too, not a skip.

@@ -63,7 +63,13 @@ from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .errors import message as error_message
-from .history import continues, raw_details, release_continuation_point
+from .history import (
+    aggregate_pages,
+    continues,
+    raw_details,
+    read_continuation,
+    release_continuation_point,
+)
 from .limits import (
     MAX_HISTORY_VALUES,
     MAX_SUBSCRIPTIONS,
@@ -1178,29 +1184,26 @@ def read_opcua_history(
             )
 
         result = client.get_node(node_id).history_read(details)
-        values = history_data(result, "Read aggregate", "DataValues")
-        continued = continues(result.ContinuationPoint)
-        release_continuation_point(client, node_id, result.ContinuationPoint, details)
+        values = aggregate_pages(
+            result,
+            lambda point: read_continuation(client, node_id, point, details),
+            lambda point: release_continuation_point(client, node_id, point, details),
+        )
         records = history_records(values)
-        # No count was asked for, so only the server can have cut this short.
-        # Where it resumes is the interval after the last one returned, which is
-        # not a timestamp this server should compute and round on the caller's
-        # behalf — so there is no `continuation`, and `serverTruncated` says to
-        # narrow.
+        # All native pages were consumed; a short server page is not a short range.
         return _history_result(
             records,
             history_completeness(
                 returned=len(records),
                 fetched=len(records),
                 wanted=None,
-                continuation_point=continued,
+                continuation_point=False,
                 next_start=None,
             ),
             "historyTruncated",
         )
     except LimitExceeded as e:
-        # A refusal of the request never reached the server, so it did not fail
-        # to be read — and wrapping it would say it had.
+        # Preserve contract refusals, including a bounded continuation drain.
         raise ToolError(str(e)) from e
     except Exception as e:
         raise ToolError(

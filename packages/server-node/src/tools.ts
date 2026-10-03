@@ -14,7 +14,6 @@ import {
   AggregateFunction,
   BrowseDirection,
   ClientSession,
-  ReadProcessedDetails,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
@@ -56,7 +55,14 @@ import {
   historyCompleteness,
   traversalCompleteness,
 } from "./completeness.js";
-import { continues, rawDetails, releaseContinuationPoint } from "./history.js";
+import {
+  aggregateDetails,
+  aggregatePages,
+  continues,
+  rawDetails,
+  readContinuation,
+  releaseContinuationPoint,
+} from "./history.js";
 import {
   ServerOperationLimits,
   UNSTATED,
@@ -1476,38 +1482,29 @@ export class OpcuaTools {
       }
 
       const aggregateType = AggregateFunction[aggregateFunction as keyof typeof AggregateFunction];
+      const details = aggregateDetails(start, end, aggregateType, request.processingInterval);
       const aggregated = await session.readAggregateValue(
         { nodeId },
-        start as any,
-        end as any,
+        start,
+        end,
         aggregateType,
-        request.processingInterval
+        request.processingInterval,
+        details.aggregateConfiguration
       );
-      const dataValues = historyData<DataValue>(aggregated, "Read aggregate", "dataValues");
-      const continued = continues(aggregated.continuationPoint);
-      await releaseContinuationPoint(
-        session,
-        nodeId,
-        aggregated.continuationPoint,
-        new ReadProcessedDetails({
-          startTime: start,
-          endTime: end,
-          aggregateType: [aggregateType],
-          processingInterval: request.processingInterval,
-        })
+      const dataValues = await aggregatePages(
+        aggregated,
+        (point) => readContinuation(session, nodeId, point, details),
+        (point) => releaseContinuationPoint(session, nodeId, point, details)
       );
       const records = toHistoryRecords(dataValues);
-      // No count was asked for, so only the server can have cut this short. Where
-      // it resumes is the interval after the last one returned, which is not a
-      // timestamp this server should compute and round on the caller's behalf —
-      // so there is no `continuation`, and `serverTruncated` says to narrow.
+      // All native pages were consumed; a short server page is not a short range.
       return historyResult(
         records,
         historyCompleteness({
           returned: records.length,
           fetched: records.length,
           wanted: null,
-          continuationPoint: continued,
+          continuationPoint: false,
           nextStart: null,
         }),
         "historyTruncated"

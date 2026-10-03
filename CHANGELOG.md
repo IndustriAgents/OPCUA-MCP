@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic
   cause traversal. Reads retry once; control calls report an uncertain outcome
   and are never resent. Empty Node error messages report the error name.
+### Fixed — finish server-paged aggregate history (#137)
+- Both runtimes consume native continuation points with the original query,
+  preserving interval boundaries. A stalled or oversized aggregate fails
+  explicitly instead of returning an unfinished range; held points are released.
 
 ### Security — enforce all Python receive bounds (#175)
 - Reject chunks over `maxChunkSize` before reading their bodies and reject

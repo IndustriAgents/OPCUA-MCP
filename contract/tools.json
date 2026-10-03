@@ -745,7 +745,7 @@
         },
         "continuation": {
           "type": ["object", "null"],
-          "description": "How to ask for the rest: arguments to merge over the ones just sent, and call the same tool again. {} means call it again unchanged (read_events drains as it reads). {\"start_time\": ...} continues a forward history read from the last record returned — inclusive, so the record(s) at that instant come back again and should be skipped by timestamp rather than lost. null when there is nothing to continue, or when the read cannot be resumed from its arguments (a backward history read, an aggregate read, a browse)."
+          "description": "How to ask for the rest: arguments to merge over the ones just sent, and call the same tool again. {} means call it again unchanged (read_events drains as it reads). {\"start_time\": ...} continues a forward history read from the last record returned — inclusive, so the record(s) at that instant come back again and should be skipped by timestamp rather than lost. null when there is nothing to continue, or when the read cannot be resumed from its arguments (a backward history read, a browse). Aggregates consume native continuation points internally with the original query: they return the completed range or an explicit error, never an unfinished aggregate page."
         }
       },
       "required": ["complete", "reasons", "returned", "truncated", "limit", "dropped", "remaining", "continuation"],
@@ -924,6 +924,8 @@
     "acknowledgeFailed": "Failed to acknowledge alarm {condition_id}: {reason}",
     "deadbandNeedsValue": "subscribe_opcua_nodes requires deadband_value when deadband_type is \"{deadband_type}\"",
     "percentDeadbandNeedsRange": "A percent deadband is a percentage of node {node_id}'s EURange, and it publishes none. Use deadband_type \"absolute\" with a value in engineering units, or read the node to see what it reports.",
+    "aggregateNoProgress": "Read aggregate stopped: the OPC UA server returned an empty page with a continuation point. No partial result was returned; narrow the time range or ask the server administrator to check history pagination.",
+    "aggregatePageLimit": "Read aggregate stopped at the {limit}-value limit before the server completed the range. No partial result was returned; narrow start_time/end_time or widen processing_interval.",
     "aggregateNeedsStart": "read_opcua_history requires start_time when aggregate_function is given",
     "notSubscribedToEvents": "Not subscribed to events from node {node_id}. Call subscribe_events first.",
     "unknownEventId": "Unknown event_id \"{event_id}\". Call list_active_alarms first, or pass the condition_id of the alarm to acknowledge.",
@@ -1043,7 +1045,7 @@
       "argumentCapabilities": { "aggregate_function": ["aggregate"] },
       "resultShape": "historyRecords",
       "reportsCompleteness": true,
-      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings, with ReturnBounds=false: no preceding/following boundary values or BadBoundNotFound placeholders. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
+      "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings, with ReturnBounds=false: no preceding/following boundary values or BadBoundNotFound placeholders. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. Aggregate reads follow native continuation points within the same call, preserving the original interval anchor; they return the completed range or an explicit error within the 5000-value bound. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
       "inputSchema": {
         "type": "object",
         "properties": {

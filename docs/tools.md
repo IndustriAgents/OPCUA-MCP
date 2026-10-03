@@ -154,3 +154,11 @@ read, and `continuation` is arguments to merge into the same call to get the res
 are `read_opcua_history`, `read_event_history`, `read_events`,
 `browse_opcua_nodes` and the three subscription tools; the shape is
 `contract/tools.json` -> `completeness`.
+
+Aggregate history consumes the OPC UA server’s continuation points within one
+call, using the original time range and processing interval on every page.
+It returns the completed range (at most 5000 values) or an explicit error if
+the server stops making progress, rejects continuation, or exceeds the cap.
+No partial aggregate page is presented as a successful result. Points held
+at failure or cancellation are released best-effort; none are retained
+across MCP calls or reconnects. Raw history keeps its stateless continuation.

@@ -11,6 +11,16 @@ flowchart LR
     B -->|OPC UA binary / TCP| C
 ```
 
+## Deployment boundary
+
+The supported MCP transport is local stdio: one process, one client context, one
+configured OPC UA endpoint. The plant endpoint may be remote. Instance-scoped
+state does not establish multi-client authorization or make sessions safe to
+pool across callers. Remote transport, endpoint selection and shared service
+operation require acceptance and implementation of the
+[identity and isolation RFC](rfc/0001-remote-identity-isolation.md), tracked in
+[#148](https://github.com/IndustriAgents/OPCUA-MCP/issues/148).
+
 ## Two runtimes, one tool surface
 
 The repo ships the same MCP server twice — once in Python, once in

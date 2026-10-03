@@ -87,6 +87,7 @@ import {
   readEventHistory,
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
+import { prettyJson } from "./result-text.js";
 import { historyData, toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
 import {
@@ -396,7 +397,7 @@ function eventResult(records: EventRecord[], completeness?: Completeness) {
  */
 function objectResult(record: unknown, completeness?: Completeness) {
   return {
-    content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
+    content: [{ type: "text", text: prettyJson(record) }],
     structuredContent: completeness ? { result: record, completeness } : { result: record },
   };
 }
@@ -413,7 +414,7 @@ function recordBlocks(records: unknown[], completeness?: Completeness) {
   return {
     content: records.map((record) => ({
       type: "text",
-      text: JSON.stringify(record, null, 2),
+      text: prettyJson(record),
     })),
     // Beside `result`, never inside it: `result` stays the array every existing
     // client already reads, and a record list that sometimes ends in something
@@ -908,7 +909,7 @@ export class OpcuaTools {
         {
           uri: resource.uri,
           mimeType: resource.mimeType,
-          text: JSON.stringify({ [resource.body.recordsKey]: this.subs.list() }, null, 2),
+          text: prettyJson({ [resource.body.recordsKey]: this.subs.list() }),
         },
       ],
     };

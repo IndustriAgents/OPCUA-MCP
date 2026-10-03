@@ -1,0 +1,136 @@
+{
+  "cases": [
+    {
+      "name": "unicode",
+      "value": {
+        "unit": "°C",
+        "label": "café 🙂",
+        "alarm": "温度"
+      },
+      "pretty": "{\n  \"alarm\": \"温度\",\n  \"label\": \"café 🙂\",\n  \"unit\": \"°C\"\n}",
+      "compact": "{\"unit\":\"°C\",\"label\":\"café 🙂\",\"alarm\":\"温度\"}"
+    },
+    {
+      "name": "floats",
+      "value": {
+        "whole": 1000,
+        "tiny": 0.00001,
+        "large": 10000000000000000,
+        "negative": -1,
+        "exponent": 1e-7,
+        "zero": 0
+      },
+      "pretty": "{\n  \"exponent\": 1e-7,\n  \"large\": 10000000000000000,\n  \"negative\": -1,\n  \"tiny\": 0.00001,\n  \"whole\": 1000,\n  \"zero\": 0\n}",
+      "compact": "{\"whole\":1000,\"tiny\":0.00001,\"large\":10000000000000000,\"negative\":-1,\"exponent\":1e-7,\"zero\":0}"
+    },
+    {
+      "name": "nested",
+      "value": {
+        "z": [
+          {
+            "z": 2,
+            "a": 1
+          },
+          [],
+          {}
+        ],
+        "a": {
+          "b": [
+            true,
+            null,
+            false
+          ],
+          "a": "quote\"\n\t"
+        }
+      },
+      "pretty": "{\n  \"a\": {\n    \"a\": \"quote\\\"\\n\\t\",\n    \"b\": [\n      true,\n      null,\n      false\n    ]\n  },\n  \"z\": [\n    {\n      \"a\": 1,\n      \"z\": 2\n    },\n    [],\n    {}\n  ]\n}",
+      "compact": "{\"z\":[{\"z\":2,\"a\":1},[],{}],\"a\":{\"b\":[true,null,false],\"a\":\"quote\\\"\\n\\t\"}}"
+    },
+    {
+      "name": "index-keys",
+      "value": {
+        "2": "two",
+        "10": "ten",
+        "4294967294": "last-index",
+        "01": "leading",
+        "4294967295": "not-index",
+        "a": 1,
+        "constructor": 2,
+        "__proto__": 3
+      },
+      "pretty": "{\n  \"2\": \"two\",\n  \"10\": \"ten\",\n  \"4294967294\": \"last-index\",\n  \"01\": \"leading\",\n  \"4294967295\": \"not-index\",\n  \"__proto__\": 3,\n  \"a\": 1,\n  \"constructor\": 2\n}",
+      "compact": "{\"2\":\"two\",\"10\":\"ten\",\"4294967294\":\"last-index\",\"01\":\"leading\",\"4294967295\":\"not-index\",\"a\":1,\"constructor\":2,\"__proto__\":3}"
+    },
+    {
+      "name": "utf16-order",
+      "value": {
+        "": 1,
+        "😀": 2,
+        "é": 3,
+        "A": 4
+      },
+      "pretty": "{\n  \"A\": 4,\n  \"é\": 3,\n  \"😀\": 2,\n  \"\": 1\n}",
+      "compact": "{\"\":1,\"😀\":2,\"é\":3,\"A\":4}"
+    },
+    {
+      "name": "empty-array",
+      "value": [],
+      "pretty": "[]",
+      "compact": "[]"
+    },
+    {
+      "name": "empty-object",
+      "value": {},
+      "pretty": "{}",
+      "compact": "{}"
+    },
+    {
+      "name": "string",
+      "value": "°C",
+      "pretty": "\"°C\"",
+      "compact": "\"°C\""
+    },
+    {
+      "name": "null",
+      "value": null,
+      "pretty": "null",
+      "compact": "null"
+    },
+    {
+      "name": "array",
+      "value": [
+        1,
+        0.00001,
+        "é"
+      ],
+      "pretty": "[\n  1,\n  0.00001,\n  \"é\"\n]",
+      "compact": "[1,0.00001,\"é\"]"
+    }
+  ],
+  "timestamps": [
+    {
+      "name": "whole",
+      "input": "2026-09-09T13:36:01Z",
+      "python": "2026-09-09T13:36:01.000Z",
+      "node": "2026-09-09T13:36:01.000Z"
+    },
+    {
+      "name": "milliseconds",
+      "input": "2026-09-09T13:36:01.468Z",
+      "python": "2026-09-09T13:36:01.468Z",
+      "node": "2026-09-09T13:36:01.468Z"
+    },
+    {
+      "name": "microseconds",
+      "input": "2026-09-09T13:36:01.468123Z",
+      "python": "2026-09-09T13:36:01.468123Z",
+      "node": "2026-09-09T13:36:01.468Z"
+    },
+    {
+      "name": "offset",
+      "input": "2026-09-09T13:36:01.468+05:30",
+      "python": "2026-09-09T08:06:01.468Z",
+      "node": "2026-09-09T08:06:01.468Z"
+    }
+  ]
+}

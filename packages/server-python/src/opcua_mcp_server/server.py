@@ -101,6 +101,7 @@ from .policy import (
     values_at,
 )
 from .records import history_data, history_records, variant_to_json
+from .result_text import normalize_result_text, pretty_json
 from .security import describe_security, security_config
 from .state import ServerState
 from .subscriptions import (
@@ -773,7 +774,7 @@ class PolicyMCPServer(MCPServer):
         _audit_after(
             self.state, name, arguments, "completed", call_id=call_id, attempt=call.attempt
         )
-        return result
+        return normalize_result_text(result)
 
     async def _run_tool(self, call: _Call, context):
         name, arguments = call.name, call.arguments
@@ -2433,7 +2434,7 @@ def create_server(state: ServerState | None = None) -> PolicyMCPServer:
     def subscriptions_resource() -> str:
         """The active subscriptions and their buffered changes, as JSON."""
         key = SUBSCRIPTIONS_RESOURCE["body"]["recordsKey"]
-        return json.dumps({key: mcp.state.subscriptions.list()}, indent=2)
+        return pretty_json({key: mcp.state.subscriptions.list()})
 
     return mcp
 

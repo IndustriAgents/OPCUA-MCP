@@ -214,7 +214,7 @@
       "expect": [
         {
           "entry": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble",
-          "problem": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble names ns=2;i=40, a Object node; only a Variable can be written."
+          "problem": "/Objects/IndustrialControlSystem/Scratch/ScratchDouble names ns=2;i=40, whose NodeClass is Object; only a Variable can be written."
         }
       ]
     },
@@ -873,11 +873,11 @@
         },
         {
           "entry": "ns=2;i=27|ns=2;i=41",
-          "problem": "ns=2;i=27|ns=2;i=41 names ns=2;i=41, a Variable node, not a Method."
+          "problem": "ns=2;i=27|ns=2;i=41 names ns=2;i=41, whose NodeClass is Variable, not Method."
         },
         {
           "entry": "ns=2;i=41|ns=2;i=28",
-          "problem": "ns=2;i=41|ns=2;i=28 names ns=2;i=41, a Variable node, as the object; a method is called on an Object or ObjectType."
+          "problem": "ns=2;i=41|ns=2;i=28 names ns=2;i=41 as the object, whose NodeClass is Variable; a method is called on an Object or ObjectType."
         },
         {
           "entry": "ns=2;i=27|ns=2;i=109",

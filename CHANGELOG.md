@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — validation and policy driven by the OPC UA information model
+- **Writes check the target's own attributes before anything is sent.** Both
+  runtimes read each node's NodeClass, AccessLevel, UserAccessLevel, DataType,
+  ValueRank, ArrayDimensions and enumeration states once per session (one batched
+  read, cached until the session is replaced). A node that cannot take the write
+  — not a Variable, read-only, read-only for this OPC UA user, an explicit
+  `data_type` that contradicts its DataType, a list for a single value or the
+  reverse, an array past its ArrayDimensions — is reported in its own record
+  (`BadNodeClassInvalid`, `BadNotWritable`, `BadUserAccessDenied`,
+  `BadTypeMismatch`, `BadOutOfRange`) with an `error` saying why, and the rest of
+  the batch goes. The write is typed from the DataType attribute rather than the
+  current value, so a write-only node no longer needs `data_type`.
+  **Upgrading:** a wrong explicit `data_type` used to be sent and is now refused
+  for that node.
+- **Enumerations and two-state nodes take their labels.** `"Running"` is written
+  as the state it names, from EnumStrings/EnumValues on the variable or its
+  DataType, or TrueState/FalseState; a value that is not one of the states
+  refuses the batch, listing them.
+- **`InstrumentRange` is enforced**, even when `OPCUA_ALLOW_OUT_OF_RANGE_WRITES`
+  lifts the `EURange` check.
+- **Method calls are checked against the address space**: a method node that is
+  not a Method, an object that is not an Object, `Executable`/`UserExecutable`
+  false, a method that is not a component of the object or its type, and a wrong
+  argument count are refused before sending.
+- **`read_opcua_nodes` takes `include_write_access`**, and every reading carries
+  `write_access` (null unless asked): whether a write would go through and why
+  not, the type, array-ness, states and labels, and the tightest of the EURange,
+  InstrumentRange and policy bounds.
+- **Policy entries may be browse paths** (`/Objects/Line1/Setpoint`), in the
+  policy file and in `OPCUA_ALLOWED_WRITE_NODES` / `OPCUA_ALLOWED_METHODS`,
+  resolved on every session; an ambiguous or unmatched path allows nothing.
+- **New policy-file rules:** `control.writable_subtrees` (every Variable of a
+  type under a folder, with bounds, expanded on every session),
+  `control.preconditions` (interlocks on writes and method calls),
+  `control.alarm_sources` and `control.alarm_max_severity` (alarm scope) — all
+  operator rules — and top-level `deny_read`, which hides a subtree from every
+  read tool under every profile and refuses all reads if it cannot be applied in
+  full. Each is validated at startup with the same sentences on both runtimes.
+- **A policy check runs on every session**: each entry measured against the
+  server just reached (resolves? exists? a Variable? writable by this user? bound
+  inside the EURange? enum values real states? method executable and on its
+  object?), printed to stderr as `WARNING: policy check: …` and reported with the
+  resolved allowlists under the new `get_server_status` → `policy_check`.
+- **Audit records name targets by namespace URI too** (`node_uris`,
+  `object_node_uri`, `method_node_uri`), so a record stays interpretable after a
+  server renumbers its namespaces.
+- A failed history read of a node whose AccessLevel lacks HistoryRead says so.
+- The bundled mock publishes nodes for each case (ids `ns=2;i=102`–`120`), and
+  seven new shared tables under `tests/fixtures/` hold both runtimes to the same
+  rules and sentences.
+
 ### Fixed — recover consistently from service timeouts (#157 B14)
 - Node now recognizes transaction timeouts, socket error codes and wrapped
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic

@@ -128,7 +128,7 @@
       "expect": {
         "outcome": "skip",
         "status": "BadNodeClassInvalid",
-        "error": "Node ns=2;i=1 is a Object node, not a Variable, so it has no value to write. Nothing was sent to it."
+        "error": "Node ns=2;i=1 has NodeClass Object, not Variable, so it has no value to write. Nothing was sent to it."
       }
     },
     {
@@ -154,7 +154,7 @@
       "expect": {
         "outcome": "skip",
         "status": "BadNodeClassInvalid",
-        "error": "Node ns=2;i=28 is a Method node, not a Variable, so it has no value to write. Nothing was sent to it."
+        "error": "Node ns=2;i=28 has NodeClass Method, not Variable, so it has no value to write. Nothing was sent to it."
       }
     },
     {

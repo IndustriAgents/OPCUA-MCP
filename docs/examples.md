@@ -83,6 +83,17 @@ Discover these any time with `browse_opcua_nodes`.
 | Scratch / ScratchAnalog | `ns=2;i=90` | Double, AnalogItemType | read/write |
 | Methods / EchoDuration | `ns=2;s=EchoDuration` | Method | call (1 Duration arg); returns what it received |
 | Scratch / OverriddenSetpoint | `ns=2;s=OverriddenSetpoint` | Double, status `GoodLocalOverride` | read |
+| Scratch / MachineState | `ns=2;i=102` | Int32, DataType `ServerState` (an enumeration) | read/write |
+| Scratch / ValveMode | `ns=2;i=103` | UInt32, MultiStateDiscreteType (`Closed`, `Open`, `Auto`) | read/write |
+| Scratch / DoorLock | `ns=2;i=105` | Boolean, TwoStateDiscreteType (`Locked` / `Unlocked`) | read/write |
+| Scratch / ScratchArray | `ns=2;i=108` | Double[3] (ValueRank 1, ArrayDimensions [3]) | read/write |
+| Methods / DisabledMethod | `ns=2;i=109` | Method, `Executable` false | — |
+| Scratch / InterlockPermit | `ns=2;i=110` | Boolean | read/write |
+| Scratch / InterlockedSetpoint | `ns=2;i=111` | Double | read/write |
+| Line1 / LineSpeed, LineTension | `ns=2;i=113`, `ns=2;i=115` | Double, AnalogItemType | read/write |
+| Line1 / LineLabel | `ns=2;i=117` | String | read/write |
+| Recipes / SecretRecipe | `ns=2;i=119` | String | read |
+| Scratch / WriteOnlySetpoint | `ns=2;i=120` | Double, AccessLevel `CurrentWrite` only | write |
 
 > Method NodeIds account for the per-method `InputArguments`/`OutputArguments`
 > property nodes. Always browse the `Methods` folder rather than hard-coding.
@@ -213,15 +224,43 @@ Write one or more nodes. **This changes physical equipment.**
 { "node_id": "ns=2;i=13", "status": "Good", "error": null }
 { "node_id": "ns=2;i=24", "status": "Good", "error": null }
 ```
-Without `data_type` each node is read first to learn its type. Give it to skip
-that round trip — and to write a **write-only** node, which refuses the read:
+Without `data_type` the node's own DataType attribute decides — read once per
+session with its AccessLevel and ValueRank, so a **write-only** node needs nothing
+extra. Only a node that declares an abstract type (BaseDataType, Number) is typed
+from its current value. Given, `data_type` must match the node:
 ```json
-{ "nodes": [{ "node_id": "ns=2;i=13", "value": 80, "data_type": "Double" }] }
+{ "nodes": [
+  { "node_id": "ns=2;i=3", "value": 20 },
+  { "node_id": "ns=2;i=41", "value": 1, "data_type": "Float" },
+  { "node_id": "ns=2;i=41", "value": [1, 2] }
+] }
+```
+```json
+{ "node_id": "ns=2;i=3", "status": "BadNotWritable",
+  "error": "Node ns=2;i=3 is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it." }
+{ "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
+  "error": "Node ns=2;i=41 holds Double, and data_type Float does not match it. Drop data_type to write it as Double. Nothing was sent to it." }
+{ "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
+  "error": "Node ns=2;i=41 holds a single value (ValueRank -1); write one value, not a list. Nothing was sent to it." }
 ```
 `status` is what the OPC UA server answered; `error` is why this server never
-sent the write at all (an unconvertible value, a type it could not read). The two
-are separate because "the server refused" and "we never asked" are different
-problems with different fixes.
+sent the write at all (a node that cannot take it, an unconvertible value, a type
+it could not read). The two are separate because "the server refused" and "we
+never asked" are different problems with different fixes.
+
+An enumeration or two-state node takes a state's label exactly as the server
+names it — ask for them with `read_opcua_nodes` and `include_write_access: true`:
+```json
+{ "nodes": [
+  { "node_id": "ns=2;i=102", "value": "Suspended" },
+  { "node_id": "ns=2;i=105", "value": "Locked" }
+] }
+```
+That writes `3` and `true`. A label or number that is not one of the states
+refuses the whole batch, listing them:
+```
+"suspended" is not a state node ns=2;i=102 defines (0 = Running, 1 = Failed, 2 = NoConfiguration, 3 = Suspended, 4 = Shutdown, 5 = Test, 6 = CommunicationFault, 7 = Unknown). Nothing was written. Write one of the numbers, or its label exactly as listed.
+```
 
 **A batch is not a transaction.** OPC UA lets some writes in one Write land while
 others are refused, and nothing is rolled back — read each `status`. At most 100
@@ -234,19 +273,18 @@ Conversion is strict, and the same on both runtimes
 (`../tests/fixtures/write-coercion.json` is the full table). A numeric string must
 look like a JSON number, so `"42.5"` and `"1e3"` work and `"0x2A"`, `"1_000"`
 and `""` do not. `true` is not 1, `[5]` is not 5, and a String node takes only a
-string. A DateTime needs a timezone:
+string:
 ```json
-{ "nodes": [
-  { "node_id": "ns=2;i=41", "value": "0x10" },
-  { "node_id": "ns=2;i=41", "value": "2026-04-23T17:40:00", "data_type": "DateTime" }
-] }
+{ "nodes": [{ "node_id": "ns=2;i=41", "value": "0x10" }] }
 ```
 ```json
 { "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
   "error": "Cannot convert \"0x10\" to Double" }
-{ "node_id": "ns=2;i=41", "status": "BadTypeMismatch",
-  "error": "Invalid date/time: \"2026-04-23T17:40:00\" has no timezone, so the instant it names depends on where it is read. Add Z for UTC or an offset such as +02:00, e.g. 2026-04-23T17:40:00Z" }
 ```
+A DateTime needs a timezone: `"2026-04-23T17:40:00"` is refused with
+`Invalid date/time: "2026-04-23T17:40:00" has no timezone, so the instant it names
+depends on where it is read. Add Z for UTC or an offset such as +02:00, e.g.
+2026-04-23T17:40:00Z`.
 An Int64 or UInt64 larger than ±2^53−1 has to be sent as a decimal string
 (`"9223372036854775807"`), because a JSON number that large has already been
 rounded before it arrives.
@@ -363,6 +401,18 @@ boolean is sent as a Boolean, a number or numeric string as a Double, and any ot
 string as a String. `null`, arrays and objects have no obvious OPC UA type, so
 they are refused before the call is sent. `status` is what the server answered,
 including a Good subcode such as `GoodClamped`.
+
+Before anything is sent, the method and object nodes' own attributes are
+checked: a method node that is not a Method, an object that is not an Object, a
+method whose `Executable` (or `UserExecutable`) is false, a method that is not a
+component of the object or its type, and a wrong number of arguments for the
+`InputArguments` it publishes are each refused with a sentence saying which:
+```json
+{ "object_node_id": "ns=2;i=27", "method_node_id": "ns=2;i=109" }
+```
+```
+Method ns=2;i=109 is not executable right now (its Executable attribute is false). Nothing was sent.
+```
 After this, `SystemMode` (`ns=2;i=19`) becomes `AUTO` and `ProductionRate`
 (`ns=2;i=21`) becomes `60` within ~1s.
 > Prompt: *"Start production at 60 units/hour, then stop it."*
@@ -407,10 +457,41 @@ when another tool fails.
     "checked_at": "2026-09-17T13:06:12.104Z",
     "support": { "history": "supported", "historyEvents": "supported", "aggregate": "not_supported" },
     "aggregate_functions": []
+  },
+  "policy_check": {
+    "generation": 1,
+    "writable_nodes": [],
+    "callable_methods": [],
+    "read_denied": 0,
+    "read_policy_complete": true,
+    "findings": []
   }
 }
 ```
 > Prompt: *"Are we actually connected, and is the PLC healthy?"*
+
+`policy_check` is the deployment's policy measured against this server, from the
+check every session runs. Under `operator` it lists what the allowlists resolved
+to — browse paths and `writable_subtrees` expanded to node IDs — and every entry
+the server says cannot work:
+
+```json
+"policy_check": {
+  "generation": 1,
+  "writable_nodes": ["ns=2;i=27", "ns=2;i=3", "ns=2;i=41"],
+  "callable_methods": ["ns=2;i=27|ns=2;i=109"],
+  "read_denied": 0,
+  "read_policy_complete": true,
+  "findings": [
+    { "entry": "ns=2;i=3",
+      "problem": "ns=2;i=3 names ns=2;i=3, which is read-only on the server (AccessLevel), so every write to it will fail." },
+    { "entry": "ns=2;i=27",
+      "problem": "ns=2;i=27 names ns=2;i=27, whose NodeClass is Object; only a Variable can be written." },
+    { "entry": "ns=2;i=27|ns=2;i=109",
+      "problem": "ns=2;i=27|ns=2;i=109 names a method that is not executable (Executable is false), so every call to it will fail." }
+  ]
+}
+```
 
 `capabilities` answers "why was that history read refused?": what the server was
 found to offer, on which of this process's sessions and when. Every tool is
@@ -486,7 +567,8 @@ This is the one tool that never fails for being disconnected — it reports it:
   "build_info": null,
   "namespaces": [],
   "diagnostics": null,
-  "error": "connect ECONNREFUSED 127.0.0.1:4840"
+  "error": "connect ECONNREFUSED 127.0.0.1:4840",
+  "policy_check": null
 }
 ```
 

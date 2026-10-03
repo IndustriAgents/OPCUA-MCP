@@ -416,7 +416,7 @@
       },
       "expect": {
         "allowed": false,
-        "reason": "it is a Object node, not a Variable",
+        "reason": "its NodeClass is Object, not Variable",
         "data_type": null,
         "array": null,
         "states": null,
@@ -838,7 +838,7 @@
       },
       "expect": {
         "allowed": false,
-        "reason": "it is a Object node, not a Variable",
+        "reason": "its NodeClass is Object, not Variable",
         "data_type": null,
         "array": null,
         "states": null,

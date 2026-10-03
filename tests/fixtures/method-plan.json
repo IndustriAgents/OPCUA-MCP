@@ -81,7 +81,7 @@
         "given_arguments": 1,
         "on_object": true
       },
-      "expect": "Node ns=2;i=28 is a Variable node, not a Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
+      "expect": "Node ns=2;i=28 has NodeClass Variable, not Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
     },
     {
       "name": "the object node is a Variable",
@@ -122,7 +122,7 @@
         "given_arguments": 1,
         "on_object": true
       },
-      "expect": "Node ns=2;i=27 is a Variable node; a method is called on an Object or ObjectType. Nothing was sent."
+      "expect": "Node ns=2;i=27 has NodeClass Variable; a method is called on an Object or ObjectType. Nothing was sent."
     },
     {
       "name": "an ObjectType may own a method",
@@ -627,7 +627,7 @@
         "given_arguments": 1,
         "on_object": true
       },
-      "expect": "Node ns=2;i=28 is a Object node, not a Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
+      "expect": "Node ns=2;i=28 has NodeClass Object, not Method, so there is nothing to call. Nothing was sent. Browse the object to find its methods."
     }
   ]
 }

@@ -310,6 +310,39 @@ a 500-node read unusable. The cache is dropped when the session is replaced, for
 the same reason the capability probes are: a restarted server may not be the same
 server.
 
+### What the node says it can take, and what the policy resolves to
+
+EURange was the first fact read from the plant's own model; it is no longer the
+only one. Before a write, each target's attributes — NodeClass, DataType,
+ValueRank, ArrayDimensions, AccessLevel, UserAccessLevel — come back in one
+batched Read (`node-facts.ts` / `node_facts.py`, cached per session like the
+engineering units), a non-built-in DataType is walked up its HasSubtype chain to
+the type it is encoded as, and an integer, Boolean or enumerated node has its
+EnumStrings/EnumValues or TrueState/FalseState translated and read in one more
+round trip. A pure function, `planWrite`, then decides per node: send (with the
+type and array-ness the node declares), skip that node with a status and a
+reason, or refuse the batch. `planCall` does the same for a method. Keeping the
+decision pure is what lets one table — `tests/fixtures/write-plan.json`,
+`method-plan.json` — pin both runtimes, as the argument validator's table does.
+
+Two asymmetries are deliberate. A fact that could not be read skips its check,
+because the server enforces its own access rights and a missing attribute is
+not evidence of anything; a *policy* entry that cannot be resolved denies,
+because the policy is the boundary and unknown must not read as allowed. And
+nothing read from the server ever widens what the policy allows — a server that
+misreports can only make a write stricter.
+
+The policy itself now meets the address space on every session. Browse-path
+entries, `writable_subtrees` and `deny_read` are resolved to concrete node IDs
+right after the NamespaceArray is bound, which is the same moment an `nsu=`
+entry is, for the same reason: what a name points at is a property of the
+session. The resolved sets are handed to the same policy object `call_tool`
+authorizes against, and a policy check (`policyFindings`, pinned by
+`tests/fixtures/policy-check.json`) reports every entry the server says cannot
+work. `deny_read` is enforced twice, like the rest of the policy: once in
+`authorize`, and again after the connection is up, so a read that arrives before
+the first resolution is not let through on a set that was still empty.
+
 Capability is checked on every call, and only on the call. The catalogue does
 not depend on it (#140).
 

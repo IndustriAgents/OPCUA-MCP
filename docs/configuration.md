@@ -69,14 +69,14 @@ declare.
 | Variable | Default | Description |
 |---|---|---|
 | `OPCUA_PROFILE` | `observe` | Which tools are offered. observe reads, browses, reads history and monitors; operator adds explicitly allowlisted writes, method calls and alarm actions; full exposes every tool and is meant only for a tightly scoped OPC UA account. One of `observe`, `operator`, `full` (`read-only` means `observe`; `readonly` means `observe`). Unset fails closed to observe; an unknown profile stops the server at startup. |
-| `OPCUA_POLICY_FILE` | — | Path to a version-1 JSON policy file, the only place per-node value bounds can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup. |
+| `OPCUA_POLICY_FILE` | — | Path to a version-1 JSON policy file, the only place per-node value bounds, writable_subtrees, preconditions, the alarm scope and deny_read can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup. |
 | `OPCUA_ALLOWED_TOOLS` | — | Comma-separated tool allowlist. It can only narrow the selected profile, never widen it. An unknown tool name stops the server at startup. |
-| `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=&lt;namespace-uri>;i=5. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA. |
-| `OPCUA_ALLOWED_METHODS` | — | Comma-separated object_node_id\|method_node_id pairs the operator profile may call. Empty fails closed: operator can call nothing. An entry without \| stops the server at startup. |
+| `OPCUA_ALLOWED_WRITE_NODES` | — | Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=&lt;namespace-uri>;i=5 or a browse path from the Root folder such as /Objects/Line1/Setpoint. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA. |
+| `OPCUA_ALLOWED_METHODS` | — | Comma-separated object_node_id\|method_node_id pairs the operator profile may call. Either half may be a browse path from the Root folder. Empty fails closed: operator can call nothing. An entry without \| stops the server at startup. |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Let the operator profile act on alarms: acknowledge_alarm and every act_on_alarm action. |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Permit control tools on an OPC UA channel with no security policy (None). Does not cover a secured channel to an unverified server; that is OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Reported as control=INSECURE-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment. |
 | `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Permit control tools on a secured OPC UA channel whose server certificate is not pinned with OPCUA_SERVER_CERT. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment. |
-| `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the EURange the OPC UA server itself published for the node. Fail-open override: it discards the only value bound a deployment with no policy file has. |
+| `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the EURange the OPC UA server itself published for the node. A published InstrumentRange still applies. Fail-open override: it discards the only value bound a deployment with no policy file has. |
 
 **Audit** — Where the control audit trail goes, and what it is labelled with.
 
@@ -146,7 +146,8 @@ Two bounds now apply.
 what the value holds in normal operation. Both servers read it, report it on every
 reading, and refuse a write outside it before anything is sent. No configuration:
 the equipment set the bound. Set `OPCUA_ALLOW_OUT_OF_RANGE_WRITES=true` for the
-deployments that write outside normal operation on purpose.
+deployments that write outside normal operation on purpose; a published
+`InstrumentRange` — what the device can represent at all — still applies.
 
 **The one you write.** In a policy file, a `writable_nodes` entry may carry `min`,
 `max`, `enum` or `max_change`:
@@ -167,6 +168,15 @@ A bare node id stays legal. Both bounds apply, so a policy can only ever narrow
 what the equipment already allows. `OPCUA_ALLOWED_WRITE_NODES` is a comma-separated
 list and cannot express a bound — a bounded node needs the file. The full shape is
 in **[SECURITY.md](../SECURITY.md#bounding-the-value-not-only-the-node)**.
+
+**And what the node itself says.** Before anything is sent, both servers read the
+target's own attributes once per session and act on them: a read-only node
+(`AccessLevel`), a node this OPC UA user may not write (`UserAccessLevel`), a
+wrong `data_type`, a list for a single value, an array past its length and a
+value that is not one of an enumeration's states are all stopped here, and an
+enumeration or two-state node accepts a state's label. Ask first with
+`read_opcua_nodes` and `include_write_access: true`. Details:
+**[SECURITY.md](../SECURITY.md#what-the-plants-own-model-says)**.
 
 ## Writing an allowlist that stays correct
 
@@ -191,6 +201,21 @@ publish matches nothing and is reported on stderr at connect time.
 Spelling does not matter: `i=2253` and `ns=0;i=2253` are the same node, entries
 are trimmed, and both runtimes canonicalise identically (pinned by
 `tests/fixtures/node-id-forms.json`).
+
+A third form names the node by where it is rather than what it is numbered: a
+browse path from the Root folder, `/Objects/Line1/SpeedSetpoint` (or
+`/Objects/2:Line1/…` to pin a segment's namespace). It is resolved on every
+session; a path that matches nothing, or matches more than one child at some
+step, allows nothing. In a policy file, `writable_subtrees` goes further and
+allows every Variable of a given type under a folder — expanded to a concrete
+list on every session — and `deny_read`, `preconditions` (interlocks) and an
+alarm scope round it out; see
+**[SECURITY.md](../SECURITY.md#naming-targets-by-path-by-subtree-and-hiding-what-may-not-be-read)**.
+
+Whatever the form, every session ends with a **policy check**: each entry is
+measured against the server just reached, problems are printed to stderr as
+`WARNING: policy check: …`, and `get_server_status` → `policy_check` lists the
+resolved allowlists and every finding.
 
 Larger deployments can put all of it in a version-1 JSON file
 (`OPCUA_POLICY_FILE`) instead of the environment; the shape, and a worked

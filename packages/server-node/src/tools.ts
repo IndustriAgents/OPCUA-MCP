@@ -15,10 +15,12 @@ import {
   BrowseDirection,
   ClientSession,
   ReadProcessedDetails,
+  makeBrowsePath,
+  type Argument,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { browseAllReferences, typeDefinitionOf } from "./browse.js";
+import { browseAllReferences, browseNameMatches, supertypeOf, typeDefinitionOf } from "./browse.js";
 import {
   type CapabilityAnswers,
   type CapabilityStatusRecord,
@@ -37,7 +39,19 @@ import {
   stillConnectingMessage,
 } from "./connection.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
-import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
+import { NodeMetadata, type AnalogInfo } from "./node-metadata.js";
+import { HISTORY_READ, NodeFactsCache, factsGood, lacksBit } from "./node-facts.js";
+import { planCall } from "./method-plan.js";
+import { checkAlarmScope, checkPreconditions, type RequirementReading } from "./policy-check.js";
+import { checkPolicy, type PolicyCheckRecord } from "./policy-resolution.js";
+import {
+  EU_RANGE_SOURCE,
+  outOfRangeMessage,
+  planWrite,
+  writeAccess,
+  type WriteAccessRecord,
+  type WritePlan,
+} from "./write-plan.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
 import { ContractRefusal, message } from "./errors.js";
 import {
@@ -93,12 +107,13 @@ import {
 import {
   ToolPolicy,
   asNumber,
+  boundRecord,
   controlGate,
   formatNumber,
-  pairsAt,
   serverIdentityRecord,
   toolPolicy,
   valuesAt,
+  type Precondition,
   type ValueBound,
 } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
@@ -109,9 +124,6 @@ import { randomBytes } from "crypto";
 /** The standard Root and Objects folders, which a browse path is written from. */
 const ROOT_FOLDER = "ns=0;i=84";
 
-/** The HasSubtype reference type (ns=0), which links a DataType to its parent. */
-const HAS_SUBTYPE = 45;
-
 /** One node's reading (resultShapes.nodeValues). */
 interface NodeValueRecord {
   node_id: string;
@@ -121,6 +133,7 @@ interface NodeValueRecord {
   source_timestamp: string | null;
   server_timestamp: string | null;
   engineering: AnalogInfo | null;
+  write_access: WriteAccessRecord | null;
 }
 
 /** One node found by a browse (resultShapes.nodeRefs.nodes). */
@@ -181,24 +194,6 @@ function namedDataType(name: string): DataType {
   return dataType;
 }
 
-/** Whether a browse-path segment names this BrowseName.
- *
- * `2:Sensors` matches only namespace 2; a bare `Sensors` matches the name in
- * whatever namespace it is in. The bare form is what someone types when they
- * know what a thing is called and not which namespace it was loaded into —
- * which is the entire reason `browse_path` exists.
- */
-function browseNameMatches(segment: string, namespaceIndex: number, name: string | null): boolean {
-  const separator = segment.indexOf(":");
-  if (separator > 0) {
-    const index = Number(segment.slice(0, separator));
-    if (Number.isInteger(index)) {
-      return index === namespaceIndex && segment.slice(separator + 1) === name;
-    }
-  }
-  return segment === name;
-}
-
 /** A node's present reading as a number, or null if there is not one to compare. */
 function currentNumber(dataValue: DataValue | undefined): number | null {
   if (!dataValue || !isGood(dataValue.statusCode)) return null;
@@ -222,17 +217,9 @@ export function checkEuRange(nodeId: string, value: unknown, info: AnalogInfo | 
   const range = info?.eu_range;
   if (!range) return;
   const number = asNumber(value);
-  if (number === null || withinRange(range, number)) return;
-  throw new ContractRefusal(
-    message("valueOutOfRange", {
-      value: formatNumber(number),
-      node_id: nodeId,
-      low: formatNumber(range.low),
-      high: formatNumber(range.high),
-      unit: info?.unit ? ` ${info.unit}` : "",
-      source: "the OPC UA server's own EURange",
-    })
-  );
+  if (number === null) return;
+  const refusal = outOfRangeMessage(nodeId, number, range, info?.unit ?? null, EU_RANGE_SOURCE);
+  if (refusal !== null) throw new ContractRefusal(refusal);
 }
 
 /** Refuse a move larger than the operator allows in one write.
@@ -290,7 +277,8 @@ export function checkMaxChange(
 export function toNodeValueRecord(
   nodeId: string,
   dataValue: DataValue | undefined,
-  engineering: AnalogInfo | null = null
+  engineering: AnalogInfo | null = null,
+  writeAccessRecord: WriteAccessRecord | null = null
 ): NodeValueRecord {
   const good = dataValue !== undefined && isGood(dataValue.statusCode);
   return {
@@ -305,6 +293,9 @@ export function toNodeValueRecord(
     // an AnalogItemType publishes it — but on the ones that do it is the
     // difference between "51.75" and "51.75 °C, normal range 0 to 150".
     engineering,
+    // Always present, null unless asked for: a field that is sometimes missing
+    // is a shape a client has to guess at.
+    write_access: writeAccessRecord,
   };
 }
 
@@ -393,8 +384,12 @@ function objectResult(record: unknown, completeness?: Completeness) {
   };
 }
 
-/** `resultShapes.serverStatus`: what the server says, and what it was found to support. */
-type ServerStatusReport = ServerStatusRecord & { capabilities: CapabilityStatusRecord };
+/** `resultShapes.serverStatus`: what the server says, what it was found to support,
+ *  and how the deployment's policy measured up against it. */
+type ServerStatusReport = ServerStatusRecord & {
+  capabilities: CapabilityStatusRecord;
+  policy_check: PolicyCheckRecord | null;
+};
 
 /** The diagnostics report (resultShapes.serverStatus). */
 function statusResult(status: ServerStatusReport) {
@@ -461,19 +456,39 @@ export function describeTargets(tool: ToolSpec, args: Record<string, unknown>): 
  * same declaration the policy authorises from means the two can no longer
  * disagree about which arguments matter.
  */
-function auditTargets(tool: ToolSpec, args: Record<string, unknown>): Record<string, unknown> {
+function auditTargets(
+  tool: ToolSpec,
+  args: Record<string, unknown>,
+  policy: ToolPolicy | null = null
+): Record<string, unknown> {
   const guard = tool.guard;
   if (!guard) return {};
   const record: Record<string, unknown> = {};
+  // The audit record also names each target by namespace URI (spec §8): an index
+  // is assigned per session, and a line read after the server has restarted
+  // must still say which node it was. Only for the audit line — `describeTargets`
+  // passes no policy, and the sentences it builds are unchanged.
+  const uri = (nodeId: string | null) =>
+    nodeId === null || policy === null ? null : policy.uriForm(nodeId);
 
   const nodeIds = (guard.nodeIdPaths ?? []).flatMap((path) => valuesAt(args, path));
-  if (nodeIds.length > 0) record.node_ids = nodeIds;
+  if (nodeIds.length > 0) {
+    record.node_ids = nodeIds;
+    if (policy !== null) record.node_uris = nodeIds.map(uri);
+  }
 
   const methods = (guard.methodPaths ?? []).map(({ objectPath, methodPath }) => ({
     object_node_id: valuesAt(args, objectPath)[0] ?? null,
     method_node_id: valuesAt(args, methodPath)[0] ?? null,
   }));
-  if (methods.length > 0) Object.assign(record, methods[0]);
+  if (methods.length > 0) {
+    const [method] = methods;
+    Object.assign(record, method);
+    if (policy !== null) {
+      record.object_node_uri = uri(method.object_node_id);
+      record.method_node_uri = uri(method.method_node_id);
+    }
+  }
 
   for (const path of guard.auditPaths ?? []) {
     // Only what is present: an absent optional argument is not a target, and
@@ -529,7 +544,7 @@ function auditDecision(
       control: controlGate(policy.config),
       tool: name,
       decision,
-      targets: auditTargets(tool, args),
+      targets: auditTargets(tool, args, policy),
       reason: reason ?? null,
     })
   );
@@ -607,6 +622,16 @@ export class OpcuaTools {
   private readonly events = new EventSubscriptions();
   /** What each node published about its own number, for the life of one session. */
   private readonly metadata = new NodeMetadata();
+  /** What each node says about itself — class, type, shape, access — for the life
+   *  of one session; what the write and method plans are decided on. */
+  private readonly facts = new NodeFactsCache();
+  /** The policy check on the current session, for `get_server_status`. */
+  private policyCheck: PolicyCheckRecord | null = null;
+  /** Which session generation the policy was last resolved on. */
+  private policyGeneration: number | null = null;
+  /** The resolution in flight, which a call waits for before it is authorized:
+   *  until it ends, browse-path entries match nothing and deny_read refuses. */
+  private policyResolution: Promise<void> | null = null;
   /** The startup warm-up, once started, and when requests stop waiting for it. */
   private warmUpPromise: Promise<void> | null = null;
   private warmUpDeadline = 0;
@@ -626,13 +651,7 @@ export class OpcuaTools {
     // to the session that created it. Without this, a server restart would leave
     // every `subscribe_opcua_nodes` handle the agent holds silently dead.
     this.conn.onSessionReplaced = async (session) => {
-      // What the old session was told about the server's limits was true of it.
-      this.serverLimits = UNSTATED;
-      this.metadata.serverLimits = UNSTATED;
-      // A new session may be a restarted server, whose nodes are not necessarily
-      // the nodes the old ids named. What each one said about its unit and its
-      // range was true of the session that said it.
-      this.metadata.forget();
+      this.forgetSession();
       await this.subs.reattach(session);
       await this.events.reattach(session);
       // With the session in hand, not through the connection: this runs inside
@@ -640,17 +659,98 @@ export class OpcuaTools {
       // would re-enter the connect path it is standing in. Read now so the
       // operation limits and `get_server_status` have answers for the new
       // session; a call re-reads anything from an older generation itself.
-      await this.probeCapabilities(session).catch(() => undefined);
+      await this.learnSession(session);
     };
     // node-opcua re-created the session under us, typically because the server
     // restarted. The subscriptions came across with it; what this server learned
     // about the old session did not.
     this.conn.onSessionRestored = async (session) => {
-      this.serverLimits = UNSTATED;
-      this.metadata.serverLimits = UNSTATED;
-      this.metadata.forget();
-      await this.probeCapabilities(session).catch(() => undefined);
+      this.forgetSession();
+      await this.learnSession(session);
     };
+  }
+
+  /** Drop everything learned about the session that has just gone.
+   *
+   * What the old session was told about the server's limits was true of it. A
+   * new session may be a restarted server, whose nodes are not necessarily the
+   * nodes the old ids named: what each said about its unit, its range, its type
+   * and its access was true of the session that said it, and so was where every
+   * browse path in the policy led. Until the policy is resolved again it allows
+   * nothing by path and deny_read refuses guarded reads.
+   */
+  private forgetSession(): void {
+    this.serverLimits = UNSTATED;
+    this.metadata.serverLimits = UNSTATED;
+    this.metadata.forget();
+    this.facts.serverLimits = UNSTATED;
+    this.facts.forget();
+    this.policyCheck = null;
+    this.policyGeneration = null;
+    this.policy.forgetResolution("it has not yet been resolved on this OPC UA session");
+  }
+
+  /** Probe a new session's capabilities, then resolve and check the policy on it.
+   *
+   * Tracked as the resolution in flight from its first line, so that a call
+   * arriving meanwhile waits for it rather than meeting a policy that has been
+   * emptied and not yet refilled.
+   */
+  private learnSession(session: ClientSession): Promise<void> {
+    return this.track(
+      (async () => {
+        await this.probeCapabilities(session).catch(() => undefined);
+        await this.resolvePolicy(session);
+      })()
+    );
+  }
+
+  private track(work: Promise<void>): Promise<void> {
+    const tracked: Promise<void> = work.finally(() => {
+      if (this.policyResolution === tracked) this.policyResolution = null;
+    });
+    this.policyResolution = tracked;
+    return tracked;
+  }
+
+  /** Resolve the policy against `session` and keep the check (spec §6, §7).
+   *
+   * Never throws: a connect must not fail because the policy could not be
+   * checked. What could not be resolved stays closed — `forgetResolution` has
+   * already emptied it — and the next call on this generation tries again.
+   */
+  private async resolvePolicy(session: ClientSession): Promise<void> {
+    const generation = this.conn.sessionGeneration;
+    try {
+      const record = await checkPolicy({
+        session,
+        policy: this.policy,
+        facts: this.facts,
+        metadata: this.metadata,
+        serverLimits: this.serverLimits,
+        generation,
+      });
+      // A session replaced while this ran has its own resolution coming.
+      if (generation !== this.conn.sessionGeneration) return;
+      this.policyCheck = record;
+      this.policyGeneration = generation;
+    } catch (error) {
+      console.error(`WARNING: policy check could not complete: ${describeError(error)}`);
+    }
+  }
+
+  /** The policy resolved on the session a call is about to use.
+   *
+   * A session opened by the call itself — the first connect, made after a start
+   * with the plant down — has not been resolved yet, and neither has one whose
+   * resolution failed; both are resolved here, once, before the strict read
+   * check and before anything is sent.
+   */
+  private async ensurePolicy(): Promise<void> {
+    if (this.policyResolution) await this.policyResolution;
+    const session = this.session;
+    if (!session || this.policyGeneration === this.conn.sessionGeneration) return;
+    await this.track(this.resolvePolicy(session));
   }
 
   /** Open the first connection and probe it. Started by `startWarmUp`.
@@ -670,6 +770,10 @@ export class OpcuaTools {
     if (this.capabilities.generation !== this.conn.sessionGeneration) {
       await this.probeCapabilities().catch(() => undefined);
     }
+    // The first session is not announced through `onSessionReplaced`, so its
+    // policy is resolved here — before the first call is authorized, which waits
+    // for the warm-up.
+    await this.ensurePolicy();
   }
 
   /** Start the warm-up without waiting for it, once. Returns it, for tests.
@@ -711,6 +815,9 @@ export class OpcuaTools {
   private async awaitConnectionInFlight(): Promise<void> {
     if (this.warmUpPromise) await this.warmUpPromise;
     await this.conn.settled();
+    // And the policy resolution a new session started: browse-path entries and
+    // deny_read are what `authorize` is about to read.
+    if (this.policyResolution) await this.policyResolution;
   }
 
   /** Wait for the startup warm-up, but never past `warmUpWaitMs` from its start.
@@ -776,6 +883,7 @@ export class OpcuaTools {
     // session — and a tool that needs it can then use it without a round trip.
     this.serverLimits = await readOperationLimits(session);
     this.metadata.serverLimits = this.serverLimits;
+    this.facts.serverLimits = this.serverLimits;
     const aggregate = await this.conn.serverCapabilitiesAggregateFunctions(session);
     this.capabilities = answersFrom(
       generation,
@@ -1005,7 +1113,13 @@ export class OpcuaTools {
 
       session = this.conn.sessionId;
 
+      await this.ensurePolicy();
       await this.ensureCapabilities(spec, args);
+      // Again, strictly, now that the policy is resolved on the session this
+      // call will use: a node a browse-path entry hides, or a deny set that could
+      // not be expanded in full, refuses here. Before the connection there was
+      // nothing to resolve against.
+      if (spec.readGuard) this.policy.authorizeRead(name, args, true);
 
       let result;
       try {
@@ -1151,6 +1265,8 @@ export class OpcuaTools {
     // on may be a restarted server that no longer keeps history. Only a `resend`
     // tool gets here, and every capability-gated tool is one (#140).
     await this.ensureCapabilities(spec, args);
+    await this.ensurePolicy();
+    if (spec.readGuard) this.policy.authorizeRead(spec.name, args, true);
 
     return await this.dispatch(spec.name, args);
   }
@@ -1159,7 +1275,10 @@ export class OpcuaTools {
   private async dispatch(name: string, args: Record<string, unknown>) {
     switch (name) {
       case "read_opcua_nodes":
-        return await this.readOpcuaNodes(args.node_ids as string[]);
+        return await this.readOpcuaNodes(
+          args.node_ids as string[],
+          (args.include_write_access as boolean | undefined) ?? false
+        );
 
       case "browse_opcua_nodes":
         return await this.browseOpcuaNodes({
@@ -1278,7 +1397,14 @@ export class OpcuaTools {
    */
   private async getServerStatus(): Promise<ServerStatusReport> {
     const status = await this.readStatus();
-    return { ...status, capabilities: capabilityStatus(this.capabilities) };
+    // The check as it stands, never one of its own: it runs on every session,
+    // and says which generation it ran on. null while not connected — a check
+    // of a session that is gone describes nothing.
+    return {
+      ...status,
+      capabilities: capabilityStatus(this.capabilities),
+      policy_check: status.connected ? this.policyCheck : null,
+    };
   }
 
   private async readStatus(): Promise<ServerStatusRecord> {
@@ -1350,7 +1476,7 @@ export class OpcuaTools {
    * from a complete one, so the list is never quietly cut. A server whose
    * MaxNodesPerRead is lower gets the list in consecutive Reads instead.
    */
-  private async readOpcuaNodes(nodeIds: string[]) {
+  private async readOpcuaNodes(nodeIds: string[], includeWriteAccess = false) {
     const session = this.requireSession();
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
       throw new Error(message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" }));
@@ -1366,14 +1492,58 @@ export class OpcuaTools {
       // Two extra round trips on a cold cache for the whole batch, none on a
       // warm one, and never a reason for the read to fail. See node-metadata.ts.
       const engineering = await this.metadata.forNodes(session, nodeIds);
+      // Only when asked: it costs a read of eight attributes per node the first
+      // time a node is asked about in a session, and most reads are not about
+      // writing. Never a reason for the read to fail; see node-facts.ts.
+      const access = includeWriteAccess
+        ? await this.writeAccessFor(session, nodeIds, engineering)
+        : new Map<string, WriteAccessRecord>();
       return recordBlocks(
         nodeIds.map((nodeId, index) =>
-          toNodeValueRecord(nodeId, dataValues[index], engineering.get(nodeId) ?? null)
+          toNodeValueRecord(
+            nodeId,
+            dataValues[index],
+            engineering.get(nodeId) ?? null,
+            access.get(nodeId) ?? null
+          )
         )
       );
     } catch (error) {
       throw new Error(message("readFailed", { reason: describeError(error) }), { cause: error });
     }
+  }
+
+  /** `write_access` for each node: its own facts, and this server's policy for it.
+   *
+   * The same facts and the same policy answers the write path decides on, so
+   * what is reported here is what a write would meet — short of the OPC UA
+   * server's own verdict, which only trying can give.
+   */
+  private async writeAccessFor(
+    session: ClientSession,
+    nodeIds: string[],
+    engineering: Map<string, AnalogInfo | null>
+  ): Promise<Map<string, WriteAccessRecord>> {
+    const facts = await this.facts.forNodes(session, nodeIds);
+    const toolRefusal = this.policy.toolRefusal("write_opcua_nodes");
+    const operator = this.policy.config.profile === "operator";
+    return new Map(
+      nodeIds.map((nodeId) => [
+        nodeId,
+        writeAccess({
+          node_id: nodeId,
+          facts: facts.get(nodeId) ?? null,
+          engineering: engineering.get(nodeId) ?? null,
+          policy: {
+            tool_refusal: toolRefusal,
+            operator,
+            allowlisted: operator && this.policy.isWritable(nodeId),
+            bound: boundRecord(this.policy.boundFor(nodeId)),
+            allow_out_of_range: this.policy.config.allowOutOfRangeWrites,
+          },
+        }),
+      ])
+    );
   }
 
   /** `read_opcua_history`: raw stored readings, or one aggregate per interval.
@@ -1516,10 +1686,31 @@ export class OpcuaTools {
       // A refusal of the request never reached the server, so it did not fail
       // to be read — and wrapping it would say it had.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }), {
-        cause: error,
-      });
+      throw new Error(
+        message("historyFailed", {
+          node_id: nodeId,
+          reason: await this.withHistoryHint(session, nodeId, describeError(error)),
+        }),
+        { cause: error }
+      );
     }
+  }
+
+  /** `reason`, and a hint when the node says it keeps no history (spec §4).
+   *
+   * Only after the read has failed, and never instead of it: AccessLevel's
+   * HistoryRead bit is what the node advertises, and a server may keep history
+   * for a node that does not say so — so it explains a failure, and does not
+   * refuse a read up front.
+   */
+  private async withHistoryHint(
+    session: ClientSession,
+    nodeId: string,
+    reason: string
+  ): Promise<string> {
+    const facts = (await this.facts.forNodes(session, [nodeId])).get(nodeId) ?? null;
+    if (!factsGood(facts) || !lacksBit(facts.access_level, HISTORY_READ)) return reason;
+    return `${reason} ${message("historyNotRecordedHint", { node_id: nodeId })}`;
   }
 
   // --- browsing ------------------------------------------------------------
@@ -1556,6 +1747,15 @@ export class OpcuaTools {
     const root = request.browsePath
       ? await this.resolveBrowsePath(request.nodeId ?? limits.rootNodeId, request.browsePath)
       : canonicalNodeId(request.nodeId ?? limits.rootNodeId);
+    // The start node is checked again here, because a browse_path is only a
+    // node once it has been resolved — which the read guard cannot see.
+    if (this.policy.isReadDenied(root)) {
+      throw new ContractRefusal(
+        message("readDenied", {
+          node_id: request.browsePath ? root : (request.nodeId ?? limits.rootNodeId),
+        })
+      );
+    }
 
     const keep = (record: NodeRefRecord) =>
       (wantedClass === undefined || record.node_class.toLowerCase() === wantedClass) &&
@@ -1631,15 +1831,21 @@ export class OpcuaTools {
         }
       }
 
+      // What deny_read hides is dropped before anything more is read about it.
+      // Its subtree is in the deny set too, so what was found under it goes with
+      // it. The walk's own counts stand: they say how far it went, and a dropped
+      // record is not a gap in the answer the caller is entitled to.
+      const visible = found.filter((record) => !this.policy.isReadDenied(record.node_id));
+
       // Unconditional, unlike the variable detail: the type is what the record
       // *is*, not extra reading about its value, and it costs one batched
       // browse however many nodes were found.
       const serverLimits = await this.operationLimits();
-      await this.fillTypeDefinitions(session, found, serverLimits);
-      if (includeValues) await this.fillVariableDetail(session, found, serverLimits);
+      await this.fillTypeDefinitions(session, visible, serverLimits);
+      if (includeValues) await this.fillVariableDetail(session, visible, serverLimits);
       return objectResult(
-        { nodes: found, truncated, inspected },
-        traversalCompleteness({ returned: found.length, truncated, maxNodes, unbrowsable })
+        { nodes: visible, truncated, inspected },
+        traversalCompleteness({ returned: visible.length, truncated, maxNodes, unbrowsable })
       );
     } catch (error) {
       throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }), {
@@ -1822,10 +2028,14 @@ export class OpcuaTools {
 
   /** `write_opcua_nodes`: one or more writes, each reporting its own status.
    *
-   * Nodes given an explicit `data_type` skip the read-first inference entirely,
-   * which is what makes a *write-only* node writable — reading it to learn its
-   * type is exactly what such a node refuses (issue #9). The rest are read
-   * first, in one batch, and converted to the type the server reports.
+   * Each write is planned from what its node says about itself (node-facts.ts,
+   * write-plan.ts) before anything is sent: the type it is converted to comes
+   * from the node's DataType attribute, so a write-only node is writable without
+   * reading it, and only a node that declares an abstract type is read first to
+   * learn the type of its current value. A node that cannot take the write — an
+   * Object, a read-only node, a list for a scalar — is that node's record and
+   * nothing is sent to it; a value that is not one of its states or outside the
+   * range the plant published refuses the whole batch.
    *
    * The whole batch goes out as one Write, and that is a promise rather than an
    * accident (issue #139). A batch over the server's MaxNodesPerWrite is refused
@@ -1851,36 +2061,63 @@ export class OpcuaTools {
         })
       );
     }
-    const bounds = new Map<number, ValueBound | null>(
-      nodes.map((node, index) => [index, this.policy.boundFor(String(node?.node_id ?? ""))])
-    );
+    const nodeIds = nodes.map((node) => String(node?.node_id ?? ""));
+    const bounds: Array<ValueBound | null> = nodeIds.map((nodeId) => this.policy.boundFor(nodeId));
 
     try {
-      const results: WriteResultRecord[] = nodes.map((node) => ({
-        node_id: canonicalNodeId(String(node?.node_id ?? "")),
+      const results: WriteResultRecord[] = nodeIds.map((nodeId) => ({
+        node_id: canonicalNodeId(nodeId),
         status: "Good",
         error: null,
       }));
 
+      // What each node says about itself, and what it publishes about its
+      // number — the engineering record even when the EURange check is lifted,
+      // because the InstrumentRange is not. Neither read can fail the write.
+      const facts = await this.facts.forNodes(session, nodeIds);
+      const engineering = await this.metadata.forNodes(session, nodeIds);
+      const plans: WritePlan[] = nodes.map((node, index) =>
+        planWrite(
+          { node_id: nodeIds[index], value: node?.value, data_type: node?.data_type ?? null },
+          facts.get(nodeIds[index]) ?? null,
+          engineering.get(nodeIds[index]) ?? null,
+          { allow_out_of_range: this.policy.config.allowOutOfRangeWrites }
+        )
+      );
+      // Before anything is sent, and throwing rather than marking one record:
+      // the whole batch is refused so it can never end up partially applied,
+      // which is the property the identity allowlist already had.
+      const refused = plans.find((plan) => plan.outcome === "refuse");
+      if (refused?.outcome === "refuse") throw new ContractRefusal(refused.error);
+
+      // Interlocks, for the writes that will actually go out.
+      this.requirePreconditionsResolved();
+      await this.requirePreconditions(
+        session,
+        nodeIds.flatMap((nodeId, index) =>
+          plans[index].outcome === "send"
+            ? [{ target: nodeId, preconditions: this.policy.preconditionsForNode(nodeId) }]
+            : []
+        ),
+        serverLimits
+      );
+
       // A node needs its current value read for either of two reasons: its type
-      // was not declared and has to be inferred, or it carries a `max_change`
-      // bound, which is a bound on the *move* and so cannot be judged without
-      // knowing where the node is now. One read covers both.
-      const inferred = nodes
-        .map((node, index) => ({ node, index }))
-        .filter((entry) => !entry.node?.data_type);
-      const needsCurrent = [
-        ...new Set([
-          ...inferred.map((entry) => entry.index),
-          ...[...bounds].filter(([, b]) => b?.maxChange != null).map(([index]) => index),
-        ]),
-      ].sort((a, b) => a - b);
+      // could not be decided from its attributes and has to be inferred, or it
+      // carries a `max_change` bound, which is a bound on the *move* and so
+      // cannot be judged without knowing where the node is now. One read covers
+      // both.
+      const needsCurrent = plans.flatMap((plan, index) =>
+        plan.outcome === "send" && (plan.data_type === null || bounds[index]?.maxChange != null)
+          ? [index]
+          : []
+      );
       const current =
         needsCurrent.length > 0
           ? await this.readValues(
               session,
               needsCurrent.map((index) => ({
-                nodeId: nodes[index].node_id,
+                nodeId: nodeIds[index],
                 attributeId: AttributeIds.Value,
               })),
               readChunk(serverLimits)
@@ -1890,24 +2127,37 @@ export class OpcuaTools {
         needsCurrent.map((index, position) => [index, current[position]])
       );
 
-      // Before anything is sent, and throwing rather than marking one record:
-      // the whole batch is refused so it can never end up partially applied,
-      // which is the property the identity allowlist already had.
-      await this.checkWriteBounds(session, nodes, bounds, currentByIndex);
+      // Against the value that will be written — a state's label is its number
+      // by now — and, like every bound, for the whole batch.
+      plans.forEach((plan, index) => {
+        const bound = bounds[index];
+        if (plan.outcome === "send" && bound?.maxChange != null) {
+          checkMaxChange(nodeIds[index], plan.value, bound.maxChange, currentByIndex.get(index));
+        }
+      });
 
       const writes: Array<{ nodeId: string; attributeId: AttributeIds; value: DataValue }> = [];
       const writeIndices: number[] = [];
 
-      nodes.forEach((node, index) => {
+      plans.forEach((plan, index) => {
+        if (plan.outcome !== "send") {
+          if (plan.outcome === "skip") {
+            results[index] = {
+              node_id: results[index].node_id,
+              status: plan.status,
+              error: plan.error,
+            };
+          }
+          return;
+        }
         try {
-          const declared = node?.data_type ? namedDataType(node.data_type) : undefined;
           let dataType: DataType;
           let arrayType = VariantArrayType.Scalar;
           let dimensions: number[] | null = null;
 
-          if (declared !== undefined) {
-            dataType = declared;
-            if (Array.isArray(node.value)) arrayType = VariantArrayType.Array;
+          if (plan.data_type !== null) {
+            dataType = namedDataType(plan.data_type);
+            if (plan.array ?? Array.isArray(plan.value)) arrayType = VariantArrayType.Array;
           } else {
             const dataValue = currentByIndex.get(index);
             if (!dataValue || !isGood(dataValue.statusCode) || !dataValue.value) {
@@ -1921,13 +2171,17 @@ export class OpcuaTools {
               return;
             }
             dataType = dataValue.value.dataType;
-            arrayType = dataValue.value.arrayType;
-            dimensions = dataValue.value.dimensions;
+            if (plan.array === null) {
+              arrayType = dataValue.value.arrayType;
+              dimensions = dataValue.value.dimensions;
+            } else if (plan.array) {
+              arrayType = VariantArrayType.Array;
+            }
           }
 
-          const value = convertForVariant(node.value, dataType, arrayType);
+          const value = convertForVariant(plan.value, dataType, arrayType);
           writes.push({
-            nodeId: node.node_id,
+            nodeId: nodeIds[index],
             attributeId: AttributeIds.Value,
             value: new DataValue({
               value: new Variant({ dataType, arrayType, dimensions, value }),
@@ -1965,37 +2219,75 @@ export class OpcuaTools {
     }
   }
 
-  /** Refuse the whole batch if any value is outside what its node may hold.
+  /** Refuse all control while an interlock's target does not resolve (spec §12).
    *
-   * Two bounds, from two places, and both apply. The operator's `min`/`max` and
-   * `enum` were already checked by the policy layer, before the network was
-   * touched at all; what is left here is everything that needed a read — the
-   * server's own `EURange`, and `maxChange`, which is a bound on the move.
+   * Not in `authorize`: it depends on this session's resolution, which is only
+   * known once the connection is up, and it is a refusal of the call rather than
+   * of a node — the interlock that does not resolve may be guarding any of them.
    */
-  private async checkWriteBounds(
-    session: ClientSession,
-    nodes: WriteRequest[],
-    bounds: Map<number, ValueBound | null>,
-    current: Map<number, DataValue | undefined>
-  ): Promise<void> {
-    const nodeIds = nodes.map((node) => String(node?.node_id ?? ""));
-    const engineering = this.policy.config.allowOutOfRangeWrites
-      ? new Map<string, AnalogInfo | null>()
-      : await this.metadata.forNodes(session, nodeIds);
+  private requirePreconditionsResolved(): void {
+    const entry = this.policy.unresolvedPrecondition();
+    if (entry !== null) {
+      throw new ContractRefusal(message("preconditionUnresolved", { entry }));
+    }
+  }
 
-    nodes.forEach((node, index) => {
-      const nodeId = nodeIds[index];
-      const value = node?.value;
-      // An array write is checked element by element. Writing [0, 9999] to a
-      // node whose range stops at 100 is writing 9999 to it.
-      for (const element of Array.isArray(value) ? value : [value]) {
-        checkEuRange(nodeId, element, engineering.get(nodeId) ?? null);
+  /** Refuse unless every operator precondition guarding these targets holds now.
+   *
+   * The required nodes are read in one Read, right before sending, so what is
+   * checked is the plant as it is and not as it was when the session began. A
+   * requirement node that does not resolve, or does not read Good, does not
+   * hold: an interlock nobody can confirm is an interlock that is not met. A
+   * connection error propagates, as the write it precedes would have met it too.
+   */
+  private async requirePreconditions(
+    session: ClientSession,
+    targets: Array<{ target: string; preconditions: Precondition[] }>,
+    serverLimits: ServerOperationLimits
+  ): Promise<void> {
+    const guarded = targets.filter((entry) => entry.preconditions.length > 0);
+    if (guarded.length === 0) return;
+    const written = [
+      ...new Set(
+        guarded.flatMap((entry) =>
+          entry.preconditions.flatMap((precondition) =>
+            precondition.require.map((requirement) => requirement.node)
+          )
+        )
+      ),
+    ];
+    const current: Record<string, RequirementReading> = {};
+    const toRead: Array<{ node: string; nodeId: string }> = [];
+    for (const node of written) {
+      const nodeId = this.policy.resolveEntry(node);
+      if (nodeId === null) current[node] = null;
+      else toRead.push({ node, nodeId });
+    }
+    if (toRead.length > 0) {
+      try {
+        const values = await this.readValues(
+          session,
+          toRead.map(({ nodeId }) => ({ nodeId, attributeId: AttributeIds.Value })),
+          readChunk(serverLimits)
+        );
+        toRead.forEach(({ node }, index) => {
+          const dataValue = values[index];
+          current[node] =
+            dataValue && isGood(dataValue.statusCode)
+              ? { status: "Good", value: variantToJson(dataValue.value) }
+              : { status: dataValue?.statusCode?.name ?? "BadUnexpectedError" };
+        });
+      } catch (error) {
+        if (isConnectionError(error)) throw error;
+        for (const { node } of toRead) current[node] = { status: describeError(error) };
       }
-      const bound = bounds.get(index);
-      if (bound?.maxChange != null) {
-        checkMaxChange(nodeId, value, bound.maxChange, current.get(index));
+    }
+    for (const { target, preconditions } of guarded) {
+      for (const precondition of preconditions) {
+        const refusal = checkPreconditions({ target, requirements: precondition.require, current });
+        if (refusal !== null) throw new ContractRefusal(refusal);
       }
-    });
+    }
   }
 
   /** `call_opcua_method`: run a method with arguments of the types it declares.
@@ -2006,6 +2298,12 @@ export class OpcuaTools {
    * Int32 was called with the wrong type and either failed or — worse — did
    * something with a coerced value. The old heuristic survives only as the
    * fallback for a method that publishes no argument metadata.
+   *
+   * Before anything is encoded, the call is planned from what the two nodes say
+   * about themselves (method-plan.ts): a node that is not a Method, a method that
+   * is switched off or not the object's, the wrong number of arguments. Each was
+   * a status code from the plant after the call went out; each is refused here,
+   * with nothing sent. Then the operator's interlocks, then the call.
    */
   private async callOpcuaMethod(
     objectNodeId: string,
@@ -2016,7 +2314,38 @@ export class OpcuaTools {
     const args = methodArgs ?? [];
 
     try {
-      const declared = await this.inputArgumentTypes(session, methodNodeId);
+      const facts = await this.facts.forNodes(session, [objectNodeId, methodNodeId]);
+      const objectId = this.policy.resolveNodeId(objectNodeId);
+      const methodId = this.policy.resolveNodeId(methodNodeId);
+      const onObject =
+        objectId !== null && methodId !== null
+          ? await this.facts.onObject(session, objectId, methodId)
+          : null;
+      const definition = await this.inputArguments(session, methodNodeId);
+      const refusal = planCall({
+        object_node_id: objectNodeId,
+        method_node_id: methodNodeId,
+        object_facts: facts.get(objectNodeId) ?? null,
+        method_facts: facts.get(methodNodeId) ?? null,
+        declared_arguments: definition === null ? null : definition.length,
+        given_arguments: args.length,
+        on_object: onObject,
+      });
+      if (refusal !== null) throw new ContractRefusal(refusal);
+
+      this.requirePreconditionsResolved();
+      await this.requirePreconditions(
+        session,
+        [
+          {
+            target: `${objectNodeId}|${methodNodeId}`,
+            preconditions: this.policy.preconditionsForCall(objectNodeId, methodNodeId),
+          },
+        ],
+        await this.operationLimits()
+      );
+
+      const declared = await this.inputArgumentTypes(session, definition ?? []);
       const inputArguments = args.map((arg, index) => {
         const declaredType = declared[index];
         if (declaredType === undefined) return guessVariant(arg, index);
@@ -2060,7 +2389,39 @@ export class OpcuaTools {
     }
   }
 
-  /** The declared type of each input argument, or [] when the method publishes none.
+  /** The method's InputArguments, or null when it publishes none.
+   *
+   * Null and empty are different answers, which node-opcua's
+   * `getArgumentDefinition` does not tell apart: a method that publishes an
+   * empty list takes no arguments, and one that publishes nothing says nothing
+   * about how many it takes — so only the first refuses a call that passes some.
+   * One translate and one read, as python-opcua's `get_child` makes; anything
+   * that goes wrong is "publishes none", the old fallback.
+   */
+  private async inputArguments(
+    session: ClientSession,
+    methodNodeId: string
+  ): Promise<Argument[] | null> {
+    try {
+      const [result] = await session.translateBrowsePath([
+        makeBrowsePath(methodNodeId, "/0:InputArguments"),
+      ]);
+      const target = result && isGood(result.statusCode) ? result.targets?.[0] : undefined;
+      if (!target) return null;
+      const dataValue = await session.read({
+        nodeId: target.targetId.toString(),
+        attributeId: AttributeIds.Value,
+      });
+      if (!isGood(dataValue.statusCode)) return null;
+      const value = dataValue.value?.value;
+      if (value === null || value === undefined) return [];
+      return Array.isArray(value) ? (value as Argument[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The declared type of each input argument.
    *
    * A declared DataType that is not itself built in (`Duration`, `UtcTime`, an
    * enumeration) is resolved to the built-in type it is encoded as, and one that
@@ -2069,39 +2430,14 @@ export class OpcuaTools {
    */
   private async inputArgumentTypes(
     session: ClientSession,
-    methodNodeId: string
+    definition: Argument[]
   ): Promise<Array<{ dataType: DataType; arrayType: VariantArrayType }>> {
-    let definition;
-    try {
-      definition = await session.getArgumentDefinition(methodNodeId);
-    } catch {
-      // Not every method publishes InputArguments, and a method with no
-      // arguments has nothing to publish. Fall back rather than refuse.
-      return [];
-    }
-
-    const supertypeOf = async (dataType: string): Promise<string | null> => {
-      // Every inverse reference, filtered here rather than by the server:
-      // python-opcua's server answers a browse filtered to HasSubtype with
-      // nothing at all, and the Python runtime does the same for that reason.
-      const result = await session.browse({
-        nodeId: dataType,
-        browseDirection: BrowseDirection.Inverse,
-        resultMask: 63,
-      });
-      if (!isGood(result.statusCode)) return null;
-      const parent = (result.references ?? []).find(
-        (reference) =>
-          reference.referenceTypeId.namespace === 0 &&
-          reference.referenceTypeId.value === HAS_SUBTYPE
-      );
-      return parent ? canonicalNodeId(parent.nodeId.toString()) : null;
-    };
-
     const declared = [];
-    for (const argument of definition.inputArguments ?? []) {
+    for (const argument of definition) {
       declared.push({
-        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), supertypeOf),
+        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), (dataType) =>
+          supertypeOf(session, dataType)
+        ),
         arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
       });
     }
@@ -2361,6 +2697,10 @@ export class OpcuaTools {
         { cause }
       );
 
+    // The operator's alarm scope, before anything is sent: a condition outside
+    // it, or one whose scope cannot be read, is refused with nothing changed.
+    await this.requireAlarmScope(condition);
+
     let statusCode;
     try {
       statusCode = await alarmAction(
@@ -2393,5 +2733,75 @@ export class OpcuaTools {
       return objectResult({ ...record, action, status: statusCode.name });
     }
     return objectResult(record);
+  }
+
+  /** Refuse to act on a condition outside the operator's alarm scope (spec §6.4).
+   *
+   * Reads the condition's SourceNode and Severity — one translate and one read —
+   * only when the scope sets either. A value that cannot be read refuses: an
+   * alarm whose scope cannot be checked is not acknowledged on the policy's
+   * behalf. A connection error propagates, as the action would have met it.
+   */
+  private async requireAlarmScope(conditionId: string): Promise<void> {
+    const scope = this.policy.alarmScope();
+    if (scope === null) return;
+    const session = this.requireSession();
+    const read = { source: null as string | null, severity: null as number | null };
+    const problems: { source: string | null; severity: string | null } = {
+      source: null,
+      severity: null,
+    };
+    try {
+      const results = await session.translateBrowsePath([
+        makeBrowsePath(conditionId, "/0:SourceNode"),
+        makeBrowsePath(conditionId, "/0:Severity"),
+      ]);
+      const targets = results.map((result) =>
+        isGood(result.statusCode) ? (result.targets?.[0]?.targetId.toString() ?? null) : null
+      );
+      const found = targets.filter((target): target is string => target !== null);
+      const values =
+        found.length > 0
+          ? await session.read(found.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })))
+          : [];
+      let position = 0;
+      results.forEach((result, index) => {
+        const which = index === 0 ? "source" : "severity";
+        if (targets[index] === null) {
+          problems[which] = isGood(result.statusCode) ? "BadNoMatch" : result.statusCode.name;
+          return;
+        }
+        const dataValue = values[position++];
+        if (!dataValue || !isGood(dataValue.statusCode)) {
+          problems[which] = dataValue?.statusCode?.name ?? "BadUnexpectedError";
+          return;
+        }
+        const value = dataValue.value?.value;
+        if (which === "source") {
+          read.source = value ? canonicalNodeId(String(value.toString())) : null;
+        } else {
+          read.severity = typeof value === "number" ? value : null;
+        }
+      });
+    } catch (error) {
+      if (isConnectionError(error)) throw error;
+      problems.source = describeError(error);
+      problems.severity = describeError(error);
+    }
+    const error =
+      scope.sources !== null && problems.source !== null
+        ? `SourceNode: ${problems.source}`
+        : scope.maxSeverity !== null && problems.severity !== null
+          ? `Severity: ${problems.severity}`
+          : null;
+    const refusal = checkAlarmScope({
+      condition_id: conditionId,
+      source: read.source,
+      severity: read.severity,
+      error,
+      sources: scope.sources,
+      max_severity: scope.maxSeverity,
+    });
+    if (refusal !== null) throw new ContractRefusal(refusal);
   }
 }

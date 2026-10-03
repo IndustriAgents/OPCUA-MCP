@@ -561,8 +561,19 @@ def _exit_on_signal(state: ServerState) -> None:
             sys.stderr.flush()
         os._exit(0)
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
     for signum in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(signum, handle)
+        if loop is not None and os.name == "posix":
+            # add_signal_handler installs asyncio's wakeup fd. A signal may
+            # arrive on an OPC UA or stdin thread while the main thread is
+            # sleeping in the selector; a plain signal.signal handler alone
+            # leaves the loop asleep indefinitely in that case (#173).
+            loop.add_signal_handler(signum, handle, signum, None)
+        else:
+            signal.signal(signum, handle)
 
 
 def _advertised_tool(tool, spec: dict):
@@ -622,6 +633,20 @@ class PolicyMCPServer(MCPServer):
     def __init__(self, *args, state: ServerState | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = state if state is not None else ServerState()
+
+    async def run_stdio_async(self) -> None:
+        # Install again after the SDK's event loop exists, before it starts
+        # stdin and OPC UA worker threads. Preserve callers' handlers on EOF.
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        _exit_on_signal(self.state)
+        try:
+            await super().run_stdio_async()
+        finally:
+            loop = asyncio.get_running_loop()
+            for sig, handler in previous.items():
+                if os.name == "posix":
+                    loop.remove_signal_handler(sig)
+                signal.signal(sig, handler)
 
     async def list_tools(self):
         """The catalogue: the contract, filtered by deployment policy only.

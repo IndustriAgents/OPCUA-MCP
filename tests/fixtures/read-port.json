@@ -1,0 +1,11 @@
+{
+  "nodeIds": ["ns=2;i=1", "ns=2;i=2", "ns=2;i=3"],
+  "chunk": 2,
+  "records": [
+    {"node_id":"ns=2;i=1","value":51.75,"data_type":"Double","status":"GoodClamped","source_timestamp":"2026-09-09T13:36:01.468Z","server_timestamp":null,"engineering":null},
+    {"node_id":"ns=2;i=2","value":null,"data_type":null,"status":"BadNotReadable","source_timestamp":null,"server_timestamp":null,"engineering":null},
+    {"node_id":"ns=2;i=3","value":"café","data_type":"String","status":"Good","source_timestamp":null,"server_timestamp":null,"engineering":null}
+  ],
+  "engineering": {"ns=2;i=1":{"unit":"°C","unit_description":"degrees Celsius","eu_range":{"low":0,"high":150},"instrument_range":null}},
+  "calls": [["values",["ns=2;i=1","ns=2;i=2"]],["values",["ns=2;i=3"]],["engineering",["ns=2;i=1","ns=2;i=2","ns=2;i=3"]]]
+}

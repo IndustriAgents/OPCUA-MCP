@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract the read application port (#141, first slice)
+- Current-value reads now use an injected async port, with native adapters that
+  retain exception causes and preserve sequential batching, codecs and metadata.
+  Fake-port fixtures and import/size checks enforce the new boundary. Other
+  features and the common execution pipeline remain in their existing modules.
+
 ### Fixed — preserve the calling alarm tool’s contract (#157)
 - `act_on_alarm(action="acknowledge")` now includes `action` and uses the alarm
   action failure frame on Node, matching Python and its advertised result schema.

@@ -880,3 +880,6 @@ way. For what the secured path does and does not verify — notably that the
 server certificate is checked only when `OPCUA_SERVER_CERT` pins it — see
 [SECURITY.md](../SECURITY.md), and for
 certificate generation and trust setup [certificates.md](certificates.md).
+
+The staged [feature module extraction](feature-modules.md) defines the read
+port and enforces dependency direction while the remaining feature slices move.

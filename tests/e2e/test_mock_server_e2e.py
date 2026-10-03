@@ -16,6 +16,7 @@ Run:
 
 from __future__ import annotations
 
+import queue
 import time
 
 from opcua import Client, ua
@@ -32,6 +33,30 @@ def _write_double(node_id: str, value: float) -> ua.WriteValue:
     item.AttributeId = ua.AttributeIds.Value
     item.Value = ua.DataValue(ua.Variant(value, ua.VariantType.Double))
     return item
+
+
+class _ValueChanges:
+    """A subscription handler that queues every value it is told about."""
+
+    def __init__(self) -> None:
+        self._values: queue.Queue[object] = queue.Queue()
+        self.seen: list[object] = []
+
+    def datachange_notification(self, node, value, data) -> None:
+        self._values.put(value)
+
+    def wait_for(self, predicate, timeout: float = 5.0) -> bool:
+        """Consume values until one matches, or give up after ``timeout``."""
+        deadline = time.monotonic() + timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                value = self._values.get(timeout=remaining)
+            except queue.Empty:
+                break
+            self.seen.append(value)
+            if predicate(value):
+                return True
+        return False
 
 
 #: A writable actuator the simulation republishes once a second, and a writable
@@ -114,23 +139,40 @@ def test_the_simulation_reverts_an_actuator_but_leaves_the_scratch_nodes_alone(o
     This test states both halves, so that re-pointing a write test at an actuator
     fails *here*, with an explanation, rather than intermittently somewhere else.
     """
-    client = Client(opcua_server)
+    client = Client(opcua_server, timeout=10)
     client.connect()
     try:
-        actuator = client.get_node(ACTUATOR_NODE_ID)
         scratch = client.get_node(SCRATCH_DOUBLE_NODE_ID)
-        for node in (actuator, scratch):
-            node.set_value(ua.Variant(31.5, ua.VariantType.Double))
-            assert node.get_value() == 31.5, "the write did not land at all"
+        scratch.set_value(ua.Variant(31.5, ua.VariantType.Double))
+        # Nothing republishes a scratch node, so its read-back is safe.
+        assert scratch.get_value() == 31.5, "the scratch write did not land at all"
 
-        # Longer than the simulation's one-second period, so this is not a race
-        # in the other direction.
-        time.sleep(1.8)
+        # The actuator is watched, not read back: a tick between a write and a
+        # read republishes the simulated value, and the read-back failed on
+        # exactly that (#181). With a queue size of 0 the server hands over
+        # every value the node takes, in order, so the 31.5 cannot slip past
+        # between two polls the way it could between a write and a read.
+        changes = _ValueChanges()
+        subscription = client.create_subscription(100, changes)
+        subscription.subscribe_data_change(client.get_node(ACTUATOR_NODE_ID), queuesize=0)
 
-        assert actuator.get_value() != 31.5, (
+        params = ua.WriteParameters()
+        params.NodesToWrite = [_write_double(ACTUATOR_NODE_ID, 31.5)]
+        [status] = client.uaclient.write(params)
+        assert status.value == ua.StatusCodes.Good, f"the actuator write was refused: {status}"
+
+        # A deadline rather than a fixed sleep: the period is a one-second
+        # sleep *plus* the loop body, which a loaded runner can stretch.
+        assert changes.wait_for(lambda value: value == 31.5), (
+            f"the actuator write never landed: {changes.seen}"
+        )
+        assert changes.wait_for(lambda value: value != 31.5), (
             "an actuator kept a written value; if the mock stopped republishing "
             "them, this test and the comments pointing at it are now misleading"
         )
+
+        # The revert is a tick that ran after the scratch write, so the scratch
+        # node has now been through one too.
         assert scratch.get_value() == 31.5, (
             "the scratch node was overwritten — something now simulates it, and "
             "every write-then-read-back test in the suite has become a race"

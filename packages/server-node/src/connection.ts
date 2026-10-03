@@ -742,7 +742,15 @@ export class OpcuaConnection {
           // Map the string BrowseName to the AggregateFunction
           if (reference.browseName.name) {
             const name = reference.browseName.name.toString();
-            if (name in AggregateFunction) {
+            const identifier = Object.hasOwn(AggregateFunction, name)
+              ? AggregateFunction[name as keyof typeof AggregateFunction]
+              : undefined;
+            if (
+              typeof identifier === "number" &&
+              reference.nodeId.namespace === 0 &&
+              reference.nodeId.value === identifier &&
+              !functions.includes(name)
+            ) {
               functions.push(name);
             }
           }

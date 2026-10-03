@@ -27,6 +27,7 @@ import {
   resolveNodeId,
 } from "node-opcua-client";
 
+import { convertForVariant } from "./variant-codec.js";
 import { CONTRACT } from "./contract.js";
 import { message } from "./errors.js";
 import { continues, releaseContinuationPoint } from "./history.js";
@@ -567,6 +568,8 @@ export async function alarmAction(
   durationMs: number | null = null
 ) {
   const spec = ACTIONS[action];
+  const decodedId =
+    spec.takes === "eventIdAndComment" ? convertForVariant(eventId, DataType.ByteString) : null;
   // Which object the method hangs off. The acknowledge family are methods of the
   // condition's own type; the shelving ones are methods of
   // ShelvedStateMachineType and hang off the condition's ShelvingState component
@@ -580,7 +583,7 @@ export async function alarmAction(
   let inputArguments: Variant[] = [];
   if (spec.takes === "eventIdAndComment") {
     inputArguments = [
-      new Variant({ dataType: DataType.ByteString, value: Buffer.from(eventId, "base64") }),
+      new Variant({ dataType: DataType.ByteString, value: decodedId }),
       new Variant({
         dataType: DataType.LocalizedText,
         value: new LocalizedText({ text: comment }),

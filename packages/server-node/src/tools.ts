@@ -173,8 +173,9 @@ function dataTypeName(variant: Variant | null | undefined): string | null {
 
 /** The OPC UA name behind a DataType *attribute*, which is a NodeId, not an enum. */
 function dataTypeNameFromNodeId(value: unknown): string | null {
-  const identifier = (value as { value?: unknown } | null)?.value;
-  if (typeof identifier !== "number") return null;
+  const node = value as { value?: unknown; namespace?: number } | null;
+  const identifier = node?.value;
+  if (node?.namespace !== 0 || typeof identifier !== "number") return null;
   return DataType[identifier] ?? null;
 }
 
@@ -1451,7 +1452,7 @@ export class OpcuaTools {
       // answers read on this very session; what is left is a name it does not.
       const offered = this.capabilities.aggregateFunctions;
       if (!offered.includes(aggregateFunction)) {
-        throw new Error(
+        throw new ContractRefusal(
           offered.length === 0
             ? "Server does not advertise any aggregate functions"
             : `Invalid aggregate function. Supported: ${offered.join(", ")}`

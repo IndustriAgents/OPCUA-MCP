@@ -1554,16 +1554,24 @@ def _fill_variable_detail(client, records: list[dict], server_limits: dict) -> N
     chunk = read_chunk(server_limits)
     try:
         values = _read_values(client, node_ids, ua.AttributeIds.Value, chunk)
+        data_types = _read_values(client, node_ids, ua.AttributeIds.DataType, chunk)
         descriptions = _read_values(client, node_ids, ua.AttributeIds.Description, chunk)
     except Exception:
         # Best-effort enrichment: the nodes were found, and reporting them
         # without their values beats failing a browse that succeeded.
         return
 
-    for record, data_value, description in zip(variables, values, descriptions, strict=True):
+    for record, data_value, data_type, description in zip(
+        variables, values, data_types, descriptions, strict=True
+    ):
         if data_value.StatusCode.is_good():
             record["value"] = variant_to_json(data_value.Value)
             record["data_type"] = _data_type_name(data_value.Value)
+        if record["data_type"] is None and data_type.StatusCode.is_good():
+            identifier = getattr(getattr(data_type, "Value", None), "Value", None)
+            if isinstance(identifier, ua.NodeId) and identifier.NamespaceIndex == 0:
+                with contextlib.suppress(ValueError):
+                    record["data_type"] = ua.VariantType(identifier.Identifier).name
         text = getattr(getattr(description, "Value", None), "Value", None)
         text = getattr(text, "Text", None)
         record["description"] = text if text else None

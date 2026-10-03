@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — aggregate, alarm and browse parity (#157 B12/B19/B20/B21)
+- Aggregate discovery requires the standard node ID and name, excludes prototype
+  names and duplicates, and reports unsupported aggregate functions consistently.
+- Validate alarm EventIds as standard base64 before any OPC UA service call.
+- Preserve a known standard datatype when a browsed value cannot be read; custom
+  datatype identifiers are no longer mislabeled as builtins by their number alone.
+
 ### Fixed — recover consistently from service timeouts (#157 B14)
 - Node now recognizes transaction timeouts, socket error codes and wrapped
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic

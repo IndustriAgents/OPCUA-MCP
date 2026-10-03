@@ -23,7 +23,6 @@ from __future__ import annotations
 import contextlib
 import sys
 import threading
-from base64 import b64decode
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +34,7 @@ from .errors import message
 from .history import continues, release_continuation_point
 from .notices import notice
 from .records import history_data, variant_to_json
+from .variant_codec import convert_for_variant
 
 #: The Server object — where most servers raise every event they have.
 DEFAULT_NOTIFIER: str = EVENTS["defaultNotifierNodeId"]
@@ -507,6 +507,11 @@ def alarm_action(
     model sees — the same reason the Node runtime gives.
     """
     spec = ACTIONS[action]
+    decoded_id = (
+        convert_for_variant(event_id, ua.VariantType.ByteString)
+        if spec["takes"] == "eventIdAndComment"
+        else None
+    )
     condition = client.get_node(condition_id)
     # Which object the method hangs off. The acknowledge family are methods of
     # the condition's own type; the shelving ones are methods of
@@ -520,7 +525,7 @@ def alarm_action(
     arguments = []
     if spec["takes"] == "eventIdAndComment":
         arguments = [
-            ua.Variant(b64decode(event_id), ua.VariantType.ByteString),
+            ua.Variant(decoded_id, ua.VariantType.ByteString),
             ua.Variant(ua.LocalizedText(comment), ua.VariantType.LocalizedText),
         ]
     elif spec["takes"] == "duration":

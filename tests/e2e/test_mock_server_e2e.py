@@ -119,9 +119,19 @@ def test_the_simulation_reverts_an_actuator_but_leaves_the_scratch_nodes_alone(o
     try:
         actuator = client.get_node(ACTUATOR_NODE_ID)
         scratch = client.get_node(SCRATCH_DOUBLE_NODE_ID)
-        for node in (actuator, scratch):
-            node.set_value(ua.Variant(31.5, ua.VariantType.Double))
-            assert node.get_value() == 31.5, "the write did not land at all"
+
+        # The actuator write is checked by its status, not by reading it back: a
+        # tick between the write and the read republishes the simulated value,
+        # and the read-back failed on exactly that (#181). Good is the server
+        # saying it applied the write, which is all this half needs.
+        params = ua.WriteParameters()
+        params.NodesToWrite = [_write_double(ACTUATOR_NODE_ID, 31.5)]
+        [status] = client.uaclient.write(params)
+        assert status.value == ua.StatusCodes.Good, f"the actuator write was refused: {status}"
+
+        # Nothing republishes a scratch node, so its read-back is safe.
+        scratch.set_value(ua.Variant(31.5, ua.VariantType.Double))
+        assert scratch.get_value() == 31.5, "the write did not land at all"
 
         # Longer than the simulation's one-second period, so this is not a race
         # in the other direction.

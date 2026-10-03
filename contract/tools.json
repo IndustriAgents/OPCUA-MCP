@@ -13,7 +13,7 @@
             "description": "The node this record is for, echoed back as asked for. Example: 'ns=2;i=2'."
           },
           "value": {
-            "description": "The current value, encoded per its OPC UA data type exactly as resultShapes.historyRecords.value is — the same shared codec, pinned by tests/fixtures/value-encoding.json. null when the server returned no value, which a bad 'status' explains."
+            "description": "Standard namespace-zero ExtensionObjects encode as JSON objects with original UA field names; undecodable structures encode as {\"$opcua\":\"undecodableExtensionObject\"}. The current value, encoded per its OPC UA data type exactly as resultShapes.historyRecords.value is — the same shared codec, pinned by tests/fixtures/value-encoding.json. null when the server returned no value, which a bad 'status' explains."
           },
           "data_type": {
             "type": ["string", "null"],

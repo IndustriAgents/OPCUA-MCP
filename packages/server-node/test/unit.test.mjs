@@ -112,6 +112,26 @@ const array = (dataType, value) =>
 // The native node-opcua value for each case in the fixture. The Python suite has
 // its own table of the same names holding python-opcua values; the two produce
 // the same JSON, which is the point.
+const { Range, EUInformation, Argument, AxisInformation, KeyValuePair } =
+  await import("node-opcua-types");
+const { OpaqueStructure } = await import("node-opcua-extension-object");
+const units = () =>
+  new EUInformation({
+    namespaceUri: "http://www.opcfoundation.org/UA/units/un/cefact",
+    unitId: 4408652,
+    displayName: new LocalizedText({ locale: "en", text: "°C" }),
+    description: new LocalizedText({ locale: "en", text: "degrees Celsius" }),
+  });
+
+function pair(cyclic = false) {
+  const value = new KeyValuePair({ key: new QualifiedName({ namespaceIndex: 2, name: "target" }) });
+  value.value = scalar(
+    DataType.ExtensionObject,
+    cyclic ? value : new Range({ low: -50, high: 250 })
+  );
+  return value;
+}
+
 const NATIVE = {
   boolean: scalar(DataType.Boolean, true),
   int32: scalar(DataType.Int32, 42),
@@ -140,6 +160,38 @@ const NATIVE = {
   bytestring_array: array(DataType.ByteString, [Buffer.from("ab"), Buffer.from("c")]),
   empty_array: array(DataType.Double, []),
   null: scalar(DataType.Null, null),
+  extension_range: scalar(DataType.ExtensionObject, new Range({ low: -50, high: 250 })),
+  extension_variant_field: scalar(DataType.ExtensionObject, pair()),
+  extension_cycle: scalar(DataType.ExtensionObject, pair(true)),
+  extension_eu_information: scalar(DataType.ExtensionObject, units()),
+  extension_argument: scalar(
+    DataType.ExtensionObject,
+    new Argument({
+      name: "target",
+      dataType: coerceNodeId("ns=0;i=11"),
+      valueRank: 2,
+      arrayDimensions: [2, 3],
+      description: new LocalizedText({ locale: "en", text: "Target" }),
+    })
+  ),
+  extension_axis_information: scalar(
+    DataType.ExtensionObject,
+    new AxisInformation({
+      engineeringUnits: units(),
+      euRange: new Range({ low: -50, high: 250 }),
+      title: new LocalizedText({ locale: "en", text: "Temperature" }),
+      axisScaleType: 0,
+      axisSteps: [1.5, 2.5],
+    })
+  ),
+  extension_range_array: array(DataType.ExtensionObject, [
+    new Range({ low: -50, high: 250 }),
+    new Range({ low: 0, high: 100 }),
+  ]),
+  extension_opaque: scalar(
+    DataType.ExtensionObject,
+    new OpaqueStructure(coerceNodeId("ns=2;i=999"), Buffer.from("opaque"))
+  ),
 };
 
 describe("value encoding (shared fixture)", () => {

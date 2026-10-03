@@ -38,6 +38,33 @@ CASES = {case["name"]: case for case in FIXTURE["cases"]}
 # The native python-opcua value for each case in the fixture. The Node suite has
 # its own table of the same names holding node-opcua values; the two produce the
 # same JSON, which is the point.
+
+
+def _structure(cls, **fields):
+    value = cls()
+    for name, item in fields.items():
+        setattr(value, name, item)
+    return value
+
+
+def _units():
+    return _structure(
+        ua.EUInformation,
+        NamespaceUri="http://www.opcfoundation.org/UA/units/un/cefact",
+        UnitId=4408652,
+        DisplayName=ua.LocalizedText("°C", "en"),
+        Description=ua.LocalizedText("degrees Celsius", "en"),
+    )
+
+
+def _pair(cyclic=False):
+    pair = _structure(ua.KeyValuePair, Key=ua.QualifiedName("target", 2))
+    pair.Value = ua.Variant(
+        pair if cyclic else _structure(ua.Range, Low=-50, High=250), ua.VariantType.ExtensionObject
+    )
+    return pair
+
+
 NATIVE = {
     "boolean": ua.Variant(True, ua.VariantType.Boolean),
     "int32": ua.Variant(42, ua.VariantType.Int32),
@@ -65,6 +92,42 @@ NATIVE = {
     "bytestring_array": ua.Variant([b"ab", b"c"], ua.VariantType.ByteString),
     "empty_array": ua.Variant([], ua.VariantType.Double),
     "null": ua.Variant(None, ua.VariantType.Null),
+    "extension_range": ua.Variant(
+        _structure(ua.Range, Low=-50, High=250), ua.VariantType.ExtensionObject
+    ),
+    "extension_variant_field": ua.Variant(_pair(), ua.VariantType.ExtensionObject),
+    "extension_cycle": ua.Variant(_pair(cyclic=True), ua.VariantType.ExtensionObject),
+    "extension_eu_information": ua.Variant(_units(), ua.VariantType.ExtensionObject),
+    "extension_argument": ua.Variant(
+        _structure(
+            ua.Argument,
+            Name="target",
+            DataType=ua.NodeId(11),
+            ValueRank=2,
+            ArrayDimensions=[2, 3],
+            Description=ua.LocalizedText("Target", "en"),
+        ),
+        ua.VariantType.ExtensionObject,
+    ),
+    "extension_axis_information": ua.Variant(
+        _structure(
+            ua.AxisInformation,
+            EngineeringUnits=_units(),
+            EURange=_structure(ua.Range, Low=-50, High=250),
+            Title=ua.LocalizedText("Temperature", "en"),
+            AxisScaleType=ua.AxisScaleEnumeration.Linear,
+            AxisSteps=[1.5, 2.5],
+        ),
+        ua.VariantType.ExtensionObject,
+    ),
+    "extension_range_array": ua.Variant(
+        [_structure(ua.Range, Low=-50, High=250), _structure(ua.Range, Low=0, High=100)],
+        ua.VariantType.ExtensionObject,
+    ),
+    "extension_opaque": ua.Variant(
+        _structure(ua.ExtensionObject, TypeId=ua.NodeId(999, 2), Body=b"opaque"),
+        ua.VariantType.ExtensionObject,
+    ),
 }
 
 
@@ -165,3 +228,18 @@ def test_round_trips_through_the_parser_the_tools_accept():
     from opcua_mcp_server import parse_iso_datetime
 
     assert parse_iso_datetime(format_iso_utc(TIMESTAMP)) == TIMESTAMP.replace(tzinfo=timezone.utc)
+
+
+def test_a_server_defined_class_cannot_impersonate_a_namespace_zero_type():
+    impostor = type(
+        "Range", (), {"ua_types": [("Low", "Double"), ("High", "Double")], "Low": -50, "High": 250}
+    )()
+    value = ua.Variant(impostor, ua.VariantType.ExtensionObject)
+    assert variant_to_json(value) == {"$opcua": "undecodableExtensionObject"}
+
+
+def test_structure_array_encoding_is_bounded(monkeypatch):
+    from opcua_mcp_server.structures import CONTRACT
+
+    monkeypatch.setitem(CONTRACT["limits"], "maxArrayItems", 1)
+    assert variant_to_json(NATIVE["extension_argument"]) == {"$opcua": "undecodableExtensionObject"}

@@ -608,6 +608,8 @@ async def values_structure(ctx: Context) -> Outcome:
         # the fields, and not the same text on both runtimes.
         elif shapes[name] != "Object":
             problems.append(f"{name}: {shapes[name]}, not an object")
+        elif record["value"].get("$opcua") == "undecodableExtensionObject":
+            problems.append(f"{name}: explicitly undecodable structure")
     if problems:
         return failed("; ".join(problems), shapes=shapes)
     return passed(f"{len(mapping)} structured values decoded to objects", shapes=shapes)

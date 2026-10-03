@@ -16,6 +16,7 @@
 import { DataType, DataValue, StatusCode, Variant, VariantArrayType } from "node-opcua-client";
 
 import { isGood } from "./status.js";
+import { extensionToJson } from "./structures.js";
 
 export interface HistoryRecord {
   /** JSON-native where the OPC UA type allows; see `variantToJson`. */
@@ -89,6 +90,8 @@ function scalarToJson(value: unknown, dataType: DataType | undefined | null): un
       return String(value).toLowerCase();
     case "StatusCode":
       return (value as { name?: string }).name ?? String(value);
+    case "ExtensionObject":
+      return extensionToJson(value, scalarToJson);
     case "LocalizedText":
       // The text only; the locale is not part of the reading.
       return (value as { text?: string | null }).text ?? "";
@@ -113,10 +116,7 @@ function scalarToJson(value: unknown, dataType: DataType | undefined | null): un
     return Array.from(value as ArrayLike<unknown>, (item) => scalarToJson(item, dataType));
   }
 
-  // Structured and opaque types (ExtensionObject, XmlElement, …) degrade to a
-  // string. Those are not the shape of anything a server historises as a
-  // variable value, and a faithful cross-runtime encoding of them would be a
-  // much larger undertaking than this record is worth.
+  // Remaining opaque scalar types (for example XmlElement) retain their text.
   return String(value);
 }
 

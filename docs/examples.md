@@ -162,6 +162,14 @@ The quality and the age come with the value, because they are what decide whethe
 it can be acted on: a `status` of `Good` and a `source_timestamp` from four hours
 ago are a stale reading, and a bare number cannot tell you that.
 
+A standard namespace-zero structured value (an `ExtensionObject`, such as
+`Range` or `EUInformation`) is a JSON object with the original UA field names:
+`{"Low": -50, "High": 250}`. Nested structures and arrays preserve their fields;
+LocalizedText fields carry both `Locale` and `Text`. A server-defined or opaque
+structure that cannot be decoded carries
+`{"$opcua": "undecodableExtensionObject"}`. Treat that marker as unavailable
+structured data, even when the OPC UA read status is `Good`.
+
 `engineering` is what the plant says the number *means*, read from the node's own
 OPC UA properties (Part 8 §5.3) and cached for the session. `null` for a node that
 publishes none, which is most of them:

@@ -3,7 +3,7 @@ import copy
 import logging
 import random
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from opcua import Server, ua
 from opcua.common.node import Node
@@ -163,6 +163,7 @@ class IndustrialControlSystem:
 
         # Last, with string ids, so adding them renumbered nothing above.
         self._create_parity_probes(methods_folder, scratch_folder)
+        self._create_info_model_probes(industrial_system, methods_folder, scratch_folder)
 
         logging.info("Address space setup completed")
 
@@ -224,6 +225,163 @@ class IndustrialControlSystem:
                 ua.StatusCode(ua.StatusCodes.GoodLocalOverride),
             )
         )
+
+    def _create_info_model_probes(
+        self, industrial_system: Node, methods_folder: Node, scratch_folder: Node
+    ):
+        """Nodes whose own attributes say what a write to them may be.
+
+        Every node above is a plain read/write Double, Boolean or String, so a
+        check driven by the information model — an enumeration's states, a
+        two-state node's labels, an array's length, a method that is switched
+        off, a node that can be written but not read — had nothing to be tested
+        against. Explicit ids from 102 up, created last, so nothing above is
+        renumbered and the map in `tests/e2e/test_mcp_e2e.py` stays put.
+        """
+        # An enumeration by DataType: ServerState (i=852) carries its EnumStrings
+        # on the DataType node, which is where a server usually publishes them.
+        machine_state = scratch_folder.add_variable(
+            ua.NodeId(102, 2),
+            ua.QualifiedName("MachineState", 2),
+            ua.Variant(0, ua.VariantType.Int32),
+            datatype=ua.NodeId(ua.ObjectIds.ServerState),
+        )
+        machine_state.set_writable(True)
+
+        # A MultiStateDiscreteType: a UInt32 whose states are listed on the
+        # variable itself (Part 8 §5.3.3.3).
+        valve_mode = scratch_folder.add_variable(
+            ua.NodeId(103, 2),
+            ua.QualifiedName("ValveMode", 2),
+            ua.Variant(0, ua.VariantType.UInt32),
+        )
+        valve_mode.set_writable(True)
+        valve_mode.add_property(
+            ua.NodeId(104, 2),
+            ua.QualifiedName("EnumStrings", 0),
+            [ua.LocalizedText("Closed"), ua.LocalizedText("Open"), ua.LocalizedText("Auto")],
+            varianttype=ua.VariantType.LocalizedText,
+        )
+        self._retype(valve_mode, ua.ObjectIds.MultiStateDiscreteType)
+
+        # A TwoStateDiscreteType: a Boolean that names its two states.
+        door_lock = scratch_folder.add_variable(
+            ua.NodeId(105, 2), ua.QualifiedName("DoorLock", 2), False
+        )
+        door_lock.set_writable(True)
+        door_lock.add_property(
+            ua.NodeId(106, 2), ua.QualifiedName("TrueState", 0), ua.LocalizedText("Locked")
+        )
+        door_lock.add_property(
+            ua.NodeId(107, 2), ua.QualifiedName("FalseState", 0), ua.LocalizedText("Unlocked")
+        )
+        self._retype(door_lock, ua.ObjectIds.TwoStateDiscreteType)
+
+        # A fixed-length array: ValueRank 1, at most three elements.
+        scratch_array = scratch_folder.add_variable(
+            ua.NodeId(108, 2),
+            ua.QualifiedName("ScratchArray", 2),
+            ua.Variant([0.0, 0.0, 0.0], ua.VariantType.Double),
+        )
+        scratch_array.set_writable(True)
+        scratch_array.set_attribute(
+            ua.AttributeIds.ValueRank, ua.DataValue(ua.Variant(1, ua.VariantType.Int32))
+        )
+        scratch_array.set_attribute(
+            ua.AttributeIds.ArrayDimensions, ua.DataValue(ua.Variant([3], ua.VariantType.UInt32))
+        )
+
+        # A method that exists and is switched off.
+        disabled = methods_folder.add_method(
+            ua.NodeId(109, 2),
+            ua.QualifiedName("DisabledMethod", 2),
+            self.disabled_method_callback,
+            [],
+            [],
+        )
+        for attribute in (ua.AttributeIds.Executable, ua.AttributeIds.UserExecutable):
+            disabled.set_attribute(
+                attribute, ua.DataValue(ua.Variant(False, ua.VariantType.Boolean))
+            )
+
+        # An interlock pair: a permit, and the setpoint a policy precondition
+        # guards with it.
+        permit = scratch_folder.add_variable(
+            ua.NodeId(110, 2), ua.QualifiedName("InterlockPermit", 2), False
+        )
+        permit.set_writable(True)
+        interlocked = scratch_folder.add_variable(
+            ua.NodeId(111, 2), ua.QualifiedName("InterlockedSetpoint", 2), 0.0
+        )
+        interlocked.set_writable(True)
+
+        # A line whose analogue tags a writable_subtrees rule can select by type.
+        line = industrial_system.add_folder(ua.NodeId(112, 2), ua.QualifiedName("Line1", 2))
+        for node_id, name, value, range_id, high in (
+            (113, "LineSpeed", 10.0, 114, 100.0),
+            (115, "LineTension", 5.0, 116, 50.0),
+        ):
+            tag = line.add_variable(ua.NodeId(node_id, 2), ua.QualifiedName(name, 2), value)
+            tag.set_writable(True)
+            tag.add_property(
+                ua.NodeId(range_id, 2), ua.QualifiedName("EURange", 0), _range(0.0, high)
+            )
+            self._retype(tag, ua.ObjectIds.AnalogItemType)
+        label = line.add_variable(ua.NodeId(117, 2), ua.QualifiedName("LineLabel", 2), "L1")
+        label.set_writable(True)
+
+        # Something a deny_read policy hides.
+        recipes = industrial_system.add_folder(ua.NodeId(118, 2), ua.QualifiedName("Recipes", 2))
+        recipes.add_variable(
+            ua.NodeId(119, 2), ua.QualifiedName("SecretRecipe", 2), "flour=2;sugar=1"
+        )
+
+        # Writable, not readable: AccessLevel CurrentWrite only, and a stored
+        # value that says so. Its type is only in its DataType attribute.
+        write_only = scratch_folder.add_variable(
+            ua.NodeId(120, 2), ua.QualifiedName("WriteOnlySetpoint", 2), 0.0
+        )
+        for attribute in (ua.AttributeIds.AccessLevel, ua.AttributeIds.UserAccessLevel):
+            write_only.set_attribute(
+                attribute,
+                ua.DataValue(ua.Variant(ua.AccessLevel.CurrentWrite.mask, ua.VariantType.Byte)),
+            )
+        write_only.set_value(
+            ua.DataValue(
+                ua.Variant(0.0, ua.VariantType.Double),
+                ua.StatusCode(ua.StatusCodes.BadNotReadable),
+            )
+        )
+
+        # A ByteString and a DateTime to write to with a matching data_type, so
+        # the write codec's own refusals (an over-long ByteString, a zone-less
+        # DateTime) are reached rather than stopped earlier by a type mismatch.
+        scratch_bytes = scratch_folder.add_variable(
+            ua.NodeId(121, 2),
+            ua.QualifiedName("ScratchBytes", 2),
+            ua.Variant(b"", ua.VariantType.ByteString),
+        )
+        scratch_bytes.set_writable(True)
+        scratch_datetime = scratch_folder.add_variable(
+            ua.NodeId(122, 2),
+            ua.QualifiedName("ScratchDateTime", 2),
+            ua.Variant(datetime(2026, 1, 1, tzinfo=timezone.utc), ua.VariantType.DateTime),
+        )
+        scratch_datetime.set_writable(True)
+
+    @staticmethod
+    def _retype(node: Node, type_definition: int):
+        """Replace the type definition `add_variable` gave a node (Part 3 §4.3: one only)."""
+        node.delete_reference(
+            ua.NodeId(ua.ObjectIds.BaseDataVariableType),
+            ua.ObjectIds.HasTypeDefinition,
+            bidirectional=False,
+        )
+        node.add_reference(ua.NodeId(type_definition), ua.ObjectIds.HasTypeDefinition)
+
+    def disabled_method_callback(self, parent, *args):
+        """Never reached through a conformant client: the method is not executable."""
+        return []
 
     def historize(self):
         accessHistoryDataCapability = self.server.get_node("ns=0;i=11193")

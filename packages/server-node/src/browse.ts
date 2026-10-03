@@ -9,9 +9,14 @@ import {
   BrowseResult,
   ClientSession,
   ReferenceDescription,
+  type BrowseDescriptionOptions,
 } from "node-opcua-client";
 
+import { canonicalNodeId } from "./node-ids.js";
 import { isGood } from "./status.js";
+
+/** The HasSubtype reference type (ns=0), which links a type to its parent. */
+const HAS_SUBTYPE = 45;
 
 /** The browse this server performs: hierarchical references, forward only.
  *
@@ -57,8 +62,22 @@ export async function browseAllReferences(
   session: ClientSession,
   nodeId: string
 ): Promise<ReferenceDescription[]> {
+  return browseReferences(session, browseDescription(nodeId));
+}
+
+/** Every reference one browse description selects, following continuation points.
+ *
+ * `browseAllReferences` with the description left to the caller: the
+ * information-model checks also need a node's references of *every* type (is
+ * this method one of that object's?) and its inverse ones (what is this type's
+ * parent?), and a continuation point is as easy to drop there as here.
+ */
+export async function browseReferences(
+  session: ClientSession,
+  description: BrowseDescriptionOptions
+): Promise<ReferenceDescription[]> {
   const references: ReferenceDescription[] = [];
-  let result: BrowseResult = await session.browse(browseDescription(nodeId));
+  let result: BrowseResult = await session.browse(description);
 
   for (;;) {
     if (!isGood(result.statusCode)) {
@@ -81,6 +100,51 @@ export async function browseAllReferences(
     // to discard the rest of the answer; this asks for it.
     result = await session.browseNext(continuationPoint, false);
   }
+}
+
+/** Whether a browse-path segment names this BrowseName.
+ *
+ * `2:Sensors` matches only namespace 2; a bare `Sensors` matches the name in
+ * whatever namespace it is in. The bare form is what someone types when they
+ * know what a thing is called and not which namespace it was loaded into —
+ * which is the entire reason `browse_path` exists. Shared by the tool's own
+ * `browse_path` and by the policy file's browse-path entries, so the two cannot
+ * read one path two ways.
+ */
+export function browseNameMatches(
+  segment: string,
+  namespaceIndex: number,
+  name: string | null
+): boolean {
+  const separator = segment.indexOf(":");
+  if (separator > 0) {
+    const index = Number(segment.slice(0, separator));
+    if (Number.isInteger(index)) {
+      return index === namespaceIndex && segment.slice(separator + 1) === name;
+    }
+  }
+  return segment === name;
+}
+
+/** The parent of a type — a DataType, an ObjectType — or null at the top.
+ *
+ * Every inverse reference, filtered here rather than by the server:
+ * python-opcua's server answers a browse filtered to HasSubtype with nothing at
+ * all, and the Python runtime does the same for that reason. A Bad status is
+ * "no parent known", which ends a walk rather than failing it.
+ */
+export async function supertypeOf(session: ClientSession, typeId: string): Promise<string | null> {
+  const result = await session.browse({
+    nodeId: typeId,
+    browseDirection: BrowseDirection.Inverse,
+    resultMask: 63,
+  });
+  if (!isGood(result.statusCode)) return null;
+  const parent = (result.references ?? []).find(
+    (reference) =>
+      reference.referenceTypeId.namespace === 0 && reference.referenceTypeId.value === HAS_SUBTYPE
+  );
+  return parent ? canonicalNodeId(parent.nodeId.toString()) : null;
 }
 
 /** Which of a node's HasTypeDefinition references to report, if any.

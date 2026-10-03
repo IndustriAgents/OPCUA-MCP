@@ -199,6 +199,116 @@ Three properties worth knowing:
   before any of it is sent, so a batch can never end up partially applied.
 - **Control needs a verified server.** See below.
 
+### What the plant's own model says
+
+The allowlist and its bounds are what *you* allow. The server's address space
+already says a good deal about what a node can take, and both runtimes now read
+it before a write or a method call leaves this process — one batched read of the
+node's attributes, cached for the session:
+
+| Attribute | What it stops |
+|---|---|
+| `NodeClass` | A write to something that is not a Variable; a call whose method node is not a Method, or whose object is not an Object |
+| `AccessLevel` / `UserAccessLevel` | A write to a node that is read-only, or read-only for the OPC UA user this server logs in as |
+| `DataType`, `ValueRank`, `ArrayDimensions` | An explicit `data_type` that contradicts the node, a list for a single value or the reverse, an array past its length. The write is typed from the DataType attribute, so a write-only node needs no `data_type` |
+| `EnumStrings` / `EnumValues`, `TrueState` / `FalseState` | A value that is not one of an enumeration's states. A state may be written by its label (`"Running"`, `"Open"`) |
+| `InstrumentRange` | A value past what the device can represent — enforced even when `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` lifts the `EURange` check |
+| `Executable` / `UserExecutable`, the object's references, `InputArguments` | A method that is switched off, is not a method of the object it is called on, or is given the wrong number of arguments |
+
+Two rules keep this honest:
+
+- **It only ever narrows.** Nothing the server says can grant anything; the
+  profile, allowlist and bounds apply on top. A server misreporting its own
+  attributes can make a write stricter, never looser.
+- **A missing attribute skips its check.** The server enforces its own access
+  rights, so a fact that could not be read is left to the server rather than
+  guessed. That is the opposite of the policy rules below, which fail closed.
+
+A node that cannot take the write is reported in *that node's* record and the
+rest of the batch goes, as a value that will not convert always was. A value
+outside an enumeration or a range refuses the whole batch, as the bounds above
+do. `read_opcua_nodes` with `include_write_access` reports all of it per node
+before trying — type, array-ness, states and labels, and the tightest of the
+`EURange`, `InstrumentRange` and policy bounds — so an agent can get a write
+right the first time.
+
+### Naming targets by path, by subtree, and hiding what may not be read
+
+An allowlist entry — in the policy file, `OPCUA_ALLOWED_WRITE_NODES` or
+`OPCUA_ALLOWED_METHODS` — may be a browse path from the Root folder instead of a
+node ID: `/Objects/Line1/SpeedSetpoint`, with `2:Name` to pin a segment's
+namespace. Paths are resolved on every session, and a path that matches nothing,
+or matches more than one child at any step, allows nothing.
+
+```json
+{
+  "version": 1,
+  "profile": "operator",
+  "deny_read": ["/Objects/Recipes"],
+  "control": {
+    "writable_nodes": ["/Objects/Line1/SpeedSetpoint"],
+    "writable_subtrees": [
+      { "root": "/Objects/Line1/Dosing", "type_definition": "i=2368", "max": 40, "max_nodes": 50 }
+    ],
+    "callable_methods": [{ "object_id": "/Objects/Line1", "method_id": "/Objects/Line1/Reset" }],
+    "acknowledge_alarms": true,
+    "alarm_sources": ["/Objects/Line1/Temperature"],
+    "alarm_max_severity": 600,
+    "preconditions": [
+      {
+        "targets": ["/Objects/Line1/SpeedSetpoint"],
+        "methods": [{ "object_id": "/Objects/Line1", "method_id": "/Objects/Line1/Reset" }],
+        "require": [
+          { "node": "/Objects/Line1/Mode", "in": ["AUTO", "MANUAL"] },
+          { "node": "/Objects/Line1/DoorClosed", "equals": true }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **`writable_subtrees`** allows every Variable under `root` whose type definition
+  is exactly `type_definition` (every Variable when it is absent), with the bound
+  keys of a `writable_nodes` entry applied to each. It is expanded to a concrete
+  list on every session, and that list is reported; a rule matching more than
+  `max_nodes` (default 200, at most 1000) is ignored entirely rather than applied
+  in part. An explicit `writable_nodes` entry's bound wins over a rule's.
+- **`preconditions`** are interlocks: a write to a `target` or a call to one of
+  the `methods` is refused unless every `require` holds when it is sent —
+  `equals`, `in`, or `min`/`max` against the node's current value. A requirement
+  node that cannot be read, or reads Bad, does not hold. A target or method that
+  does not resolve on the session refuses every write and method call until it
+  does — an interlock that guards nothing must not quietly switch itself off.
+- **`alarm_sources`** and **`alarm_max_severity`** scope the alarm tools: a
+  condition is acknowledged or acted on only when its `SourceNode` is listed and
+  its `Severity` is at most the limit. A condition whose source or severity
+  cannot be read is refused.
+- **`deny_read`** hides each node and its whole subtree from `read_opcua_nodes`,
+  `read_opcua_history`, `subscribe_opcua_nodes` and `browse_opcua_nodes` (whose
+  results simply leave them out), under **every** profile — it is the one rule
+  here that is not an operator allowlist. Expanded on every session, up to 5000
+  nodes in total; past that, or if expanding fails, every read is refused until
+  it is fixed, because a confidentiality rule cannot be applied in part.
+
+`writable_subtrees`, `preconditions` and the alarm scope are operator rules, like
+the allowlists and bounds: `full` means no allowlists and ignores them.
+
+### The policy check on connect
+
+Every session — the first and each reconnect — measures the policy against the
+server it has reached: what each entry resolved to, whether each writable node
+exists, is a Variable and is writable by this OPC UA user, whether a bound lies
+outside the node's `EURange`, whether an `enum` lists states the node does not
+define, whether each method is executable and belongs to its object, and what
+`writable_subtrees` and `deny_read` expanded to. Each problem is printed to
+stderr as `WARNING: policy check: …` and reported, with the resolved allowlists,
+under `get_server_status` → `policy_check`. A finding never disables an entry —
+the entry already allows nothing the server will accept — it makes that visible
+at startup rather than at the first refused write. The wording is
+`contract/tools.json` → `policyCheck`, and `tests/fixtures/policy-check.json`
+holds both runtimes to it.
+
 ### Control needs a verified server
 
 `operator` and `full` offer control tools — writes, method calls, alarm actions —
@@ -240,7 +350,7 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**
  "process_identity":{"uid":501,"user":"opcua","pid":4242},
  "opcua_user_identity":{"type":"username","username":"line-a-operator","certificate_sha256":null},
  "profile":"operator","control":"secured","tool":"write_opcua_nodes","decision":"allowed",
- "node_ids":["ns=2;i=13"]}
+ "node_ids":["ns=2;i=13"],"node_uris":["nsu=urn:plant:line-a;i=13"]}
 ```
 
 `control` is what let the call through the channel gate: `secured` for a pinned
@@ -270,7 +380,11 @@ like everything else.
 Both matter because a node id does not: `ns=2;i=5` names a different physical node
 after a server reloads its namespaces in a different order, which is the whole
 reason the `nsu=` allowlist form exists. A record saying only that a write to
-`ns=2;i=5` was allowed is one a reviewer cannot interpret six months later.
+`ns=2;i=5` was allowed is one a reviewer cannot interpret six months later, so
+every node target is also written in namespace-URI form — `node_uris` beside
+`node_ids`, and `object_node_uri` / `method_node_uri` beside a method's ids —
+resolved against the NamespaceArray of the session the call ran on (`null` for an
+id whose namespace that array does not list).
 `session` is minted by this server rather than taken from the OPC UA server —
 python-opcua discards the server's SessionId and node-opcua exposes it, so a field
 built from it could not mean the same thing on both runtimes. `session_generation`

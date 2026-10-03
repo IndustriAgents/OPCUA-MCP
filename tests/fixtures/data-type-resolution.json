@@ -1,0 +1,143 @@
+{
+  "$comment": "What each DataType a node declares is written as, driven through BOTH runtimes: tests/unit/test_data_type_resolution.py and packages/server-node/test/data-type-resolution.test.mjs walk `supertypes` (child -> parent, the inverse HasSubtype reference; an absent key has no parent) from `data_type_id` and assert `expect`. `data_type` is the built-in encoding only when it is one of the fifteen spellings write_opcua_nodes accepts, and null for an abstract type (BaseDataType, Number, Integer, UInteger, Structure), a built-in outside those fifteen, a dead end or a loop — null means the write falls back to the type of the node's current value. `enumeration` is true when the walk passes through Enumeration (ns=0;i=29), whose instances are Int32 on the wire. Never an error: a type that cannot be resolved is a check that is skipped, not a write that is refused.",
+  "cases": [
+    {
+      "name": "a built-in Double",
+      "data_type_id": "ns=0;i=11",
+      "supertypes": {},
+      "expect": { "data_type": "Double", "enumeration": false }
+    },
+    {
+      "name": "a built-in Boolean",
+      "data_type_id": "ns=0;i=1",
+      "supertypes": {},
+      "expect": { "data_type": "Boolean", "enumeration": false }
+    },
+    {
+      "name": "a built-in String",
+      "data_type_id": "ns=0;i=12",
+      "supertypes": {},
+      "expect": { "data_type": "String", "enumeration": false }
+    },
+    {
+      "name": "a built-in Int64",
+      "data_type_id": "ns=0;i=8",
+      "supertypes": {},
+      "expect": { "data_type": "Int64", "enumeration": false }
+    },
+    {
+      "name": "a built-in Byte",
+      "data_type_id": "ns=0;i=3",
+      "supertypes": {},
+      "expect": { "data_type": "Byte", "enumeration": false }
+    },
+    {
+      "name": "Duration is a Double on the wire",
+      "data_type_id": "ns=0;i=290",
+      "supertypes": { "ns=0;i=290": "ns=0;i=11" },
+      "expect": { "data_type": "Double", "enumeration": false }
+    },
+    {
+      "name": "UtcTime is a DateTime on the wire",
+      "data_type_id": "ns=0;i=294",
+      "supertypes": { "ns=0;i=294": "ns=0;i=13" },
+      "expect": { "data_type": "DateTime", "enumeration": false }
+    },
+    {
+      "name": "Image is a ByteString on the wire",
+      "data_type_id": "ns=0;i=30",
+      "supertypes": { "ns=0;i=30": "ns=0;i=15" },
+      "expect": { "data_type": "ByteString", "enumeration": false }
+    },
+    {
+      "name": "ServerState is an enumeration, an Int32 on the wire",
+      "data_type_id": "ns=0;i=852",
+      "supertypes": { "ns=0;i=852": "ns=0;i=29" },
+      "expect": { "data_type": "Int32", "enumeration": true }
+    },
+    {
+      "name": "Enumeration itself is an Int32",
+      "data_type_id": "ns=0;i=29",
+      "supertypes": {},
+      "expect": { "data_type": "Int32", "enumeration": true }
+    },
+    {
+      "name": "a vendor enumeration",
+      "data_type_id": "ns=2;i=3001",
+      "supertypes": { "ns=2;i=3001": "ns=0;i=29" },
+      "expect": { "data_type": "Int32", "enumeration": true }
+    },
+    {
+      "name": "a subtype of a vendor enumeration",
+      "data_type_id": "ns=2;i=3010",
+      "supertypes": { "ns=2;i=3010": "ns=2;i=3001", "ns=2;i=3001": "ns=0;i=29" },
+      "expect": { "data_type": "Int32", "enumeration": true }
+    },
+    {
+      "name": "a vendor subtype of UInt32",
+      "data_type_id": "ns=2;i=3002",
+      "supertypes": { "ns=2;i=3002": "ns=0;i=7" },
+      "expect": { "data_type": "UInt32", "enumeration": false }
+    },
+    {
+      "name": "Number is abstract",
+      "data_type_id": "ns=0;i=26",
+      "supertypes": { "ns=0;i=26": "ns=0;i=24" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "Integer is abstract",
+      "data_type_id": "ns=0;i=27",
+      "supertypes": { "ns=0;i=27": "ns=0;i=26", "ns=0;i=26": "ns=0;i=24" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "UInteger is abstract",
+      "data_type_id": "ns=0;i=28",
+      "supertypes": { "ns=0;i=28": "ns=0;i=26" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "BaseDataType is abstract",
+      "data_type_id": "ns=0;i=24",
+      "supertypes": {},
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "Structure is not writable here",
+      "data_type_id": "ns=0;i=22",
+      "supertypes": { "ns=0;i=22": "ns=0;i=24" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "a vendor structure",
+      "data_type_id": "ns=2;i=3003",
+      "supertypes": { "ns=2;i=3003": "ns=0;i=22" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "NodeId is a built-in outside the writable spellings",
+      "data_type_id": "ns=0;i=17",
+      "supertypes": {},
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "LocalizedText is a built-in outside the writable spellings",
+      "data_type_id": "ns=0;i=21",
+      "supertypes": {},
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "a loop ends unresolved, without hanging",
+      "data_type_id": "ns=2;i=1",
+      "supertypes": { "ns=2;i=1": "ns=2;i=2", "ns=2;i=2": "ns=2;i=1" },
+      "expect": { "data_type": null, "enumeration": false }
+    },
+    {
+      "name": "a dead end is unresolved",
+      "data_type_id": "ns=2;i=4000",
+      "supertypes": {},
+      "expect": { "data_type": null, "enumeration": false }
+    }
+  ]
+}

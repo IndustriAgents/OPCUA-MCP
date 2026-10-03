@@ -1,5 +1,5 @@
 {
-  "$comment": "One table of OPCUA_POLICY_FILE contents and the verdict each must get, driven through BOTH runtimes: tests/unit/test_policy_file_validation.py and packages/server-node/test/policy-file-validation.test.mjs write each case to a file, parse it with the environment given, and assert the same verdict and the same sentence (#157). A case gives the file as `file` (a JSON value) or as `text` (raw, for what JSON cannot hold: NaN, Infinity, 1e400, a syntax error). `error` is the exact message, with `{path}` standing for the file's path; `errorPrefix` is used only where the rest is the JSON parser's own wording, which neither runtime chooses; `error: null` means the file is accepted, and `expect` then names settings it must produce. The rules: every field is checked whether or not an environment variable overrides it, in one fixed order (version, profile, allowed_tools, the three top-level flags, control, control.writable_nodes, control.callable_methods, control.acknowledge_alarms), so a file with two faults reports the same one on both; a wrong type is refused rather than coerced; and null means \"not set\" everywhere, as it already did for min and max.",
+  "$comment": "One table of OPCUA_POLICY_FILE contents and the verdict each must get, driven through BOTH runtimes: tests/unit/test_policy_file_validation.py and packages/server-node/test/policy-file-validation.test.mjs write each case to a file, parse it with the environment given, and assert the same verdict and the same sentence (#157). A case gives the file as `file` (a JSON value) or as `text` (raw, for what JSON cannot hold: NaN, Infinity, 1e400, a syntax error). `error` is the exact message, with `{path}` standing for the file's path; `errorPrefix` is used only where the rest is the JSON parser's own wording, which neither runtime chooses; `error: null` means the file is accepted, and `expect` then names settings it must produce. The rules: every field is checked whether or not an environment variable overrides it, in one fixed order (version, profile, allowed_tools, the three top-level flags, deny_read, control, control.writable_nodes, control.callable_methods, control.acknowledge_alarms, control.writable_subtrees, control.alarm_sources, control.alarm_max_severity, control.preconditions; within an entry, the order its own cases show), so a file with two faults reports the same one on both; a wrong type is refused rather than coerced; and null means \"not set\" everywhere, as it already did for min and max.",
   "cases": [
     {
       "name": "an empty object is the default policy",
@@ -196,7 +196,9 @@
     },
     {
       "name": "callable_methods given as an object",
-      "file": { "control": { "callable_methods": { "object_id": "ns=2;i=1", "method_id": "ns=2;i=31" } } },
+      "file": {
+        "control": { "callable_methods": { "object_id": "ns=2;i=1", "method_id": "ns=2;i=31" } }
+      },
       "error": "OPCUA_POLICY_FILE control.callable_methods must be a list"
     },
     {
@@ -212,7 +214,9 @@
     },
     {
       "name": "a callable_methods entry with an empty id",
-      "file": { "control": { "callable_methods": [{ "object_id": "", "method_id": "ns=2;i=31" }] } },
+      "file": {
+        "control": { "callable_methods": [{ "object_id": "", "method_id": "ns=2;i=31" }] }
+      },
       "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
     },
     {
@@ -235,6 +239,453 @@
       "file": { "control": { "callable_methods": [{ "object_id": "ns=2;i=1" }] } },
       "env": { "OPCUA_ALLOWED_METHODS": "ns=2;i=1|ns=2;i=31" },
       "error": "A control.callable_methods entry must be an object with a non-empty object_id and method_id"
+    },
+    {
+      "name": "deny_read must be a list",
+      "file": { "deny_read": "ns=2;i=1" },
+      "error": "OPCUA_POLICY_FILE deny_read must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "deny_read entries must be non-empty strings",
+      "file": { "deny_read": ["ns=2;i=1", ""] },
+      "error": "OPCUA_POLICY_FILE deny_read must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "deny_read takes node IDs and browse paths",
+      "file": { "deny_read": ["ns=2;i=118", "/Objects/IndustrialControlSystem/Recipes"] },
+      "error": null,
+      "expect": { "deny_read": ["ns=2;i=118", "/Objects/IndustrialControlSystem/Recipes"] }
+    },
+    {
+      "name": "deny_read is checked before control",
+      "file": { "deny_read": 5, "control": 7 },
+      "error": "OPCUA_POLICY_FILE deny_read must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "deny_read is checked after the top-level flags",
+      "file": { "allow_out_of_range_writes": "yes", "deny_read": 5 },
+      "error": "OPCUA_POLICY_FILE allow_out_of_range_writes must be true or false"
+    },
+    {
+      "name": "a browse path is a writable_nodes entry like any other",
+      "file": {
+        "control": {
+          "writable_nodes": [
+            "/Objects/IndustrialControlSystem/Scratch/ScratchDouble",
+            { "node": "/Objects/IndustrialControlSystem/Scratch/ScratchAnalog", "max": 80 }
+          ]
+        }
+      },
+      "error": null,
+      "expect": {
+        "writable_nodes": [
+          "/Objects/IndustrialControlSystem/Scratch/ScratchAnalog",
+          "/Objects/IndustrialControlSystem/Scratch/ScratchDouble"
+        ]
+      }
+    },
+    {
+      "name": "writable_subtrees must be a list",
+      "file": { "control": { "writable_subtrees": { "root": "ns=2;i=112" } } },
+      "error": "OPCUA_POLICY_FILE control.writable_subtrees must be a list"
+    },
+    {
+      "name": "a writable_subtrees entry must be an object",
+      "file": { "control": { "writable_subtrees": ["ns=2;i=112"] } },
+      "error": "A control.writable_subtrees entry must be an object"
+    },
+    {
+      "name": "an unknown key in a writable_subtrees entry is named",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "maxnodes": 5 }] } },
+      "error": "Unknown key in a writable_subtrees entry: maxnodes. Use one of: enum, max, max_change, max_nodes, min, root, type_definition"
+    },
+    {
+      "name": "a writable_subtrees entry must name a root",
+      "file": { "control": { "writable_subtrees": [{ "max": 5 }] } },
+      "error": "A control.writable_subtrees entry must name a root"
+    },
+    {
+      "name": "an empty root is no root",
+      "file": { "control": { "writable_subtrees": [{ "root": "  " }] } },
+      "error": "A control.writable_subtrees entry must name a root"
+    },
+    {
+      "name": "an empty type_definition",
+      "file": {
+        "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "type_definition": "" }] }
+      },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has an empty or non-string type_definition"
+    },
+    {
+      "name": "a non-string type_definition",
+      "file": {
+        "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "type_definition": 2368 }] }
+      },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has an empty or non-string type_definition"
+    },
+    {
+      "name": "max_nodes of zero",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "max_nodes": 0 }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has max_nodes outside 1 to 1000"
+    },
+    {
+      "name": "max_nodes past the ceiling",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "max_nodes": 1001 }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has max_nodes outside 1 to 1000"
+    },
+    {
+      "name": "a fractional max_nodes",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "max_nodes": 2.5 }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has max_nodes outside 1 to 1000"
+    },
+    {
+      "name": "a boolean max_nodes",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "max_nodes": true }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has max_nodes outside 1 to 1000"
+    },
+    {
+      "name": "a non-numeric subtree min",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "min": "a" }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has a non-numeric min"
+    },
+    {
+      "name": "an empty subtree enum",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "enum": [] }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has an empty or non-list enum"
+    },
+    {
+      "name": "a subtree min above its max",
+      "file": {
+        "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "min": 5, "max": 1 }] }
+      },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has min above max"
+    },
+    {
+      "name": "a negative subtree max_change",
+      "file": { "control": { "writable_subtrees": [{ "root": "ns=2;i=112", "max_change": -1 }] } },
+      "error": "writable_subtrees entry \"ns=2;i=112\" has a negative max_change"
+    },
+    {
+      "name": "a complete writable_subtrees entry",
+      "file": {
+        "control": {
+          "writable_subtrees": [
+            {
+              "root": "ns=2;i=112",
+              "type_definition": "i=2368",
+              "max_nodes": 50,
+              "min": 0,
+              "max": 100,
+              "max_change": 10
+            }
+          ]
+        }
+      },
+      "error": null,
+      "expect": { "writable_subtrees": ["ns=2;i=112"] }
+    },
+    {
+      "name": "alarm_sources must be a list",
+      "file": { "control": { "alarm_sources": "ns=1;s=Temperature" } },
+      "error": "OPCUA_POLICY_FILE control.alarm_sources must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "alarm_sources entries must be non-empty strings",
+      "file": { "control": { "alarm_sources": [""] } },
+      "error": "OPCUA_POLICY_FILE control.alarm_sources must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "alarm_sources takes node IDs and browse paths",
+      "file": {
+        "control": { "alarm_sources": ["ns=1;s=Temperature", "/Objects/Plant/Temperature"] }
+      },
+      "error": null,
+      "expect": { "alarm_sources": ["ns=1;s=Temperature", "/Objects/Plant/Temperature"] }
+    },
+    {
+      "name": "alarm_max_severity of zero",
+      "file": { "control": { "alarm_max_severity": 0 } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    },
+    {
+      "name": "alarm_max_severity past 1000",
+      "file": { "control": { "alarm_max_severity": 1001 } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    },
+    {
+      "name": "a fractional alarm_max_severity",
+      "file": { "control": { "alarm_max_severity": 2.5 } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    },
+    {
+      "name": "a string alarm_max_severity",
+      "file": { "control": { "alarm_max_severity": "500" } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    },
+    {
+      "name": "a boolean alarm_max_severity",
+      "file": { "control": { "alarm_max_severity": true } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    },
+    {
+      "name": "alarm_max_severity 1000.0 is 1000",
+      "text": "{\"control\": {\"alarm_max_severity\": 1000.0}}",
+      "error": null,
+      "expect": { "alarm_max_severity": 1000 }
+    },
+    {
+      "name": "preconditions must be a list",
+      "file": { "control": { "preconditions": { "targets": ["x"] } } },
+      "error": "OPCUA_POLICY_FILE control.preconditions must be a list"
+    },
+    {
+      "name": "a preconditions entry must be an object",
+      "file": { "control": { "preconditions": ["x"] } },
+      "error": "A control.preconditions entry must be an object"
+    },
+    {
+      "name": "an unknown key in a preconditions entry is named",
+      "file": {
+        "control": {
+          "preconditions": [{ "target": ["ns=2;i=111"], "require": [{ "node": "a", "equals": 1 }] }]
+        }
+      },
+      "error": "Unknown key in a control.preconditions entry: target. Use one of: description, methods, require, targets"
+    },
+    {
+      "name": "precondition targets must be non-empty strings",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111", ""], "require": [{ "node": "a", "equals": 1 }] }
+          ]
+        }
+      },
+      "error": "A control.preconditions entry's targets must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "precondition methods need both ids",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "methods": [{ "object_id": "ns=2;i=27" }], "require": [{ "node": "a", "equals": 1 }] }
+          ]
+        }
+      },
+      "error": "A control.preconditions entry's methods must be a list of objects with a non-empty object_id and method_id"
+    },
+    {
+      "name": "a precondition must guard something",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": [], "require": [{ "node": "a", "equals": 1 }] }]
+        }
+      },
+      "error": "A control.preconditions entry must name at least one target or method"
+    },
+    {
+      "name": "a precondition needs requirements",
+      "file": { "control": { "preconditions": [{ "targets": ["ns=2;i=111"] }] } },
+      "error": "A control.preconditions entry must have a non-empty require list"
+    },
+    {
+      "name": "an empty require list",
+      "file": { "control": { "preconditions": [{ "targets": ["ns=2;i=111"], "require": [] }] } },
+      "error": "A control.preconditions entry must have a non-empty require list"
+    },
+    {
+      "name": "a precondition description must be a string",
+      "file": {
+        "control": {
+          "preconditions": [
+            {
+              "targets": ["ns=2;i=111"],
+              "require": [{ "node": "a", "equals": 1 }],
+              "description": 5
+            }
+          ]
+        }
+      },
+      "error": "A control.preconditions entry's description must be a string"
+    },
+    {
+      "name": "a requirement must be an object",
+      "file": { "control": { "preconditions": [{ "targets": ["ns=2;i=111"], "require": ["x"] }] } },
+      "error": "A precondition requirement must be an object"
+    },
+    {
+      "name": "an unknown key in a requirement is named",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": ["ns=2;i=111"], "require": [{ "node": "a", "equal": 1 }] }]
+        }
+      },
+      "error": "Unknown key in a precondition requirement: equal. Use one of: equals, in, max, min, node"
+    },
+    {
+      "name": "a requirement must name a node",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": ["ns=2;i=111"], "require": [{ "equals": 1 }] }]
+        }
+      },
+      "error": "A precondition requirement must name a node"
+    },
+    {
+      "name": "a requirement with no condition",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": ["ns=2;i=111"], "require": [{ "node": "a" }] }]
+        }
+      },
+      "error": "Precondition requirement on \"a\" must have exactly one of equals, in, or min/max"
+    },
+    {
+      "name": "a requirement with two conditions",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111"], "require": [{ "node": "a", "equals": 1, "min": 0 }] }
+          ]
+        }
+      },
+      "error": "Precondition requirement on \"a\" must have exactly one of equals, in, or min/max"
+    },
+    {
+      "name": "an equals of null is no equals",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111"], "require": [{ "node": "a", "equals": null }] }
+          ]
+        }
+      },
+      "error": "Precondition requirement on \"a\" must have exactly one of equals, in, or min/max"
+    },
+    {
+      "name": "an equals that is an object",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111"], "require": [{ "node": "a", "equals": { "x": 1 } }] }
+          ]
+        }
+      },
+      "error": "Precondition requirement on \"a\" has an equals that is not a string, number or boolean"
+    },
+    {
+      "name": "an equals of 1e400 is not a number anyone wrote",
+      "text": "{\"control\": {\"preconditions\": [{\"targets\": [\"ns=2;i=111\"], \"require\": [{\"node\": \"a\", \"equals\": 1e400}]}]}}",
+      "error": "Precondition requirement on \"a\" has an equals that is not a string, number or boolean"
+    },
+    {
+      "name": "an empty in",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": ["ns=2;i=111"], "require": [{ "node": "a", "in": [] }] }]
+        }
+      },
+      "error": "Precondition requirement on \"a\" has an in that is not a non-empty list of strings, numbers or booleans"
+    },
+    {
+      "name": "an in holding null",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111"], "require": [{ "node": "a", "in": [null] }] }
+          ]
+        }
+      },
+      "error": "Precondition requirement on \"a\" has an in that is not a non-empty list of strings, numbers or booleans"
+    },
+    {
+      "name": "a non-numeric requirement min",
+      "file": {
+        "control": {
+          "preconditions": [{ "targets": ["ns=2;i=111"], "require": [{ "node": "a", "min": "x" }] }]
+        }
+      },
+      "error": "Precondition requirement on \"a\" has a non-numeric min"
+    },
+    {
+      "name": "a requirement max of 1e400",
+      "text": "{\"control\": {\"preconditions\": [{\"targets\": [\"ns=2;i=111\"], \"require\": [{\"node\": \"a\", \"max\": 1e400}]}]}}",
+      "error": "Precondition requirement on \"a\" has a non-numeric max"
+    },
+    {
+      "name": "a requirement min above its max",
+      "file": {
+        "control": {
+          "preconditions": [
+            { "targets": ["ns=2;i=111"], "require": [{ "node": "a", "min": 5, "max": 1 }] }
+          ]
+        }
+      },
+      "error": "Precondition requirement on \"a\" has min above max"
+    },
+    {
+      "name": "a complete precondition",
+      "file": {
+        "control": {
+          "preconditions": [
+            {
+              "targets": [
+                "ns=2;i=111",
+                "/Objects/IndustrialControlSystem/Scratch/InterlockedSetpoint"
+              ],
+              "methods": [{ "object_id": "ns=2;i=27", "method_id": "ns=2;i=28" }],
+              "require": [
+                { "node": "ns=2;i=110", "equals": true },
+                { "node": "ns=2;i=19", "in": ["AUTO", "MANUAL"] },
+                { "node": "ns=2;i=3", "min": 0, "max": 80 }
+              ],
+              "description": "Only with the permit set"
+            }
+          ]
+        }
+      },
+      "error": null,
+      "expect": { "preconditions": 1 }
+    },
+    {
+      "name": "null means not set, for the newer keys",
+      "file": {
+        "deny_read": null,
+        "control": {
+          "writable_subtrees": null,
+          "alarm_sources": null,
+          "alarm_max_severity": null,
+          "preconditions": null
+        }
+      },
+      "error": null,
+      "expect": {
+        "deny_read": [],
+        "writable_subtrees": [],
+        "alarm_sources": [],
+        "alarm_max_severity": null,
+        "preconditions": 0
+      }
+    },
+    {
+      "name": "acknowledge_alarms is checked before writable_subtrees",
+      "file": { "control": { "acknowledge_alarms": "yes", "writable_subtrees": 5 } },
+      "error": "OPCUA_POLICY_FILE control.acknowledge_alarms must be true or false"
+    },
+    {
+      "name": "writable_subtrees is checked before alarm_sources",
+      "file": { "control": { "writable_subtrees": 5, "alarm_sources": 5 } },
+      "error": "OPCUA_POLICY_FILE control.writable_subtrees must be a list"
+    },
+    {
+      "name": "alarm_sources is checked before alarm_max_severity",
+      "file": { "control": { "alarm_sources": 5, "alarm_max_severity": 0 } },
+      "error": "OPCUA_POLICY_FILE control.alarm_sources must be a list of node IDs or browse paths"
+    },
+    {
+      "name": "alarm_max_severity is checked before preconditions",
+      "file": { "control": { "alarm_max_severity": 0, "preconditions": 5 } },
+      "error": "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
     }
   ]
 }

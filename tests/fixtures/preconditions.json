@@ -1,0 +1,182 @@
+{
+  "$comment": "Interlocks from the operator policy's control.preconditions, driven through BOTH runtimes: tests/unit/test_preconditions.py and packages/server-node/test/preconditions.test.mjs call checkPreconditions / check_preconditions on each `input` and assert `expect` — null when every requirement holds, else the exact refusal for the first that does not. `current` maps each requirement node, as written, to what reading it returned: a Good value, a Bad status, or null when the entry did not resolve to a node. A requirement holds only on a Good value; numbers in the sentence are written as format_number writes them and everything else as JSON.stringify would.",
+  "cases": [
+    {
+      "name": "equals true, and it is",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=110", "equals": true }],
+        "current": { "ns=2;i=110": { "status": "Good", "value": true } }
+      },
+      "expect": null
+    },
+    {
+      "name": "equals true, and it is false",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=110", "equals": true }],
+        "current": { "ns=2;i=110": { "status": "Good", "value": false } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=110 equals true; ns=2;i=110 is false now. Nothing was sent."
+    },
+    {
+      "name": "equals a string",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=19", "equals": "AUTO" }],
+        "current": { "ns=2;i=19": { "status": "Good", "value": "MANUAL" } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=19 equals \"AUTO\"; ns=2;i=19 is \"MANUAL\" now. Nothing was sent."
+    },
+    {
+      "name": "equals a number compares numerically",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=41", "equals": 1 }],
+        "current": { "ns=2;i=41": { "status": "Good", "value": 1.0 } }
+      },
+      "expect": null
+    },
+    {
+      "name": "true is not 1",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=41", "equals": true }],
+        "current": { "ns=2;i=41": { "status": "Good", "value": 1 } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=41 equals true; ns=2;i=41 is 1 now. Nothing was sent."
+    },
+    {
+      "name": "in a set, and it is",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=19", "in": ["AUTO", "MANUAL"] }],
+        "current": { "ns=2;i=19": { "status": "Good", "value": "AUTO" } }
+      },
+      "expect": null
+    },
+    {
+      "name": "in a set, and it is not",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=19", "in": ["AUTO", "MANUAL"] }],
+        "current": { "ns=2;i=19": { "status": "Good", "value": "STOP" } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=19 is one of \"AUTO\", \"MANUAL\"; ns=2;i=19 is \"STOP\" now. Nothing was sent."
+    },
+    {
+      "name": "between, and it is",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=3", "min": 0, "max": 80 }],
+        "current": { "ns=2;i=3": { "status": "Good", "value": 50.5 } }
+      },
+      "expect": null
+    },
+    {
+      "name": "between, inclusive at the edge",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=3", "min": 0, "max": 80 }],
+        "current": { "ns=2;i=3": { "status": "Good", "value": 80 } }
+      },
+      "expect": null
+    },
+    {
+      "name": "between, and it is above",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=3", "min": 0, "max": 80 }],
+        "current": { "ns=2;i=3": { "status": "Good", "value": 90 } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=3 is between 0 and 80; ns=2;i=3 is 90 now. Nothing was sent."
+    },
+    {
+      "name": "at least",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=3", "min": 10 }],
+        "current": { "ns=2;i=3": { "status": "Good", "value": 5 } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=3 is at least 10; ns=2;i=3 is 5 now. Nothing was sent."
+    },
+    {
+      "name": "at most, with a fraction",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=3", "max": 2.5 }],
+        "current": { "ns=2;i=3": { "status": "Good", "value": 3.25 } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=3 is at most 2.5; ns=2;i=3 is 3.25 now. Nothing was sent."
+    },
+    {
+      "name": "a numeric bound on a string is not met",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=19", "min": 0 }],
+        "current": { "ns=2;i=19": { "status": "Good", "value": "abc" } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=19 is at least 0; ns=2;i=19 is \"abc\" now. Nothing was sent."
+    },
+    {
+      "name": "a node that reads Bad is not met",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=110", "equals": true }],
+        "current": { "ns=2;i=110": { "status": "BadNodeIdUnknown" } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=110 equals true; ns=2;i=110 is unreadable (BadNodeIdUnknown) now. Nothing was sent."
+    },
+    {
+      "name": "a node that did not resolve is not met",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "/Objects/Nowhere", "equals": true }],
+        "current": { "/Objects/Nowhere": null }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while /Objects/Nowhere equals true; /Objects/Nowhere is unresolvable now. Nothing was sent."
+    },
+    {
+      "name": "the first requirement that fails is the one reported",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [
+          { "node": "ns=2;i=110", "equals": true },
+          { "node": "ns=2;i=3", "max": 80 }
+        ],
+        "current": {
+          "ns=2;i=110": { "status": "Good", "value": true },
+          "ns=2;i=3": { "status": "Good", "value": 81 }
+        }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=3 is at most 80; ns=2;i=3 is 81 now. Nothing was sent."
+    },
+    {
+      "name": "a method target",
+      "input": {
+        "target": "ns=2;i=27|ns=2;i=28",
+        "requirements": [{ "node": "ns=2;i=110", "equals": true }],
+        "current": { "ns=2;i=110": { "status": "Good", "value": false } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=27|ns=2;i=28 only while ns=2;i=110 equals true; ns=2;i=110 is false now. Nothing was sent."
+    },
+    {
+      "name": "non-ASCII text is echoed as written",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=19", "equals": "Ä" }],
+        "current": { "ns=2;i=19": { "status": "Good", "value": "Ö" } }
+      },
+      "expect": "The operator policy allows changing ns=2;i=111 only while ns=2;i=19 equals \"Ä\"; ns=2;i=19 is \"Ö\" now. Nothing was sent."
+    },
+    {
+      "name": "a numeric string matches a numeric requirement, as the write path would read it",
+      "input": {
+        "target": "ns=2;i=111",
+        "requirements": [{ "node": "ns=2;i=41", "in": [1, 2] }],
+        "current": { "ns=2;i=41": { "status": "Good", "value": "2" } }
+      },
+      "expect": null
+    }
+  ]
+}

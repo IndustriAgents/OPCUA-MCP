@@ -24,6 +24,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from opcua import Node, ua
 
 from . import events
+from .address_space import ROOT_FOLDER, browse_name_matches, node_id_text, supertype_of
 from .aggregates import validate_aggregate_function
 from .audit import (
     AuditSink,
@@ -75,8 +76,9 @@ from .limits import (
     history_values,
 )
 from .method_arguments import built_in_type, guess_variant
+from .node_facts import HISTORY_READ, allows
 from .node_ids import canonical_node_id
-from .node_metadata import AnalogInfo
+from .node_metadata import AnalogInfo, first_target, property_path
 from .notices import notice
 from .operation_limits import (
     browse_chunk,
@@ -85,6 +87,7 @@ from .operation_limits import (
     write_limit,
 )
 from .policy import (
+    ToolPolicy,
     ValueBound,
     as_number,
     control_gate,
@@ -93,6 +96,8 @@ from .policy import (
     server_identity_record,
     values_at,
 )
+from .policy_check import check_alarm_scope, check_preconditions
+from .policy_resolution import check_policy
 from .records import history_data, history_records, variant_to_json
 from .security import describe_security, security_config
 from .state import ServerState
@@ -104,9 +109,12 @@ from .subscriptions import (
 from .validation import validate_arguments
 from .variant_codec import convert_for_variant
 from .version import package_version
+from .write_plan import EU_RANGE_SOURCE, plan_call, plan_write, range_refusal, write_access
 
 
-def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
+def _audit_targets(
+    spec: dict, arguments: dict[str, Any], policy: ToolPolicy | None = None
+) -> dict[str, Any]:
     """What a control call was aimed at, for the audit record.
 
     Derived from the tool's own ``guard``, not from a chain on tool *names*. That
@@ -116,23 +124,39 @@ def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
     records that *something* was permitted without recording what. Reading the
     same declaration the policy authorises from means the two can no longer
     disagree about which arguments matter.
+
+    With ``policy``, each node id is also given in namespace-URI form
+    (``node_uris``, ``object_node_uri``, ``method_node_uri``), right after the
+    plain one. ``ns=2`` is an index the server assigns per session, so a record
+    that says only ``ns=2;i=41`` may name a different node after a restart that
+    reordered the namespaces; the URI form is the name that survives it. Null
+    where the id cannot be expressed that way. Only the audit record asks:
+    :func:`describe_targets` is a sentence for a person, and stays as it was.
     """
     guard = spec.get("guard")
     if not guard:
         return {}
     record: dict[str, Any] = {}
 
+    def uri(node_id: Any) -> str | None:
+        return policy.uri_form(node_id) if isinstance(node_id, str) and policy else None
+
     node_ids = [
         value for path in guard.get("nodeIdPaths", []) for value in values_at(arguments, path)
     ]
     if node_ids:
         record["node_ids"] = node_ids
+        if policy is not None:
+            record["node_uris"] = [uri(node_id) for node_id in node_ids]
 
     for pair in guard.get("methodPaths", []):
         objects = values_at(arguments, pair["objectPath"])
         methods = values_at(arguments, pair["methodPath"])
         record["object_node_id"] = objects[0] if objects else None
         record["method_node_id"] = methods[0] if methods else None
+        if policy is not None:
+            record["object_node_uri"] = uri(record["object_node_id"])
+            record["method_node_uri"] = uri(record["method_node_id"])
         break
 
     for path in guard.get("auditPaths", []):
@@ -255,7 +279,7 @@ def _audit_decision(
         control=control_gate(state.policy.config),
         tool=name,
         decision=decision,
-        targets=_audit_targets(spec, arguments),
+        targets=_audit_targets(spec, arguments, state.policy),
         reason=reason or None,
     )
     state.audit.write(record)
@@ -349,9 +373,25 @@ def _bind(state: ServerState, context: dict, client) -> None:
     state.events.reattach(client)
     # A new session may be a restarted server, whose nodes are not necessarily
     # the nodes the old ids named. What each one said about its unit and its
-    # range was true of the session that said it.
+    # range was true of the session that said it — and so was what it said about
+    # its class, its type and who may write it.
     state.node_metadata.forget()
+    state.node_facts.forget()
     _probe_capabilities(state, client, state.connection)
+    # Last, with the NamespaceArray bound (by the connection, before this) and
+    # the operation limits read (just above): the browse paths, subtrees and
+    # deny_read resolved on this session, and the policy measured against it.
+    # Before any tool call rides the session, because every call waits for the
+    # connection round this runs in.
+    connection = state.connection
+    state.policy_check = check_policy(
+        client,
+        state.policy,
+        state.node_facts,
+        state.node_metadata,
+        state.operation_limits,
+        connection.session_generation if connection is not None else None,
+    )
 
 
 def _probe_capabilities(
@@ -372,6 +412,7 @@ def _probe_capabilities(
     # session — and a tool that needs it can then use it without a round trip.
     state.operation_limits = read_operation_limits(client)
     state.node_metadata.server_limits = dict(state.operation_limits)
+    state.node_facts.server_limits = dict(state.operation_limits)
     aggregate, functions = client_aggregate_functions(client)
     for probe in (history, history_events, aggregate):
         if probe.support == "unknown":
@@ -791,6 +832,7 @@ class PolicyMCPServer(MCPServer):
         call.session = connection.session_id
 
         await self._ensure_capabilities(call.spec, arguments, connection)
+        self._authorize_read(call)
 
         try:
             return await super().call_tool(name, arguments, context)
@@ -798,6 +840,32 @@ class PolicyMCPServer(MCPServer):
             if not is_connection_error(error):
                 raise
             return await self._recover(call, context, connection, error)
+
+    def _authorize_read(self, call: _Call) -> None:
+        """Check deny_read again, strictly, now that the session is resolved.
+
+        :meth:`ToolPolicy.authorize` already checked it before the connection
+        was up, on whatever the previous session had resolved — the only answer
+        it had. This is the session the read will ride on: its browse paths and
+        subtrees are the ones that count, and a deny set it could not resolve in
+        full refuses the read outright (``readPolicyIncomplete``). Refused and
+        recorded the way an authorize refusal is; a read is not audited, so in
+        practice that is the refusal alone.
+        """
+        try:
+            self.state.policy.authorize_read(call.name, call.arguments, strict=True)
+        except PermissionError as exc:
+            call.denied = True
+            _audit_after(
+                self.state,
+                call.name,
+                call.arguments,
+                "denied",
+                str(exc),
+                call_id=call.call_id,
+                attempt=call.attempt,
+            )
+            raise ToolError(str(exc)) from exc
 
     async def _recover(self, call: _Call, context, connection: OpcuaConnection, error: Exception):
         """Rebuild the session a call died on, and decide what may follow it.
@@ -879,6 +947,8 @@ class PolicyMCPServer(MCPServer):
         # rides on may be a restarted server that no longer keeps history. Only a
         # `resend` tool gets here, and every capability-gated tool is one (#140).
         await self._ensure_capabilities(call.spec, arguments, connection)
+        # And deny_read, which the new session has just re-resolved.
+        self._authorize_read(call)
 
         return await super().call_tool(name, arguments, context)
 
@@ -899,7 +969,7 @@ def _state(ctx: Context) -> ServerState:
 _TRAVERSAL = CONTRACT["traversal"]
 
 #: The standard Root folder, which an absolute browse path is written from.
-_ROOT_FOLDER = "ns=0;i=84"
+_ROOT_FOLDER = ROOT_FOLDER
 
 
 def _clamp_int(value: int, low: int, high: int) -> int:
@@ -939,6 +1009,8 @@ def _node_value_record(
         # only an AnalogItemType publishes it — but on the ones that do it is the
         # difference between "51.75" and "51.75 °C, normal range 0 to 150".
         "engineering": engineering.to_json() if engineering else None,
+        # Only when asked for (include_write_access); see read_opcua_nodes.
+        "write_access": None,
     }
 
 
@@ -1037,12 +1109,17 @@ def _object_result(record: Any, completeness: dict | None = None) -> CallToolRes
 # --- reading --------------------------------------------------------------------
 
 
-def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
+def read_opcua_nodes(
+    node_ids: list[str], ctx: Context, include_write_access: bool = False
+) -> list[dict]:
     """
     Read the current value of one or more OPC UA nodes in a single request.
 
     Parameters:
         node_ids (list[str]): The node IDs to read. Example: ['ns=2;i=2', 'ns=2;i=3'].
+        include_write_access (bool): Also say, per node, whether and how it can
+            be written (``write_access``). Typed here as well as in the contract
+            because MCPServer validates a call against this signature.
 
     More than ``limits.maxNodesPerRead`` is refused by the input schema's
     ``maxItems`` before this runs: a short list of readings is indistinguishable
@@ -1065,12 +1142,55 @@ def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
         # Two extra round trips on a cold cache for the whole batch, none on a
         # warm one, and never a reason for the read to fail. See node_metadata.
         engineering = _state(ctx).node_metadata.for_nodes(client, node_ids)
-        return [
+        records = [
             _node_value_record(node_id, data_value, engineering.get(node_id))
             for node_id, data_value in zip(node_ids, values, strict=True)
         ]
     except Exception as e:
         raise ToolError(error_message("readFailed", reason=describe_error(e))) from e
+    if include_write_access:
+        # The attributes are read only when asked, and once per node per
+        # session; like the engineering record, never a reason the read fails.
+        state = _state(ctx)
+        facts = state.node_facts.for_nodes(client, node_ids)
+        for record, node_id in zip(records, node_ids, strict=True):
+            record["write_access"] = write_access(
+                _write_access_entry(
+                    state.policy, node_id, facts.get(node_id), engineering.get(node_id)
+                )
+            )
+    return records
+
+
+def _bound_json(bound: ValueBound | None) -> dict[str, Any] | None:
+    """A value bound as the shared tables spell one."""
+    if bound is None:
+        return None
+    return {
+        "min": bound.minimum,
+        "max": bound.maximum,
+        "enum": list(bound.allowed) if bound.allowed is not None else None,
+        "max_change": bound.max_change,
+    }
+
+
+def _write_access_entry(
+    policy: ToolPolicy, node_id: str, facts: dict | None, engineering: AnalogInfo | None
+) -> dict[str, Any]:
+    """write_access's input for one node: its facts, and what the policy says of writing it."""
+    operator = policy.config.profile == "operator"
+    return {
+        "node_id": node_id,
+        "facts": facts,
+        "engineering": engineering.to_json() if engineering else None,
+        "policy": {
+            "tool_refusal": policy.write_refusal(),
+            "operator": operator,
+            "allowlisted": operator and policy.is_allowlisted(node_id),
+            "bound": _bound_json(policy.bound_for(node_id)) if operator else None,
+            "allow_out_of_range": policy.config.allow_out_of_range_writes,
+        },
+    }
 
 
 def read_opcua_history(
@@ -1127,9 +1247,7 @@ def read_opcua_history(
                 "historyTruncated",
             )
         except Exception as e:
-            raise ToolError(
-                error_message("historyFailed", node_id=node_id, reason=describe_error(e))
-            ) from e
+            raise ToolError(_history_failed(ctx, client, node_id, e)) from e
 
     if start_time is None:
         raise ToolError(error_message("aggregateNeedsStart"))
@@ -1203,9 +1321,28 @@ def read_opcua_history(
         # to be read — and wrapping it would say it had.
         raise ToolError(str(e)) from e
     except Exception as e:
-        raise ToolError(
-            error_message("historyFailed", node_id=node_id, reason=describe_error(e))
-        ) from e
+        raise ToolError(_history_failed(ctx, client, node_id, e)) from e
+
+
+def _history_failed(ctx: Context, client: Any, node_id: str, error: Exception) -> str:
+    """``historyFailed``, with a hint when the node says it keeps no history.
+
+    A node whose AccessLevel lacks HistoryRead is one the server does not
+    promise to historize, and "BadHistoryOperationUnsupported" alone sends an
+    agent looking for a fault rather than for another way to get the data. Only
+    a hint, after the failure and never instead of the request: AccessLevel is
+    what a server advertises, and some keep history they do not advertise.
+    """
+    reason = describe_error(error)
+    facts = _state(ctx).node_facts.for_nodes(client, [node_id]).get(node_id)
+    if (
+        facts is not None
+        and facts["status"] == "Good"
+        and allows(facts["access_level"], HISTORY_READ) is False
+    ):
+        hint = error_message("historyNotRecordedHint", node_id=node_id)
+        reason = f"{reason} {hint}"
+    return error_message("historyFailed", node_id=node_id, reason=reason)
 
 
 # Registered and advertised always; a call is checked against the capabilities
@@ -1278,8 +1415,8 @@ def get_server_status(ctx: Context) -> CallToolResult:
     the caller asked for, which is why this is the one tool that never raises a
     `ToolError` for a down server.
 
-    ``capabilities`` is appended after the read, because the read may have
-    re-established the session and re-read them. It is the cache as it stands,
+    ``capabilities`` and ``policy_check`` are appended after the read, because
+    the read may have re-established the session and re-read them. It is the cache as it stands,
     never a probe of its own: it says which session generation it was read on
     and when, which is what makes a stale answer recognisable as one (#140).
 
@@ -1289,7 +1426,16 @@ def get_server_status(ctx: Context) -> CallToolResult:
     """
     state = _state(ctx)
     status = _read_status(ctx)
-    return _object_result({**status, "capabilities": capability_status(state.capabilities)})
+    return _object_result(
+        {
+            **status,
+            "capabilities": capability_status(state.capabilities),
+            # The check run when this session was established, and only while
+            # there is one: a report about a server this process cannot reach
+            # would describe a session that is gone.
+            "policy_check": state.policy_check if status.get("connected") else None,
+        }
+    )
 
 
 def _read_status(ctx: Context) -> dict:
@@ -1383,20 +1529,6 @@ def browse_children(node: Node) -> list[Node]:
     return references
 
 
-def _browse_name_matches(segment: str, namespace_index: int, name: str) -> bool:
-    """Whether a browse-path segment names this BrowseName.
-
-    ``2:Sensors`` matches only namespace 2; a bare ``Sensors`` matches the name
-    in whatever namespace it is in. The bare form is what someone types when
-    they know what a thing is called and not which namespace it was loaded into
-    — which is the entire reason ``browse_path`` exists.
-    """
-    prefix, separator, rest = segment.partition(":")
-    if separator and prefix.isdigit():
-        return int(prefix) == namespace_index and rest == name
-    return segment == name
-
-
 def _resolve_browse_path(client, start_node_id: str, browse_path: str) -> str:
     """Resolve a slash-separated browse path to a node id (issue #11).
 
@@ -1433,7 +1565,7 @@ def _resolve_browse_path(client, start_node_id: str, browse_path: str) -> str:
             (
                 reference
                 for reference in references
-                if _browse_name_matches(
+                if browse_name_matches(
                     segment, reference.BrowseName.NamespaceIndex, reference.BrowseName.Name
                 )
             ),
@@ -1444,7 +1576,7 @@ def _resolve_browse_path(client, start_node_id: str, browse_path: str) -> str:
                 f'browse_path "{browse_path}" does not resolve: '
                 f'no child "{segment}" under {current}'
             )
-        current = canonical_node_id(match.NodeId.to_string())
+        current = node_id_text(match.NodeId)
     return current
 
 
@@ -1612,6 +1744,11 @@ def browse_opcua_nodes(
         )
     except ValueError as e:
         raise ToolError(str(e)) from e
+    # A start named by browse_path is only known now; one named by node_id was
+    # checked before anything was sent. See the filter after the walk.
+    policy = _state(ctx).policy
+    if policy.read_denied(root):
+        raise ToolError(error_message("readDenied", node_id=root))
 
     try:
         found: list[dict] = []
@@ -1682,6 +1819,14 @@ def browse_opcua_nodes(
                     if reference.NodeClass == ua.NodeClass.Object and current_depth + 1 < depth:
                         queue.append((child_id, current_depth + 1))
 
+        # What deny_read hides is not listed: not the node, and — because the
+        # deny set holds its whole subtree — nothing under it either. After the
+        # walk rather than inside it, so `inspected` and `truncated` still
+        # describe the walk that was made; before the detail below, so nothing
+        # hidden is read.
+        if policy.config.deny_read:
+            found = [record for record in found if not policy.read_denied(record["node_id"])]
+
         # Unconditional, unlike the variable detail: the type is what the record
         # *is*, not extra reading about its value, and it costs one batched
         # browse however many nodes were found.
@@ -1711,10 +1856,14 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     """
     Write a value to one or more OPC UA nodes.
 
-    Nodes given an explicit ``data_type`` skip the read-first inference entirely,
-    which is what makes a *write-only* node writable — reading it to learn its
-    type is exactly what such a node refuses (issue #9). The rest are read first,
-    in one batch, and converted to the type the server reports.
+    Each node is planned from its own attributes before anything is sent (see
+    write_plan.py): its DataType decides what the value is converted to — which
+    is what makes a *write-only* node writable without ``data_type``, since
+    reading its value to learn its type is exactly what such a node refuses
+    (issue #9) — and a node that cannot take the write at all (read-only, not a
+    Variable, a list for a scalar) is reported in its own record and not sent.
+    The current value is read only where the type still has to come from it, or
+    where a ``max_change`` bound needs to know where the node is now.
 
     The whole batch goes out as one Write, and that is a promise rather than an
     accident (issue #139). A batch over the server's MaxNodesPerWrite is refused
@@ -1742,56 +1891,86 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
             )
         )
     policy = state.policy
-    bounds = {
-        index: policy.bound_for(str(node.get("node_id", ""))) for index, node in enumerate(nodes)
-    }
+    node_ids = [str(node.get("node_id", "")) for node in nodes]
+    bounds = {index: policy.bound_for(node_id) for index, node_id in enumerate(node_ids)}
     try:
         results: list[dict] = [
-            {
-                "node_id": canonical_node_id(str(node.get("node_id", ""))),
-                "status": "Good",
-                "error": None,
-            }
-            for node in nodes
+            {"node_id": canonical_node_id(node_id), "status": "Good", "error": None}
+            for node_id in node_ids
         ]
 
+        # What each node says it is, and what it says its number means. The
+        # engineering record even under OPCUA_ALLOW_OUT_OF_RANGE_WRITES: that
+        # lifts the EURange, and the InstrumentRange still holds. Neither read is
+        # ever the reason a write fails.
+        facts = state.node_facts.for_nodes(client, node_ids)
+        engineering = state.node_metadata.for_nodes(client, node_ids)
+        options = {"allow_out_of_range": policy.config.allow_out_of_range_writes}
+        plans = []
+        for node_id, node in zip(node_ids, nodes, strict=True):
+            info = engineering.get(node_id)
+            plans.append(
+                plan_write(
+                    {
+                        "node_id": node_id,
+                        "value": node.get("value"),
+                        "data_type": node.get("data_type"),
+                    },
+                    facts.get(node_id),
+                    info.to_json() if info else None,
+                    options,
+                )
+            )
+        # Before anything is sent, and raising rather than marking one record:
+        # the whole batch is refused so it can never end up partially applied,
+        # which is the property the identity allowlist already had.
+        refusal = next((plan for plan in plans if plan["outcome"] == "refuse"), None)
+        if refusal is not None:
+            raise ToolError(refusal["error"])
+        sending = [index for index, plan in enumerate(plans) if plan["outcome"] == "send"]
+        _check_write_preconditions(state, client, [node_ids[index] for index in sending])
+
         # A node needs its current value read for either of two reasons: its type
-        # was not declared and has to be inferred, or it carries a `max_change`
+        # could not be learned from its attributes, or it carries a `max_change`
         # bound, which is a bound on the *move* and so cannot be judged without
         # knowing where the node is now. One read covers both.
-        inferred = [index for index, node in enumerate(nodes) if not node.get("data_type")]
-        needs_current = sorted(
-            set(inferred)
-            | {
-                index
-                for index, bound in bounds.items()
-                if bound is not None and bound.max_change is not None
-            }
-        )
+        needs_current = [
+            index
+            for index in sending
+            if plans[index]["data_type"] is None
+            or (bounds[index] is not None and bounds[index].max_change is not None)
+        ]
         current: dict[int, Any] = {}
         if needs_current:
             read = _read_values(
                 client,
-                [client.get_node(nodes[index]["node_id"]).nodeid for index in needs_current],
+                [client.get_node(node_ids[index]).nodeid for index in needs_current],
                 ua.AttributeIds.Value,
                 read_chunk(state.operation_limits),
             )
             current = dict(zip(needs_current, read, strict=True))
-
-        # Before anything is sent, and raising rather than marking one record:
-        # the whole batch is refused so it can never end up partially applied,
-        # which is the property the identity allowlist already had.
-        check_write_bounds(state, nodes, bounds, current, client)
+        for index in needs_current:
+            bound = bounds[index]
+            if bound is not None and bound.max_change is not None:
+                # The resolved value: a state's label has become its number.
+                check_max_change(node_ids[index], plans[index]["value"], bound, current.get(index))
 
         write_ids = []
         write_values = []
         write_indices = []
-        for index, node in enumerate(nodes):
+        for index, plan in enumerate(plans):
+            if plan["outcome"] == "skip":
+                results[index] = {
+                    "node_id": results[index]["node_id"],
+                    "status": plan["status"],
+                    "error": plan["error"],
+                }
+                continue
             try:
-                declared = node.get("data_type")
-                if declared:
-                    variant_type = ua.VariantType[declared]
-                    is_array = isinstance(node.get("value"), (list, tuple))
+                value = plan["value"]
+                if plan["data_type"]:
+                    variant_type = ua.VariantType[plan["data_type"]]
+                    is_array = isinstance(value, list) if plan["array"] is None else plan["array"]
                 else:
                     data_value = current.get(index)
                     if data_value is None or not data_value.StatusCode.is_good():
@@ -1806,10 +1985,10 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
                         }
                         continue
                     variant_type = data_value.Value.VariantType
-                    is_array = data_value.Value.is_array
+                    is_array = data_value.Value.is_array if plan["array"] is None else plan["array"]
 
-                converted = convert_for_variant(node.get("value"), variant_type, is_array)
-                write_ids.append(client.get_node(node["node_id"]).nodeid)
+                converted = convert_for_variant(value, variant_type, is_array)
+                write_ids.append(client.get_node(node_ids[index]).nodeid)
                 write_values.append(ua.DataValue(ua.Variant(converted, variant_type)))
                 write_indices.append(index)
             except LimitExceeded as e:
@@ -1843,6 +2022,62 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
         raise ToolError(error_message("writeFailed", reason=describe_error(e))) from e
 
 
+def _current_readings(state: ServerState, client: Any, node_ids: list[str]) -> dict[str, Any]:
+    """Each policy entry's current Value, as ``check_preconditions`` takes it.
+
+    Keyed by the entry as written. None for one that resolves to no node; a Bad
+    status for one the server would not read. One Read for all of them, chunked,
+    right before the guarded request goes out — an interlock read any earlier
+    is one that may have changed since.
+    """
+    wanted = list(dict.fromkeys(node_ids))
+    resolved = {entry: state.policy.resolve(entry) for entry in wanted}
+    readable = [entry for entry in wanted if resolved[entry] is not None]
+    values = _read_values(
+        client,
+        [ua.NodeId.from_string(resolved[entry]) for entry in readable],
+        ua.AttributeIds.Value,
+        read_chunk(state.operation_limits),
+    )
+    readings: dict[str, Any] = dict.fromkeys(wanted)
+    for entry, data_value in zip(readable, values, strict=True):
+        status = getattr(data_value, "StatusCode", None)
+        if status is not None and not status.is_good():
+            readings[entry] = {"status": str(status.name)}
+        else:
+            readings[entry] = {"status": "Good", "value": variant_to_json(data_value.Value)}
+    return readings
+
+
+def _check_interlocks_resolve(state: ServerState) -> None:
+    """Refuse all control while an interlock's target names no node on this session.
+
+    Whatever this call is aimed at: the interlock that cannot be tied to its
+    node may be the one meant for this call's target, and there is no way to
+    tell. Raised as ToolError, so the method path must let it through as such.
+    """
+    entry = state.policy.unresolved_precondition()
+    if entry is not None:
+        raise ToolError(error_message("preconditionUnresolved", entry=entry))
+
+
+def _check_write_preconditions(state: ServerState, client: Any, node_ids: list[str]) -> None:
+    """Refuse the whole batch if an interlock on any node about to be written does not hold."""
+    _check_interlocks_resolve(state)
+    guarded = state.policy.preconditions_for_write(node_ids)
+    if not guarded:
+        return
+    current = _current_readings(
+        state, client, [req["node"] for _, interlocks in guarded for req in interlocks]
+    )
+    for node_id, interlocks in guarded:
+        refusal = check_preconditions(
+            {"target": node_id, "requirements": interlocks, "current": current}
+        )
+        if refusal is not None:
+            raise ToolError(refusal)
+
+
 def _current_number(data_value: Any) -> float | None:
     """A node's present reading as a number, or None if there is not one to compare."""
     status = getattr(data_value, "StatusCode", None)
@@ -1859,7 +2094,9 @@ def check_eu_range(node_id: str, value: Any, info: AnalogInfo | None) -> None:
     (Part 8 §5.3), so nobody has to retype it into a JSON file and keep it in
     step. An operator's ``min``/``max`` is checked separately, by the policy
     layer, and both apply — so a policy file can only ever *narrow* what the
-    equipment already allows, never widen it.
+    equipment already allows, never widen it. The write path applies it through
+    :func:`write_plan.plan_write`, with the InstrumentRange beside it; this is
+    the same check on its own.
 
     A non-numeric value is left alone: the variant codec is what judges whether a
     string or a boolean belongs on this node, and it says so better than a range
@@ -1868,19 +2105,11 @@ def check_eu_range(node_id: str, value: Any, info: AnalogInfo | None) -> None:
     if info is None or info.eu_range is None:
         return
     number = as_number(value)
-    if number is None or info.eu_range.contains(number):
+    if number is None:
         return
-    raise ToolError(
-        error_message(
-            "valueOutOfRange",
-            value=format_number(number),
-            node_id=node_id,
-            low=format_number(info.eu_range.low),
-            high=format_number(info.eu_range.high),
-            unit=f" {info.unit}" if info.unit else "",
-            source="the OPC UA server's own EURange",
-        )
-    )
+    refusal = range_refusal(node_id, number, info.eu_range.to_json(), info.unit, EU_RANGE_SOURCE)
+    if refusal is not None:
+        raise ToolError(refusal)
 
 
 def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: Any) -> None:
@@ -1918,40 +2147,13 @@ def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: An
         )
 
 
-def check_write_bounds(
-    state: ServerState,
-    nodes: list[dict[str, Any]],
-    bounds: dict[int, ValueBound | None],
-    current: dict[int, Any],
-    client: Any,
-) -> None:
-    """Refuse the whole batch if any value is outside what its node may hold.
+def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]] | None:
+    """The declared type of each input argument, or None when the method publishes none.
 
-    Two bounds, from two places, and both apply. The operator's ``min``/``max``
-    and ``enum`` were already checked by the policy layer, before the network was
-    touched at all; what is left here is everything that needed a read — the
-    server's own ``EURange``, and ``max_change``, which is a bound on the move.
-    """
-    node_ids = [str(node.get("node_id", "")) for node in nodes]
-    engineering = (
-        {}
-        if state.policy.config.allow_out_of_range_writes
-        else state.node_metadata.for_nodes(client, node_ids)
-    )
-    for index, node in enumerate(nodes):
-        node_id = node_ids[index]
-        value = node.get("value")
-        # An array write is checked element by element. Writing [0, 9999] to a
-        # node whose range stops at 100 is writing 9999 to it.
-        for element in value if isinstance(value, list) else [value]:
-            check_eu_range(node_id, element, engineering.get(node_id))
-        bound = bounds.get(index)
-        if bound is not None and bound.max_change is not None:
-            check_max_change(node_id, value, bound, current.get(index))
-
-
-def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:
-    """The declared type of each input argument, or [] when the method publishes none.
+    None and ``[]`` are different answers: a method that publishes an empty
+    InputArguments takes no arguments, and one that publishes none at all has
+    said nothing about how many it takes — so only the first can have its
+    arguments counted (``methodArgumentCount``).
 
     A declared DataType that is not itself built in (``Duration``, ``UtcTime``,
     an enumeration) is resolved to the built-in type it is encoded as, and one
@@ -1963,25 +2165,22 @@ def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]
     except Exception:
         # Not every method publishes InputArguments, and a method with no
         # arguments has nothing to publish. Fall back rather than refuse.
-        return []
-
-    def supertype_of(data_type: str) -> str | None:
-        # Every inverse reference, filtered here rather than by the server:
-        # python-opcua's own server answers a browse filtered to HasSubtype with
-        # nothing at all, and `method-arguments.ts` does the same for that reason.
-        references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
-        for reference in references:
-            if reference.ReferenceTypeId == ua.NodeId(ua.ObjectIds.HasSubtype):
-                return canonical_node_id(reference.NodeId.to_string())
         return None
+
+    def parent(data_type: str) -> str | None:
+        return supertype_of(client, data_type)
 
     return [
         (
-            built_in_type(canonical_node_id(argument.DataType.to_string()), supertype_of),
+            built_in_type(node_id_text(argument.DataType), parent),
             argument.ValueRank >= 1,
         )
         for argument in arguments or []
     ]
+
+
+class _Refused(Exception):
+    """A request refused before it was sent, already worded by the contract."""
 
 
 def _call(node: Any, method_node: Any, arguments: list[Any]) -> Any:
@@ -2023,11 +2222,46 @@ def call_opcua_method(
         CallToolResult: One record of ``resultShapes.methodResult``.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
+    state = _state(ctx)
     try:
         object_node = client.get_node(object_node_id)
         method_node = client.get_node(method_node_id)
 
+        # Whether the call can work at all, from what the two nodes publish —
+        # before anything is encoded or sent. Each fact that cannot be read
+        # skips its check; the server still answers for itself.
+        facts = state.node_facts.for_nodes(client, [object_node_id, method_node_id])
+        on_object = state.node_facts.on_object(client, object_node_id, method_node_id)
         declared = _input_argument_types(client, method_node_id)
+        refusal = plan_call(
+            {
+                "object_node_id": object_node_id,
+                "method_node_id": method_node_id,
+                "object_facts": facts.get(object_node_id),
+                "method_facts": facts.get(method_node_id),
+                "declared_arguments": None if declared is None else len(declared),
+                "given_arguments": len(arguments or []),
+                "on_object": on_object,
+            }
+        )
+        if refusal is not None:
+            raise _Refused(refusal)
+        _check_interlocks_resolve(state)
+        interlocks = state.policy.preconditions_for_call(object_node_id, method_node_id)
+        if interlocks:
+            refusal = check_preconditions(
+                {
+                    "target": f"{object_node_id}|{method_node_id}",
+                    "requirements": interlocks,
+                    "current": _current_readings(
+                        state, client, [requirement["node"] for requirement in interlocks]
+                    ),
+                }
+            )
+            if refusal is not None:
+                raise _Refused(refusal)
+
+        declared = declared or []
         method_args = []
         for index, argument in enumerate(arguments or []):
             if index < len(declared):
@@ -2047,7 +2281,10 @@ def call_opcua_method(
                 "outputs": [variant_to_json(output) for output in result.OutputArguments],
             }
         )
-    except LimitExceeded as e:
+    except ToolError:
+        # Already a refusal worded by the contract (preconditionUnresolved).
+        raise
+    except (LimitExceeded, _Refused) as e:
         # Refused before the call was sent, so it did not fail: wrapping it in
         # "Failed to call method" would say the plant had turned it down.
         raise ToolError(str(e)) from e
@@ -2299,6 +2536,92 @@ def list_active_alarms(
     return alarms
 
 
+#: The two properties of a condition its alarm scope is judged on, in the order
+#: their browse paths are built: what raised it, and how severe it is.
+_ALARM_SCOPE_PROPERTIES = ("0:SourceNode", "0:Severity")
+
+
+def _alarm_facts(client: Any, condition_id: str, server_limits: dict) -> dict[str, Any]:
+    """A condition's SourceNode and Severity: one translate and one read.
+
+    Each comes back as its value, or as the status that kept it from being
+    read; ``check_alarm_scope`` refuses on a missing one only when the policy
+    restricts what it would have said.
+    """
+    nodeid = client.get_node(condition_id).nodeid
+    results = client.uaclient.translate_browsepaths_to_nodeids(
+        [property_path(nodeid, name) for name in _ALARM_SCOPE_PROPERTIES]
+    )
+    found: dict[str, Any] = {}
+    targets = []
+    for name, result in zip(_ALARM_SCOPE_PROPERTIES, results, strict=True):
+        target = first_target(result)
+        if target is None:
+            # A Good translate with no target names nothing either.
+            status = result.StatusCode
+            found[name] = ("error", "BadNoMatch" if status.is_good() else str(status.name))
+        else:
+            targets.append((name, target))
+    if targets:
+        values = _read_values(
+            client,
+            [target for _, target in targets],
+            ua.AttributeIds.Value,
+            read_chunk(server_limits),
+        )
+        for (name, _), data_value in zip(targets, values, strict=True):
+            if not data_value.StatusCode.is_good():
+                found[name] = ("error", str(data_value.StatusCode.name))
+            else:
+                found[name] = ("value", data_value.Value.Value)
+    return found
+
+
+def _check_alarm_scope(state: ServerState, client: Any, condition_id: str) -> None:
+    """Refuse an alarm outside the operator policy's alarm scope, before anything is sent.
+
+    ``alarm_sources`` and ``alarm_max_severity`` are what let a deployment give an
+    agent the routine alarms and keep the serious ones for a person. Checked on
+    the condition itself, read now: the source and severity a list once reported
+    are not evidence of what the condition says at the moment of acknowledging.
+    """
+    scope = state.policy.alarm_scope()
+    if scope is None:
+        return
+    sources, max_severity = scope
+    error = None
+    source = severity = None
+    try:
+        found = _alarm_facts(client, condition_id, state.operation_limits)
+    except Exception as failure:
+        if is_connection_error(failure):
+            raise
+        reason = describe_error(failure)
+        found = {name: ("error", reason) for name in _ALARM_SCOPE_PROPERTIES}
+    kind, value = found["0:SourceNode"]
+    if kind == "value" and isinstance(value, ua.NodeId):
+        source = node_id_text(value)
+    elif sources is not None:
+        error = f"SourceNode: {value if kind == 'error' else 'BadTypeMismatch'}"
+    kind, value = found["0:Severity"]
+    if kind == "value" and isinstance(value, int) and not isinstance(value, bool):
+        severity = int(value)
+    elif max_severity is not None and error is None:
+        error = f"Severity: {value if kind == 'error' else 'BadTypeMismatch'}"
+    refusal = check_alarm_scope(
+        {
+            "condition_id": condition_id,
+            "source": source,
+            "severity": severity,
+            "error": error,
+            "sources": sources,
+            "max_severity": max_severity,
+        }
+    )
+    if refusal is not None:
+        raise ToolError(refusal)
+
+
 def acknowledge_alarm(
     event_id: str,
     ctx: Context,
@@ -2316,6 +2639,7 @@ def acknowledge_alarm(
         raise ToolError(error_message("unknownEventId", event_id=event_id))
 
     client = ctx.request_context.lifespan_context["opcua_client"]
+    _check_alarm_scope(_state(ctx), client, condition)
     try:
         status = events.acknowledge_alarm(client, condition, event_id, comment)
     except Exception as e:
@@ -2359,6 +2683,7 @@ def act_on_alarm(
         raise ToolError(error_message("unknownEventId", event_id=event_id))
 
     client = ctx.request_context.lifespan_context["opcua_client"]
+    _check_alarm_scope(_state(ctx), client, condition)
     try:
         status = events.alarm_action(
             client, condition, event_id, action, comment, shelve_duration_ms

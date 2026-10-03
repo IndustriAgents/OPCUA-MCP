@@ -138,7 +138,7 @@
     "opcua_policy_file": {
       "type": "file",
       "title": "Policy file",
-      "description": "Path to a version-1 JSON policy file, the only place per-node value bounds can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup.",
+      "description": "Path to a version-1 JSON policy file, the only place per-node value bounds, writable_subtrees, preconditions, the alarm scope and deny_read can be set. Every policy variable that is set overrides what the file says. An unreadable or invalid file stops the server at startup.",
       "required": false
     },
     "opcua_allowed_tools": {
@@ -150,13 +150,13 @@
     "opcua_allowed_write_nodes": {
       "type": "string",
       "title": "Writable node IDs",
-      "description": "Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=<namespace-uri>;i=5. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA.",
+      "description": "Comma-separated exact node IDs the operator profile may write, as ns=2;i=5 or, stable across a server restart, nsu=<namespace-uri>;i=5 or a browse path from the Root folder such as /Objects/Line1/Setpoint. Setting it replaces the policy file's list, bounds included. Empty fails closed: operator can write nothing. A batch write with any target outside the list is refused before it reaches OPC UA.",
       "required": false
     },
     "opcua_allowed_methods": {
       "type": "string",
       "title": "Callable methods",
-      "description": "Comma-separated object_node_id|method_node_id pairs the operator profile may call. Empty fails closed: operator can call nothing. An entry without | stops the server at startup.",
+      "description": "Comma-separated object_node_id|method_node_id pairs the operator profile may call. Either half may be a browse path from the Root folder. Empty fails closed: operator can call nothing. An entry without | stops the server at startup.",
       "required": false
     },
     "opcua_allow_acknowledge_alarms": {
@@ -183,7 +183,7 @@
     "opcua_allow_out_of_range_writes": {
       "type": "boolean",
       "title": "Allow writes outside EURange",
-      "description": "Allow a write outside the EURange the OPC UA server itself published for the node. Fail-open override: it discards the only value bound a deployment with no policy file has.",
+      "description": "Allow a write outside the EURange the OPC UA server itself published for the node. A published InstrumentRange still applies. Fail-open override: it discards the only value bound a deployment with no policy file has.",
       "default": false,
       "required": false
     },

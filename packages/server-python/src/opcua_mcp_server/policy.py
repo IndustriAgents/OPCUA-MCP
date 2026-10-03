@@ -21,6 +21,15 @@ from .errors import message
 from .node_ids import namespace_uri_form, resolve_node_id
 from .numeric import parse_numeric_string
 
+_POLICY_CHECK = CONTRACT["policyCheck"]
+#: The writable_subtrees walk's node cap: a rule's default, and the most it may ask for.
+DEFAULT_SUBTREE_NODES: int = _POLICY_CHECK["defaultSubtreeNodes"]
+MAX_SUBTREE_NODES: int = _POLICY_CHECK["maxSubtreeNodes"]
+#: How many nodes deny_read may hide in total, across every entry.
+MAX_DENY_NODES: int = _POLICY_CHECK["maxDenyNodes"]
+#: OPC UA severities run from 1 to 1000 (Part 9 §5.5.2).
+MAX_ALARM_SEVERITY = 1000
+
 PROFILES = ("observe", "operator", "full")
 ACCESS_CLASSES = ("read", "monitor", "alarm-action", "control")
 
@@ -118,6 +127,11 @@ def _check_policy_file(file: dict[str, Any]) -> None:
     _require_flag(file, "allow_insecure_control", "allow_insecure_control")
     _require_flag(file, "allow_unverified_server_control", "allow_unverified_server_control")
     _require_flag(file, "allow_out_of_range_writes", "allow_out_of_range_writes")
+    # Before `control`, and outside it: deny_read applies under every profile, so
+    # a file with no control section at all may still carry one.
+    deny = file.get("deny_read")
+    if deny is not None and not _entry_list(deny):
+        raise ValueError("OPCUA_POLICY_FILE deny_read must be a list of node IDs or browse paths")
 
     control = file.get("control")
     if control is None:
@@ -145,6 +159,61 @@ def _check_policy_file(file: dict[str, Any]) -> None:
                     "object_id and method_id"
                 )
     _require_flag(control, "acknowledge_alarms", "control.acknowledge_alarms")
+    subtrees = control.get("writable_subtrees")
+    if subtrees is not None:
+        if not isinstance(subtrees, list):
+            raise ValueError("OPCUA_POLICY_FILE control.writable_subtrees must be a list")
+        for entry in subtrees:
+            _subtree_rule(entry)
+    sources = control.get("alarm_sources")
+    if sources is not None and not _entry_list(sources):
+        raise ValueError(
+            "OPCUA_POLICY_FILE control.alarm_sources must be a list of node IDs or browse paths"
+        )
+    severity = control.get("alarm_max_severity")
+    if severity is not None and _whole_number(severity, 1, MAX_ALARM_SEVERITY) is None:
+        raise ValueError(
+            "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to "
+            f"{MAX_ALARM_SEVERITY}"
+        )
+    preconditions = control.get("preconditions")
+    if preconditions is not None:
+        if not isinstance(preconditions, list):
+            raise ValueError("OPCUA_POLICY_FILE control.preconditions must be a list")
+        for entry in preconditions:
+            _precondition(entry)
+
+
+def _entry_list(value: Any) -> bool:
+    """A list of node ids or browse paths: every element a non-empty string."""
+    return isinstance(value, list) and all(_non_empty(item) for item in value)
+
+
+def _finite_number(value: Any) -> bool:
+    """A JSON number that is a number: not a boolean, and not past a double's range.
+
+    ``1e400`` parses to infinity here, and an integer literal that long would be
+    one in JavaScript; neither is a bound anyone wrote.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
+def _whole_number(value: Any, low: int, high: int) -> int | None:
+    """``value`` as an integer within [low, high], or None.
+
+    A whole number written with a fraction (``1000.0``) is that number:
+    ``JSON.parse`` cannot tell the two apart, so refusing it here would refuse a
+    file the Node runtime accepts.
+    """
+    if not _finite_number(value) or not float(value).is_integer():
+        return None
+    number = int(value)
+    return number if low <= number <= high else None
 
 
 def _require_flag(section: dict[str, Any], key: str, name: str) -> None:
@@ -224,36 +293,212 @@ def _value_bound(entry: Any) -> tuple[str, ValueBound]:
     node = entry.get("node")
     if not isinstance(node, str) or not node.strip():
         raise ValueError("A writable_nodes entry must name a node")
+    return node, _bound_of(entry, f'writable_nodes entry "{node}"')
+
+
+def _bound_of(entry: Mapping[str, Any], label: str) -> ValueBound:
+    """The ``min``/``max``/``enum``/``max_change`` keys of one entry, checked.
+
+    Shared by a writable_nodes entry and a writable_subtrees rule, which bound a
+    value the same way and differ only in what names the entry in a refusal.
+    """
     bound = ValueBound(
-        minimum=_bound_number(entry, "min", node),
-        maximum=_bound_number(entry, "max", node),
-        allowed=_bound_enum(entry, node),
-        max_change=_bound_number(entry, "max_change", node),
+        minimum=_bound_number(entry, "min", label),
+        maximum=_bound_number(entry, "max", label),
+        allowed=_bound_enum(entry, label),
+        max_change=_bound_number(entry, "max_change", label),
     )
     if bound.minimum is not None and bound.maximum is not None and bound.minimum > bound.maximum:
-        raise ValueError(f'writable_nodes entry "{node}" has min above max')
+        raise ValueError(f"{label} has min above max")
     if bound.max_change is not None and bound.max_change < 0:
-        raise ValueError(f'writable_nodes entry "{node}" has a negative max_change')
-    return node, bound
+        raise ValueError(f"{label} has a negative max_change")
+    return bound
 
 
-def _bound_number(entry: Mapping[str, Any], key: str, node: str) -> float | None:
+def _bound_number(entry: Mapping[str, Any], key: str, label: str) -> float | None:
     value = entry.get(key)
     if value is None:
         return None
     # Finite as well: `1e400` parses to infinity, which is not a bound anyone wrote.
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f'writable_nodes entry "{node}" has a non-numeric {key}')
+    if not _finite_number(value):
+        raise ValueError(f"{label} has a non-numeric {key}")
     return float(value)
 
 
-def _bound_enum(entry: Mapping[str, Any], node: str) -> tuple[Any, ...] | None:
+def _bound_enum(entry: Mapping[str, Any], label: str) -> tuple[Any, ...] | None:
     values = entry.get("enum")
     if values is None:
         return None
     if not isinstance(values, list) or not values:
-        raise ValueError(f'writable_nodes entry "{node}" has an empty or non-list enum')
+        raise ValueError(f"{label} has an empty or non-list enum")
     return tuple(values)
+
+
+@dataclass(frozen=True)
+class SubtreeRule:
+    """One ``control.writable_subtrees`` rule: every matching Variable under a root.
+
+    An allowlist that names each node is what an operator can review, and on a
+    line with two hundred identical tags it is also what nobody keeps up to date.
+    A rule says "the AnalogItems under Line1, between 0 and 100", and is expanded
+    against the server on every session (``policy_resolution.py``) — never by
+    subtype, never past ``max_nodes``, and to nothing at all when it would match
+    more than that, so a root written one level too high cannot quietly allow a
+    plant.
+    """
+
+    root: str
+    #: A node id; only Variables whose HasTypeDefinition is exactly this match.
+    #: None matches every Variable under the root.
+    type_definition: str | None
+    max_nodes: int
+    bound: ValueBound
+
+
+_SUBTREE_KEYS = {"root", "type_definition", "max_nodes", "min", "max", "enum", "max_change"}
+
+
+def _subtree_rule(entry: Any) -> SubtreeRule:
+    """One ``writable_subtrees`` entry, checked in the order the shared table pins."""
+    if not isinstance(entry, Mapping):
+        raise ValueError("A control.writable_subtrees entry must be an object")
+    unknown = set(entry) - _SUBTREE_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown key in a writable_subtrees entry: {sorted(unknown)[0]}. "
+            f"Use one of: {', '.join(sorted(_SUBTREE_KEYS))}"
+        )
+    root = entry.get("root")
+    if not _non_empty(root):
+        raise ValueError("A control.writable_subtrees entry must name a root")
+    label = f'writable_subtrees entry "{root}"'
+    type_definition = entry.get("type_definition")
+    if type_definition is not None and not _non_empty(type_definition):
+        raise ValueError(f"{label} has an empty or non-string type_definition")
+    max_nodes = entry.get("max_nodes")
+    nodes = DEFAULT_SUBTREE_NODES
+    if max_nodes is not None:
+        checked = _whole_number(max_nodes, 1, MAX_SUBTREE_NODES)
+        if checked is None:
+            raise ValueError(f"{label} has max_nodes outside 1 to {MAX_SUBTREE_NODES}")
+        nodes = checked
+    return SubtreeRule(
+        root=root,
+        type_definition=type_definition,
+        max_nodes=nodes,
+        bound=_bound_of(entry, label),
+    )
+
+
+@dataclass(frozen=True)
+class Precondition:
+    """One ``control.preconditions`` rule: an interlock the policy ties to targets.
+
+    "Only write the setpoint while the permit is set" is a rule every plant has
+    and no allowlist can say: the permit is a different node, and its state is a
+    reading, not configuration. Each requirement is checked against a fresh Read
+    right before the guarded write or call is sent (``policy_check.py``).
+    """
+
+    targets: tuple[str, ...]
+    #: (object_id, method_id) pairs, as written.
+    methods: tuple[tuple[str, str], ...]
+    #: Each ``{"node", and one of "equals" | "in" | "min"/"max"}``, with the
+    #: keys that were null dropped.
+    require: tuple[Mapping[str, Any], ...]
+    description: str | None = None
+
+
+_PRECONDITION_KEYS = {"targets", "methods", "require", "description"}
+_REQUIREMENT_KEYS = {"node", "equals", "in", "min", "max"}
+
+
+def _scalar(value: Any) -> bool:
+    """A value a requirement may compare with: a string, a finite number or a boolean."""
+    return isinstance(value, (str, bool)) or _finite_number(value)
+
+
+def _precondition(entry: Any) -> Precondition:
+    """One ``preconditions`` entry, checked in the order the shared table pins."""
+    if not isinstance(entry, Mapping):
+        raise ValueError("A control.preconditions entry must be an object")
+    unknown = set(entry) - _PRECONDITION_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown key in a control.preconditions entry: {sorted(unknown)[0]}. "
+            f"Use one of: {', '.join(sorted(_PRECONDITION_KEYS))}"
+        )
+    targets = entry.get("targets")
+    if targets is not None and not _entry_list(targets):
+        raise ValueError(
+            "A control.preconditions entry's targets must be a list of node IDs or browse paths"
+        )
+    methods = entry.get("methods")
+    if methods is not None and not (
+        isinstance(methods, list)
+        and all(
+            isinstance(item, Mapping)
+            and _non_empty(item.get("object_id"))
+            and _non_empty(item.get("method_id"))
+            for item in methods
+        )
+    ):
+        raise ValueError(
+            "A control.preconditions entry's methods must be a list of objects with a "
+            "non-empty object_id and method_id"
+        )
+    if not targets and not methods:
+        raise ValueError("A control.preconditions entry must name at least one target or method")
+    require = entry.get("require")
+    if not isinstance(require, list) or not require:
+        raise ValueError("A control.preconditions entry must have a non-empty require list")
+    description = entry.get("description")
+    if description is not None and not isinstance(description, str):
+        raise ValueError("A control.preconditions entry's description must be a string")
+    return Precondition(
+        targets=tuple(targets or ()),
+        methods=tuple((item["object_id"], item["method_id"]) for item in methods or ()),
+        require=tuple(_requirement(item) for item in require),
+        description=description,
+    )
+
+
+def _requirement(item: Any) -> Mapping[str, Any]:
+    """One requirement of a precondition, checked; the keys that were null dropped."""
+    if not isinstance(item, Mapping):
+        raise ValueError("A precondition requirement must be an object")
+    unknown = set(item) - _REQUIREMENT_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown key in a precondition requirement: {sorted(unknown)[0]}. "
+            f"Use one of: {', '.join(sorted(_REQUIREMENT_KEYS))}"
+        )
+    node = item.get("node")
+    if not _non_empty(node):
+        raise ValueError("A precondition requirement must name a node")
+    label = f'Precondition requirement on "{node}"'
+    kinds = [
+        item.get("equals") is not None,
+        item.get("in") is not None,
+        item.get("min") is not None or item.get("max") is not None,
+    ]
+    if sum(kinds) != 1:
+        raise ValueError(f"{label} must have exactly one of equals, in, or min/max")
+    if item.get("equals") is not None and not _scalar(item["equals"]):
+        raise ValueError(f"{label} has an equals that is not a string, number or boolean")
+    candidates = item.get("in")
+    if candidates is not None and not (
+        isinstance(candidates, list) and candidates and all(_scalar(value) for value in candidates)
+    ):
+        raise ValueError(
+            f"{label} has an in that is not a non-empty list of strings, numbers or booleans"
+        )
+    for key in ("min", "max"):
+        if item.get(key) is not None and not _finite_number(item[key]):
+            raise ValueError(f"{label} has a non-numeric {key}")
+    if item.get("min") is not None and item.get("max") is not None and item["min"] > item["max"]:
+        raise ValueError(f"{label} has min above max")
+    return MappingProxyType({key: value for key, value in item.items() if value is not None})
 
 
 @dataclass(frozen=True)
@@ -325,6 +570,20 @@ class PolicyConfig:
     #: equipment declares is worth more than one a human retyped, and it is the
     #: only value bound that exists on a deployment with no policy file at all.
     allow_out_of_range_writes: bool
+    #: ``callable_methods`` as written, in order and deduplicated. The frozenset
+    #: above is what authorizes; this is what the policy check walks, so its
+    #: findings come out in the order the file lists them.
+    callable_method_entries: tuple[str, ...] = ()
+    #: Node ids or browse paths whose whole subtree no read may reach, under
+    #: every profile — a confidentiality rule, not a control one.
+    deny_read: tuple[str, ...] = ()
+    writable_subtrees: tuple[SubtreeRule, ...] = ()
+    #: The only sources whose alarms an operator agent may acknowledge or change.
+    #: Empty is no restriction.
+    alarm_sources: tuple[str, ...] = ()
+    #: The most severe alarm an operator agent may acknowledge or change.
+    alarm_max_severity: int | None = None
+    preconditions: tuple[Precondition, ...] = ()
 
 
 def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
@@ -374,6 +633,10 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
                 f'Invalid OPCUA_ALLOWED_METHODS entry "{method}"; use object_node_id|method_node_id'
             )
 
+    # The policy file is the only place these can be said: a comma-separated
+    # variable cannot carry a subtree's bounds or a requirement's condition.
+    severity = control.get("alarm_max_severity")
+
     acknowledge = _boolean(
         _value(env, "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS"),
         "OPCUA_ALLOW_ACKNOWLEDGE_ALARMS",
@@ -405,6 +668,14 @@ def parse_policy_config(env: Mapping[str, str]) -> PolicyConfig:
         allow_unverified_server_control=allow_unverified,
         server_identity=server_identity(env),
         allow_out_of_range_writes=allow_out_of_range,
+        callable_method_entries=tuple(dict.fromkeys(method_env)),
+        deny_read=tuple(file.get("deny_read") or ()),
+        writable_subtrees=tuple(
+            _subtree_rule(entry) for entry in control.get("writable_subtrees") or ()
+        ),
+        alarm_sources=tuple(control.get("alarm_sources") or ()),
+        alarm_max_severity=None if severity is None else int(severity),
+        preconditions=tuple(_precondition(entry) for entry in control.get("preconditions") or ()),
     )
 
 
@@ -455,7 +726,9 @@ def server_identity_record(config: PolicyConfig) -> dict[str, Any]:
 def values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
     """Every value a guard path selects out of a call's arguments.
 
-    Supports ``field`` and ``array[].field``. A path that selects nothing yields
+    Supports ``field``, ``array[].field`` and a trailing ``array[]`` — every
+    string element of a list of ids, which is how ``readGuard`` names
+    ``read_opcua_nodes``' ``node_ids``. A path that selects nothing yields
     nothing, and the caller treats that as a denial rather than a pass: an
     argument the guard expected and did not find means the call does not look
     like what the contract declared.
@@ -465,6 +738,8 @@ def values_at(arguments: Mapping[str, Any], path: str) -> list[str]:
         items = arguments.get(head[:-2])
         if not isinstance(items, list):
             return []
+        if not rest:
+            return [item for item in items if isinstance(item, str)]
         found: list[str] = []
         for item in items:
             if isinstance(item, Mapping):
@@ -573,6 +848,21 @@ class ToolPolicy:
         #: its namespaces are, and resolving it wrongly would authorise a write
         #: to whatever node happens to sit at that index. Unknown denies.
         self._namespaces: list[str] | None = None
+        #: What each browse-path entry resolved to on this session, or None for
+        #: one that did not resolve. Empty until the first resolution, so a path
+        #: entry matches nothing until the server has said what it names.
+        self._paths: dict[str, str | None] = {}
+        #: Every node a writable_subtrees rule matched, with that rule's bound —
+        #: the first rule to match a node wins.
+        self._subtree_bounds: dict[str, ValueBound] = {}
+        #: Every node deny_read hides, as expanded on this session.
+        self._deny: frozenset[str] = frozenset()
+        #: False while the deny set is known to be short of what deny_read names
+        #: — a walk past the cap or one that failed — and every guarded read is
+        #: then refused, with this reason. A confidentiality rule that could not
+        #: be applied in full must not be applied in part.
+        self._deny_complete = True
+        self._deny_reason: str | None = None
 
     def bind_namespaces(self, uris: Sequence[str]) -> None:
         """Bind the live NamespaceArray, re-read on every (re)connect.
@@ -593,6 +883,30 @@ class ToolPolicy:
                     f"get_server_status.",
                     file=sys.stderr,
                 )
+
+    def bind_paths(self, resolved: Mapping[str, str | None]) -> None:
+        """Bind what each browse-path entry names on this session.
+
+        Every session, like the NamespaceArray: a path is a name, and a server
+        that restarted may have put a different node behind it — which is the
+        reason to write a path rather than a node id that may be renumbered.
+        """
+        self._paths = dict(resolved)
+
+    def bind_subtrees(self, matched: Mapping[str, ValueBound]) -> None:
+        """Bind every node the writable_subtrees rules matched on this session."""
+        self._subtree_bounds = dict(matched)
+
+    def bind_deny(self, nodes: Iterable[str], complete: bool, reason: str | None) -> None:
+        """Bind the deny_read set expanded on this session, and whether it is whole."""
+        self._deny = frozenset(nodes)
+        self._deny_complete = complete
+        self._deny_reason = reason
+
+    @property
+    def read_policy(self) -> tuple[int, bool]:
+        """How many nodes deny_read hides, and whether that is all of them."""
+        return len(self._deny), self._deny_complete
 
     def _class_visible(self, tool: dict[str, Any]) -> bool:
         """Whether a tool is offered at all, from its access class and its guard.
@@ -642,7 +956,9 @@ class ToolPolicy:
         if guard.get("methodPaths"):
             return bool(self.config.callable_methods)
         if guard.get("nodeIdPaths"):
-            return bool(self.config.writable_nodes)
+            # Configured, not resolved: whether a rule matches anything is a fact
+            # about the session, and the catalogue does not move with the plant.
+            return bool(self.config.writable_nodes) or bool(self.config.writable_subtrees)
         return False
 
     def is_visible(self, tool: dict[str, Any]) -> bool:
@@ -662,6 +978,10 @@ class ToolPolicy:
             raise ValueError(message("unknownTool", tool=name))
         if not self.is_visible(tool):
             raise PermissionError(self._refusal(tool))
+        # Before the profile returns, because deny_read binds every profile. Not
+        # strict: this runs before the connection is up, on whatever the last
+        # session resolved, and the dispatcher asks again strictly once it is.
+        self.authorize_read(name, arguments, strict=False)
         if self.config.profile != "operator":
             return
 
@@ -703,18 +1023,7 @@ class ToolPolicy:
                 )
             wanted_object = self._resolve(objects[0])
             wanted_method = self._resolve(methods[0])
-            allowed = set()
-            for entry in self.config.callable_methods:
-                entry_object, _, entry_method = entry.partition("|")
-                resolved_object = self._resolve(entry_object)
-                resolved_method = self._resolve(entry_method)
-                # An entry naming a namespace this server does not publish is
-                # dropped rather than kept as some placeholder. Keeping it would
-                # let two *different* unresolvable ids compare equal to each
-                # other, which is how an unknown URI could authorise an unknown
-                # request.
-                if resolved_object is not None and resolved_method is not None:
-                    allowed.add(f"{resolved_object}|{resolved_method}")
+            allowed = self.callable_pairs()
             if (
                 wanted_object is None
                 or wanted_method is None
@@ -748,6 +1057,55 @@ class ToolPolicy:
             return message(refusal, tool=tool["name"])
         return message("toolDisabled", tool=tool["name"], profile=self.config.profile)
 
+    def authorize_read(self, name: str, arguments: Mapping[str, Any], strict: bool) -> None:
+        """Refuse a read that reaches a node deny_read hides. Every profile.
+
+        Walks the tool's ``readGuard`` the way :meth:`authorize` walks ``guard``,
+        so a read tool added to the contract is covered by declaring what it
+        reads. ``strict`` is the check made once the connection is up, on the
+        session's own resolution: only then does an incomplete deny set refuse
+        everything, because before it the set may simply be a session old.
+        """
+        if not self.config.deny_read:
+            return
+        tool = self._tools.get(name) or {}
+        guard = tool.get("readGuard")
+        if not guard:
+            return
+        if not self._deny_complete:
+            if strict:
+                raise PermissionError(
+                    message("readPolicyIncomplete", reason=self._deny_reason or "unknown")
+                )
+            return
+        for path in guard.get("nodeIdPaths", []):
+            for node_id in values_at(arguments, path):
+                if self.read_denied(node_id):
+                    raise PermissionError(message("readDenied", node_id=node_id))
+
+    def read_denied(self, node_id: str) -> bool:
+        """Whether deny_read hides ``node_id``.
+
+        A plain node-id entry hides its own node from the start, resolved through
+        the namespace binding like any allowlist entry; its subtree, and anything
+        a browse path names, join once the session has expanded them.
+        """
+        if not self.config.deny_read:
+            return False
+        wanted = self._resolve(node_id)
+        if wanted is None:
+            return False
+        if wanted in self._deny:
+            return True
+        return any(
+            not entry.startswith("/") and self._resolve(entry) == wanted
+            for entry in self.config.deny_read
+        )
+
+    def resolve(self, entry: str) -> str | None:
+        """A policy entry as the node it names on this session, or None. See :meth:`_resolve`."""
+        return self._resolve(entry)
+
     def _resolve(self, node_id: str) -> str | None:
         """One node id in the spelling this policy compares by, or None if it has none.
 
@@ -757,8 +1115,36 @@ class ToolPolicy:
         so an allowlist entry for an unknown URI would authorise a request naming
         a different unknown URI. The first draft did exactly that, and a test
         caught it.
+
+        A browse path (``/Objects/Plant/Pump``) is whatever this session resolved
+        it to, and None before the first resolution or when it named no node, or
+        more than one: an entry that cannot be tied to one node allows nothing.
         """
+        if node_id.startswith("/"):
+            return self._paths.get(node_id)
         return resolve_node_id(node_id, self._namespaces or [])
+
+    def uri_form(self, node_id: str) -> str | None:
+        """``node_id`` as ``nsu=<uri>;<identifier>``, or None where it cannot be said.
+
+        For the audit trail: a namespace index is per session and a URI is not,
+        so a record that says ``ns=2;i=41`` alone names a different node after
+        the server reorders its namespaces, and one that also says the URI does
+        not. None when the index is not in the bound NamespaceArray, or before a
+        session has bound one.
+        """
+        if self._namespaces is None:
+            return None
+        resolved = self._resolve(node_id)
+        if resolved is None:
+            return None
+        prefix, separator, identifier = resolved.partition(";")
+        if not separator or not prefix.startswith("ns=") or not prefix[3:].isdigit():
+            return None
+        index = int(prefix[3:])
+        if index >= len(self._namespaces):
+            return None
+        return f"nsu={self._namespaces[index]};{identifier}"
 
     def _resolved_set(self, entries: Iterable[str]) -> set[str]:
         """Every allowlist entry that resolves, in comparable form.
@@ -770,9 +1156,42 @@ class ToolPolicy:
         resolved = (self._resolve(entry) for entry in entries)
         return {entry for entry in resolved if entry is not None}
 
-    def _require_writable(self, node_id: str) -> None:
+    def writable_set(self) -> set[str]:
+        """Every node the operator profile may write, resolved on this session.
+
+        The writable_nodes entries that resolve, and everything the
+        writable_subtrees rules matched.
+        """
+        return self._resolved_set(self.config.writable_nodes) | set(self._subtree_bounds)
+
+    def callable_pairs(self) -> set[str]:
+        """Every ``object|method`` the operator profile may call, resolved."""
+        allowed = set()
+        for entry in self.config.callable_methods:
+            entry_object, _, entry_method = entry.partition("|")
+            resolved_object = self._resolve(entry_object)
+            resolved_method = self._resolve(entry_method)
+            # An entry naming a namespace this server does not publish is
+            # dropped rather than kept as some placeholder. Keeping it would
+            # let two *different* unresolvable ids compare equal to each
+            # other, which is how an unknown URI could authorise an unknown
+            # request.
+            if resolved_object is not None and resolved_method is not None:
+                allowed.add(f"{resolved_object}|{resolved_method}")
+        return allowed
+
+    def is_allowlisted(self, node_id: str) -> bool:
+        """Whether the operator allowlist covers ``node_id`` on this session."""
         wanted = self._resolve(node_id)
-        if wanted is None or wanted not in self._resolved_set(self.config.writable_nodes):
+        return wanted is not None and wanted in self.writable_set()
+
+    def write_refusal(self) -> str | None:
+        """Why write_opcua_nodes cannot be called at all here, or None if it can."""
+        tool = self._tools["write_opcua_nodes"]
+        return None if self.is_visible(tool) else self._refusal(tool)
+
+    def _require_writable(self, node_id: str) -> None:
+        if not self.is_allowlisted(node_id):
             raise PermissionError(message("nodeNotWritable", node_id=node_id))
 
     def bound_for(self, node_id: str) -> ValueBound | None:
@@ -791,10 +1210,96 @@ class ToolPolicy:
         wanted = self._resolve(node_id)
         if wanted is None:
             return None
-        for entry, bound in self.config.value_bounds.items():
-            if not bound.is_empty and self._resolve(entry) == wanted:
-                return bound
+        explicit = [
+            bound
+            for entry, bound in self.config.value_bounds.items()
+            if self._resolve(entry) == wanted
+        ]
+        if explicit:
+            # A node named outright is bounded as it was named, even when a
+            # writable_subtrees rule matches it too: the narrower statement wins.
+            return next((bound for bound in explicit if not bound.is_empty), None)
+        bound = self._subtree_bounds.get(wanted)
+        return None if bound is None or bound.is_empty else bound
+
+    def preconditions_for_write(self, node_ids: Iterable[str]) -> list[tuple[str, list]]:
+        """The interlocks guarding each written node: (node id as written, requirements).
+
+        Only nodes some precondition targets, in the order given; each with every
+        matching precondition's requirements, in policy order. Operator only, as
+        every other control rule in the policy file is.
+        """
+        if self.config.profile != "operator" or not self.config.preconditions:
+            return []
+        guarded = []
+        for node_id in node_ids:
+            wanted = self._resolve(node_id)
+            if wanted is None:
+                continue
+            requirements = [
+                dict(requirement)
+                for rule in self.config.preconditions
+                if any(self._resolve(target) == wanted for target in rule.targets)
+                for requirement in rule.require
+            ]
+            if requirements:
+                guarded.append((node_id, requirements))
+        return guarded
+
+    def unresolved_precondition(self) -> str | None:
+        """The first precondition target or method pair that names no node now, or None.
+
+        As written; a pair as ``object_id|method_id``. While there is one, every
+        write and every method call is refused (``preconditionUnresolved``): an
+        interlock whose target cannot be tied to a node guards nothing, and the
+        node it was meant for may well be allowlisted by a plain id — so letting
+        control through would be writing it with the interlock silently off.
+        Operator only, as every other control rule in the policy file is.
+        """
+        if self.config.profile != "operator":
+            return None
+        for rule in self.config.preconditions:
+            for target in rule.targets:
+                if self._resolve(target) is None:
+                    return target
+            for object_id, method_id in rule.methods:
+                if self._resolve(object_id) is None or self._resolve(method_id) is None:
+                    return f"{object_id}|{method_id}"
         return None
+
+    def preconditions_for_call(self, object_node_id: str, method_node_id: str) -> list:
+        """The requirements guarding one method call, in policy order. Operator only."""
+        if self.config.profile != "operator" or not self.config.preconditions:
+            return []
+        wanted = (self._resolve(object_node_id), self._resolve(method_node_id))
+        if None in wanted:
+            return []
+        return [
+            dict(requirement)
+            for rule in self.config.preconditions
+            if any(
+                (self._resolve(entry_object), self._resolve(entry_method)) == wanted
+                for entry_object, entry_method in rule.methods
+            )
+            for requirement in rule.require
+        ]
+
+    def alarm_scope(self) -> tuple[list[str] | None, int | None] | None:
+        """The operator policy's alarm scope: (resolved sources or None, max severity).
+
+        None when there is nothing to check — another profile, or neither key
+        set. A source entry that does not resolve is dropped, which narrows: a
+        scope whose every entry is unresolved allows no source at all.
+        """
+        config = self.config
+        if config.profile != "operator" or not (
+            config.alarm_sources or config.alarm_max_severity is not None
+        ):
+            return None
+        sources = None
+        if config.alarm_sources:
+            sources = sorted(self._resolved_set(config.alarm_sources))
+        return sources, config.alarm_max_severity
 
     def _require_value_allowed(self, node_id: str, value: Any) -> None:
         """Check one write against the operator's bound for its target.

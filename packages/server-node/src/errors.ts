@@ -38,9 +38,44 @@ export class ContractRefusal extends Error {}
  * first call beats shipping `{reason}` to an operator.
  */
 export function message(key: string, fields: Record<string, string | number> = {}): string {
-  const template = TEMPLATES[key];
+  return fill(TEMPLATES, "error", key, fields);
+}
+
+/** The other sentence tables, which are worded and filled exactly as `errors` is.
+ *
+ * Separate tables because they are separate kinds of answer — a skipped write is
+ * one node's record, not a failure of the call; a write_access reason is a clause
+ * inside a record; a policy-check finding is a line about the deployment, not
+ * about a call — and keeping them apart is what stops one being used for another.
+ */
+const SECTIONS = {
+  writeSkips: withoutProse(CONTRACT.writeSkips),
+  writeAccessReasons: withoutProse(CONTRACT.writeAccessReasons),
+  policyCheck: withoutProse(CONTRACT.policyCheck.messages),
+};
+
+/** One sentence from `writeSkips`, `writeAccessReasons` or `policyCheck.messages`. */
+export function sentence(
+  section: keyof typeof SECTIONS,
+  key: string,
+  fields: Record<string, string | number> = {}
+): string {
+  return fill(SECTIONS[section], section, key, fields);
+}
+
+function withoutProse(table: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(table).filter(([key]) => !key.startsWith("$")));
+}
+
+function fill(
+  templates: Record<string, string>,
+  kind: string,
+  key: string,
+  fields: Record<string, string | number>
+): string {
+  const template = templates[key];
   if (template === undefined) {
-    throw new Error(`No such contract error template: ${key}`);
+    throw new Error(`No such contract ${kind} template: ${key}`);
   }
   return template.replace(/\{(\w+)\}/g, (placeholder, name: string) => {
     const value = fields[name];

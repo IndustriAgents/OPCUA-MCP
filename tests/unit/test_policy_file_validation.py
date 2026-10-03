@@ -22,7 +22,12 @@ CASES = json.loads(
 
 
 def _settings(config: PolicyConfig) -> dict:
-    """The settings ``expect`` can name, spelled as the table spells them."""
+    """The settings ``expect`` can name, spelled as the table spells them.
+
+    ``writable_nodes`` is the entries as written — browse paths included and
+    unresolved, since resolving them takes a server — and ``preconditions`` a
+    count, because the table pins that the rules were accepted, not their shape.
+    """
     return {
         "profile": config.profile,
         "allowed_tools": None if config.allowed_tools is None else sorted(config.allowed_tools),
@@ -31,6 +36,11 @@ def _settings(config: PolicyConfig) -> dict:
         "acknowledge_alarms": config.acknowledge_alarms,
         "allow_insecure_control": config.allow_insecure_control,
         "allow_out_of_range_writes": config.allow_out_of_range_writes,
+        "deny_read": list(config.deny_read),
+        "writable_subtrees": [rule.root for rule in config.writable_subtrees],
+        "alarm_sources": list(config.alarm_sources),
+        "alarm_max_severity": config.alarm_max_severity,
+        "preconditions": len(config.preconditions),
     }
 
 

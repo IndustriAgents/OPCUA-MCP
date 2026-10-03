@@ -35,6 +35,17 @@ export interface ToolGuard {
   auditPaths?: string[];
 }
 
+/** Where a read tool keeps the node ids it reads, for the policy's deny_read.
+ *
+ * The read-side counterpart of `ToolGuard.nodeIdPaths`, declared beside the tool
+ * for the same reason: the policy walks a declaration rather than a list of tool
+ * names, so a read tool added later is either declared or reads nothing
+ * deny_read can name. `a[]` is every string element of array `a`.
+ */
+export interface ReadGuard {
+  nodeIdPaths: string[];
+}
+
 /** One optional OPC UA server feature, as `contract/tools.json` declares it. */
 export interface CapabilitySpec {
   /** What it is called in a refusal: "historical data access". */
@@ -62,6 +73,7 @@ export interface ToolSpec {
    *  `result`; see completeness.ts. */
   reportsCompleteness?: boolean;
   guard?: ToolGuard;
+  readGuard?: ReadGuard;
   annotations: {
     readOnlyHint: boolean;
     destructiveHint: boolean;
@@ -167,6 +179,17 @@ export const CONTRACT: {
   };
   /** Message templates for every failure a tool call can return; see errors.ts. */
   errors: Record<string, string>;
+  /** Why one node's write was not sent, as that record's `error`; see write-plan.ts. */
+  writeSkips: Record<string, string>;
+  /** Why `write_access.allowed` is false for a node; see write-plan.ts. */
+  writeAccessReasons: Record<string, string>;
+  /** The policy check on connect: its walk limits and its findings; see policy-check.ts. */
+  policyCheck: {
+    defaultSubtreeNodes: number;
+    maxSubtreeNodes: number;
+    maxDenyNodes: number;
+    messages: Record<string, string>;
+  };
   /** Message templates for notices added beside a result; see notices.ts. */
   notices: Record<string, string>;
   /** How much one call may ask for. Refusals, not tuning knobs. */

@@ -154,15 +154,17 @@ def is_connection_error(error: BaseException) -> bool:
     The Node server's ``isConnectionError`` answers the same question about the
     same failures, so a retry that happens on one runtime happens on the other.
     """
-    if isinstance(error, ua.UaStatusCodeError) and error.code in _DEAD_SESSION_CODES:
-        return True
-    if isinstance(error, _DEAD_SESSION_TYPES):
-        return True
-    text = str(error)
-    if any(marker in text for marker in DEAD_SESSION_MARKERS):
-        return True
-    cause = error.__cause__ or error.__context__
-    return cause is not None and cause is not error and is_connection_error(cause)
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, ua.UaStatusCodeError) and error.code in _DEAD_SESSION_CODES:
+            return True
+        if isinstance(error, _DEAD_SESSION_TYPES):
+            return True
+        if any(marker in str(error) for marker in DEAD_SESSION_MARKERS):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
 
 
 class _Rebuild:

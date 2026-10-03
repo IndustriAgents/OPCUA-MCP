@@ -426,3 +426,37 @@ def test_the_python_310_difference_is_real_and_not_assumed():
     else:
         assert futures.TimeoutError is not TimeoutError
         assert not issubclass(futures.TimeoutError, OSError)
+
+
+FAILURES = json.loads(
+    (ROOT / "tests/fixtures/connection-failures.json").read_text(encoding="utf-8")
+)["cases"]
+
+
+def _native_failure(case):
+    kind = case["kind"]
+    if kind == "timeout":
+        error = TimeoutError()
+    elif kind == "futureTimeout":
+        error = futures.TimeoutError()
+    elif kind == "socket":
+        import errno
+
+        error = OSError(getattr(errno, case["code"]), "")
+    elif kind == "status":
+        error = ua.UaStatusCodeError(getattr(ua.StatusCodes, case["code"]))
+        error.args = ()
+    else:
+        error = RuntimeError(case["message"])
+    if case.get("wrapped"):
+        wrapper = RuntimeError("Operation failed")
+        wrapper.__cause__ = error
+        if case.get("cycle"):
+            error.__cause__ = wrapper
+        return wrapper
+    return error
+
+
+@pytest.mark.parametrize("case", FAILURES, ids=[case["name"] for case in FAILURES])
+def test_native_failure_recovery_matches_the_shared_rule(case):
+    assert is_connection_error(_native_failure(case)) is case["expected"]

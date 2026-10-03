@@ -1,0 +1,81 @@
+{
+  "$comment": "Native errors and wrapped causes must produce the same recovery decision on both runtimes (#157 B14). A service timeout is ambiguous for controls; classification never authorizes resending a control request.",
+  "cases": [
+    {
+      "name": "timeout without prose",
+      "kind": "timeout",
+      "expected": true
+    },
+    {
+      "name": "Python 3.10 future timeout",
+      "kind": "futureTimeout",
+      "expected": true
+    },
+    {
+      "name": "wrapped timeout retains its type",
+      "kind": "timeout",
+      "wrapped": true,
+      "expected": true
+    },
+    {
+      "name": "socket errno without prose",
+      "kind": "socket",
+      "code": "ECONNRESET",
+      "expected": true
+    },
+    {
+      "name": "wrapped socket errno",
+      "kind": "socket",
+      "code": "ECONNREFUSED",
+      "wrapped": true,
+      "expected": true
+    },
+    {
+      "name": "wrapped OPC UA status without prose",
+      "kind": "status",
+      "code": "BadSessionClosed",
+      "wrapped": true,
+      "expected": true
+    },
+    {
+      "name": "wrapped request status is not a dead session",
+      "kind": "status",
+      "code": "BadNodeIdUnknown",
+      "wrapped": true,
+      "expected": false
+    },
+    {
+      "name": "node-opcua transaction timeout",
+      "kind": "text",
+      "message": "Transaction has timed out ( timeout = 1000 ms , request = WriteRequest)",
+      "expected": true
+    },
+    {
+      "name": "alarm refresh expiry is not a dead session",
+      "kind": "text",
+      "message": "Condition refresh timed out after 5 seconds",
+      "expected": false
+    },
+    {
+      "name": "generic application failure",
+      "kind": "text",
+      "message": "unexpected failure",
+      "expected": false
+    },
+    {
+      "name": "cyclic causes terminate",
+      "kind": "text",
+      "message": "unexpected failure",
+      "wrapped": true,
+      "cycle": true,
+      "expected": false
+    },
+    {
+      "name": "connection evidence inside cyclic causes",
+      "kind": "timeout",
+      "wrapped": true,
+      "cycle": true,
+      "expected": true
+    }
+  ]
+}

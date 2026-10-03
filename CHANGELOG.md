@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — recover consistently from service timeouts (#157 B14)
+- Node now recognizes transaction timeouts, socket error codes and wrapped
+  error causes. Tool wrappers retain the cause, and both runtimes bound cyclic
+  cause traversal. Reads retry once; control calls report an uncertain outcome
+  and are never resent. Empty Node error messages report the error name.
+
 ### Security — enforce all Python receive bounds (#175)
 - Reject chunks over `maxChunkSize` before reading their bodies and reject
   cumulative messages over `maxMessageSize`, in addition to the existing chunk

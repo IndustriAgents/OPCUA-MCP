@@ -144,10 +144,19 @@ function statusCodeOf(error: unknown): number | null {
  * same failures, so a retry that happens on one runtime happens on the other.
  */
 export function isConnectionError(error: unknown): boolean {
-  const code = statusCodeOf(error);
-  if (code !== null && DEAD_SESSION_CODES.has(code)) return true;
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return DEAD_SESSION_MARKERS.some((marker) => message.includes(marker));
+  const seen = new Set<unknown>();
+  while (error != null && !seen.has(error)) {
+    seen.add(error);
+    const code = statusCodeOf(error);
+    if (code !== null && DEAD_SESSION_CODES.has(code)) return true;
+    const candidate = error as { code?: string; name?: string; cause?: unknown };
+    if (SOCKET_ERROR_CODES.includes(candidate.code ?? "") || candidate.name === "TimeoutError")
+      return true;
+    const message = error instanceof Error ? error.message : String(error);
+    if (DEAD_SESSION_MARKERS.some((marker) => message.includes(marker))) return true;
+    error = candidate.cause;
+  }
+  return false;
 }
 
 /** The message both runtimes give when a tool cannot be served at all.

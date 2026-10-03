@@ -831,11 +831,12 @@
       ]
     },
     "phrases": {
-      "$comment": "The remainder, matched in the error's text, and the only fragile part of this. The first is this project's own wording (`requireSession` / `_open_with_backoff` raise it) and so cannot drift under us. The other two are node-opcua prose for a socket that went away without an errno reaching us, and they are exactly what a library release may reword — which is why the e2e test that kills the mock mid-call matters more than any of this list: it is the one check that fails when reconnection stops working for real.",
+      "$comment": "The remainder, matched in the error's text, and the only fragile part of this. The first is this project's own wording (`requireSession` / `_open_with_backoff` raise it) and so cannot drift under us. The others are node-opcua prose for a lost socket or an unanswered service transaction without an errno reaching us, and they are exactly what a library release may reword — which is why the e2e test that kills the mock mid-call matters more than any of this list: it is the one check that fails when reconnection stops working for real.",
       "texts": [
         "No OPC UA session available",
         "socket has been disconnected",
-        "The connection has been rejected"
+        "The connection has been rejected",
+        "Transaction has timed out ("
       ]
     }
   },

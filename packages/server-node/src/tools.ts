@@ -151,7 +151,7 @@ interface WriteRequest {
 
 /** An error's message, however it arrived. */
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message || error.name : String(error);
 }
 
 function clampInt(value: number, low: number, high: number): number {
@@ -1372,7 +1372,7 @@ export class OpcuaTools {
         )
       );
     } catch (error) {
-      throw new Error(message("readFailed", { reason: describeError(error) }));
+      throw new Error(message("readFailed", { reason: describeError(error) }), { cause: error });
     }
   }
 
@@ -1516,7 +1516,9 @@ export class OpcuaTools {
       // A refusal of the request never reached the server, so it did not fail
       // to be read — and wrapping it would say it had.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }));
+      throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }), {
+        cause: error,
+      });
     }
   }
 
@@ -1640,7 +1642,9 @@ export class OpcuaTools {
         traversalCompleteness({ returned: found.length, truncated, maxNodes, unbrowsable })
       );
     } catch (error) {
-      throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }));
+      throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }), {
+        cause: error,
+      });
     }
   }
 
@@ -1957,7 +1961,7 @@ export class OpcuaTools {
       // bury the reason under a framing that says the plant rejected the value
       // when in fact this server never sent it.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(message("writeFailed", { reason: describeError(error) }));
+      throw new Error(message("writeFailed", { reason: describeError(error) }), { cause: error });
     }
   }
 
@@ -2050,7 +2054,8 @@ export class OpcuaTools {
           method_node_id: methodNodeId,
           object_node_id: objectNodeId,
           reason: describeError(error),
-        })
+        }),
+        { cause: error }
       );
     }
   }
@@ -2153,7 +2158,8 @@ export class OpcuaTools {
         records.push(await this.subs.subscribe(session, nodeId, options, filter));
       } catch (error) {
         throw new Error(
-          message("subscribeFailed", { node_id: nodeId, reason: describeError(error) })
+          message("subscribeFailed", { node_id: nodeId, reason: describeError(error) }),
+          { cause: error }
         );
       }
     }
@@ -2208,7 +2214,8 @@ export class OpcuaTools {
       ));
     } catch (error) {
       throw new Error(
-        message("eventSubscribeFailed", { node_id: nodeId, reason: describeError(error) })
+        message("eventSubscribeFailed", { node_id: nodeId, reason: describeError(error) }),
+        { cause: error }
       );
     }
 
@@ -2292,7 +2299,8 @@ export class OpcuaTools {
       );
     } catch (error) {
       throw new Error(
-        message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) })
+        message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) }),
+        { cause: error }
       );
     }
   }
@@ -2302,7 +2310,9 @@ export class OpcuaTools {
     try {
       alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
     } catch (error) {
-      throw new Error(message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }));
+      throw new Error(message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }), {
+        cause: error,
+      });
     }
 
     this.events.remember(alarms);
@@ -2343,11 +2353,12 @@ export class OpcuaTools {
       throw new Error(message("unknownEventId", { event_id: eventId }));
     }
 
-    const failed = (reason: string) =>
+    const failed = (reason: string, cause?: unknown) =>
       new Error(
         action === "acknowledge"
           ? message("acknowledgeFailed", { condition_id: condition, reason })
-          : message("alarmActionFailed", { action, condition_id: condition, reason })
+          : message("alarmActionFailed", { action, condition_id: condition, reason }),
+        { cause }
       );
 
     let statusCode;
@@ -2361,7 +2372,7 @@ export class OpcuaTools {
         durationMs
       );
     } catch (error) {
-      throw failed(describeError(error));
+      throw failed(describeError(error), error);
     }
     // Good severity: an acknowledgement the server answered with a Good subcode
     // happened, and reporting it as a failure invites a retry. The subcode is in

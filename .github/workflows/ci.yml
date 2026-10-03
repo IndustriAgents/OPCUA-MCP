@@ -42,6 +42,9 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages
 
+      - name: Standard schemas and generated contract types
+        run: uv run --no-sync python scripts/contract_codegen.py --check
+
       - name: Ruff lint (Python)
         run: uv run ruff check .
 

@@ -324,7 +324,7 @@ function nonEmpty(value: unknown): boolean {
 
 function validateToolNames(names: string[] | null | undefined): Set<string> | null {
   if (names === undefined || names === null) return null;
-  const known = new Set(CONTRACT.tools.map((tool) => tool.name));
+  const known = new Set<string>(CONTRACT.tools.map((tool) => tool.name));
   for (const name of names) {
     if (!known.has(name)) {
       throw new Error(`Unknown tool in allowed_tools: ${name}`);

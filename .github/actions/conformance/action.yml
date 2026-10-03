@@ -74,6 +74,9 @@ runs:
         mkdir -p "$GITHUB_WORKSPACE/.context/conformance"
         node --throw-deprecation --test --test-reporter=junit \
           --test-reporter-destination="$GITHUB_WORKSPACE/.context/conformance/node-unit.xml" test/*.test.mjs
+    - name: Validate standard schemas and generated contract types
+      shell: bash
+      run: uv run --no-sync python scripts/contract_codegen.py --check
 
     - name: Run unit and end-to-end tests (required mode)
       shell: bash

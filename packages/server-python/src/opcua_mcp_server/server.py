@@ -63,6 +63,7 @@ from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
 from .datetimes import format_iso_utc, parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .errors import message as error_message
+from .generated_contract import TOOL_NAMES
 from .history import (
     aggregate_pages,
     continues,
@@ -2392,29 +2393,7 @@ def act_on_alarm(
 
 # --- building a server ------------------------------------------------------------
 
-#: The tools, in the order they are registered. Names rather than the functions
-#: themselves so the registration and the contract can be compared directly:
-#: `tests/unit/test_contract.py` asserts this list against `contract/tools.json`,
-#: which is what stops a tool being defined and never registered — a failure that
-#: is otherwise invisible, because an unregistered tool is simply a tool the
-#: server does not have.
-TOOL_NAMES: tuple[str, ...] = (
-    "read_opcua_nodes",
-    "browse_opcua_nodes",
-    "read_opcua_history",
-    "read_event_history",
-    "get_server_status",
-    "list_subscriptions",
-    "list_active_alarms",
-    "write_opcua_nodes",
-    "call_opcua_method",
-    "subscribe_opcua_nodes",
-    "unsubscribe_opcua_nodes",
-    "subscribe_events",
-    "read_events",
-    "acknowledge_alarm",
-    "act_on_alarm",
-)
+# Registration names are generated from the canonical contract (#138).
 
 
 def create_server(state: ServerState | None = None) -> PolicyMCPServer:

@@ -1,8 +1,10 @@
 {
+  "$schema": "./contract.schema.json",
   "$comment": "Single source of truth for the OPC UA MCP tool and resource surface shared by both servers. The Node server builds its tools/list response directly from this file (copied into build/ at build time). The Python (MCPServer) server reads tool descriptions and the capability node IDs from it, and advertises this file's own input schemas; a parity check compares each server against this file at tests/e2e/test_contract_parity.py. To add or change a tool: edit this file, then update each server's per-tool logic (Node: a case in the CallTool switch; Python: the @mcp.tool function), and add an E2E test. A tool whose output is more than free text also names a shape from \"resultShapes\"; tests/e2e/test_contract_parity.py checks both servers' actual output against it. The \"resources\" key does the same for MCP resources: both servers build their resources/list from it, and the parity test reads each resource and checks its document against the shape its \"body\" names.",
   "resultShapes": {
     "$comment": "Canonical response shapes, referenced by a tool's \"resultShape\". Both servers must produce the referenced shape verbatim: a client (or a model) that learns one server's output must be able to read the other's. See issue #23.",
     "nodeValues": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "Returned as one MCP text content block per record. The reading of one node, fully qualified: a value on its own drops the quality and the age that decide whether it can be trusted. Closes issue #8. Every field is always present.",
       "type": "array",
       "items": {
@@ -81,6 +83,7 @@
       }
     },
     "nodeRefs": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "One object, not a list, and returned as a single MCP text content block — because a browse that was cut short has to say so in the same breath as its results. A bare array could only report truncation by leaving it out, which is exactly how a short child list passes for a complete one. `truncated` predates the shared `completeness` object that browse_opcua_nodes now also returns beside `result`, and is kept for the callers that read it; `completeness` additionally reports a subtree that could not be listed.",
       "type": "object",
       "properties": {
@@ -139,6 +142,7 @@
       "additionalProperties": false
     },
     "writeResults": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "Returned as one MCP text content block per record, one per node asked for, in the order asked. A node the server rejects is one 'status' among them — promoting it to an error result would discard what every other node in the batch did, including writes that already reached the machine.",
       "type": "array",
       "items": {
@@ -162,6 +166,7 @@
       }
     },
     "methodResult": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "One object, returned as a single MCP text content block. A method call has one result, not a list of them.",
       "type": "object",
       "properties": {
@@ -187,6 +192,7 @@
       "additionalProperties": false
     },
     "eventSubscription": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "One object, returned as a single MCP text content block: what subscribe_events set up, so a caller can see the clamped values rather than the ones it asked for.",
       "type": "object",
       "properties": {
@@ -211,6 +217,7 @@
       "additionalProperties": false
     },
     "acknowledgement": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "One object, returned as a single MCP text content block.",
       "type": "object",
       "properties": {
@@ -231,6 +238,7 @@
       "additionalProperties": false
     },
     "historyRecords": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "Returned as one MCP text content block per record for compatibility. The canonical structured result is {\"result\": [records...], \"completeness\": {...}}, and tools/list advertises that wrapper as outputSchema. A read can stop at num_values, at limits.maxHistoryValues, or where the OPC UA server returned a continuation point; `completeness` says which, and whether and how to continue.",
       "type": "array",
       "items": {
@@ -253,6 +261,7 @@
       }
     },
     "subscriptionRecords": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "Returned as one MCP text content block per record for compatibility and as {\"result\": [records...], \"completeness\": {...}} structured content, where `completeness.dropped` totals the per-record `dropped`. `subscribe_opcua_node` returns the one subscription it created; `list_subscriptions` returns every active one, and zero blocks when there are none. The `opcua://subscriptions` resource carries the same records under its \"subscriptions\" key.",
       "type": "array",
       "items": {
@@ -320,6 +329,7 @@
       }
     },
     "alarmAction": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "One object, returned as a single MCP text content block. Deliberately the same shape as \"acknowledgement\" plus the action taken: the two tools do the same kind of thing to the same kind of target, and an agent that has learned to read one answer should not have to learn another. They are separate tools only because merging them would rename `acknowledge_alarm` out from under every existing caller for no functional gain \u2014 see the tool's own description.",
       "type": "object",
       "properties": {
@@ -344,6 +354,7 @@
       "additionalProperties": false
     },
     "serverStatus": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "A single object rather than a list of records: `get_server_status` returns one text content block carrying it as JSON, and {\"result\": {...}} as structured content. Every field is always present. A field this server could not read — because the connection is down, or the OPC UA server does not expose it — is null, and `namespaces` is then empty; `connected` and `error` say which of those happened.",
       "type": "object",
       "properties": {
@@ -489,6 +500,7 @@
       "additionalProperties": false
     },
     "eventRecords": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$comment": "Returned as one MCP text content block per event for compatibility and as {\"result\": [records...]} structured content — with a `completeness` object beside `result` for read_events and read_event_history, which can return fewer events than there were. No events is zero blocks. `read_events` appends one further prose block when its buffer overflowed, and read_event_history one when a cap it did not ask for stopped it; `result` contains records only, and `completeness` carries the same facts as fields. Every field is present on every record; a field the event does not carry is null. The field order and OPC UA browse paths are \"events.fields\" below.",
       "type": "array",
       "items": {
@@ -709,6 +721,7 @@
   "completeness": {
     "$comment": "Whether a result is the whole answer, as a field rather than a sentence (issue #137). Every tool that can return fewer records than the request covered — because a cap stopped it, a buffer overflowed, or part of the address space could not be read — sets `reportsCompleteness` and returns this object beside `result` in structuredContent, on every call and not only when something is missing: a field that is sometimes absent is one a client has to guess about. It was prose before: a raw history read at its cap and a buffer that dropped events each appended a trailing text block, deliberately kept out of structuredContent, so a client reading the structured result could not tell a capped read from a complete one — the correctness gap #85's bounds left open. The notices remain for text-only readers, and now repeat what this says rather than being the only place it is said. `continuation` is stateless on purpose: it is arguments for the same tool, not a server-held token, so it cannot go stale, is bound to no session, survives a reconnect, and leaves nothing on the OPC UA server — which is also why a history read releases any continuation point the server returned instead of holding it. `schema` is what each runtime emits and what tools/list advertises; `reasons` names each value `reasons` may hold.",
     "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
         "complete": {
@@ -874,6 +887,7 @@
     }
   },
   "errors": {
+    "schemaConstraint": "{tool} argument {argument} does not satisfy the {constraint} schema constraint",
     "$comment": "Every message a tool call can fail with, in one place, because the two runtimes must word a failure identically and nothing else made them. They were hand-mirrored literals in tools.ts and server.py, and the framing had already diverged unnoticed: the Node server prefixed every failure with 'Error: ' and the Python server did not, so one failure read two ways and no test compared them. A tool failure is returned with isError set, which already says it is an error, so neither runtime prefixes it now. Placeholders are {name}, substituted by errors.ts / errors.py; tests/e2e/test_runtime_differential.py drives a table of failing calls through both servers and asserts the text is byte-identical. Three messages begin with a stable code and a colon, because a client has to act on them differently and should not have to parse prose to know which it got: 'endpoint_offline' (notConnected: the OPC UA server could not be reached, so nothing could be checked or sent), 'capability_not_supported' (the server answered, and does not offer what the call needs) and 'capability_unknown' (the server could not be asked; calling again re-checks). The two capability refusals are issued before anything reaches the plant, and name the session generation and the time the answer was determined, the same values get_server_status reports under capabilities (issue #140).",
     "emptyArray": "{tool} requires a non-empty {argument} array",
     "missingArgument": "{tool} requires {argument}",
@@ -965,6 +979,7 @@
       "resultShape": "nodeValues",
       "description": "Read the current value of one or more OPC UA nodes in a single request. Pass every node you need in one call: the OPC UA server answers them together, so reading fifty nodes costs one round trip rather than fifty. Each node comes back as its own record with the value, its data type, the OPC UA status code, and the source and server timestamps — the quality and the age are what decide whether a value can be acted on, and a bare number carries neither. A node the server rejects is one 'Bad…' status among the results, not a failure of the call.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_ids": {
@@ -989,45 +1004,37 @@
       "reportsCompleteness": true,
       "description": "Explore the OPC UA address space: list a node's children, walk a subtree, resolve a human-readable browse path to a node ID, or search for nodes by name. With the defaults it lists the immediate children of `node_id`. Raise `depth` to walk further down, set `node_class` to 'Variable' to find only readable tags, and `include_values` to read each one as it is found. `browse_path` addresses a node by name instead of by ID ('/Objects/Reactor/Temperature'), which is how to start when you do not know the numeric IDs; with `depth` 0 it simply resolves that path and returns the node it names. `name_filter` keeps only nodes whose browse name contains the text. Every node also reports its `type_definition` \u2014 what it *is*, as against what class it belongs to: 'AnalogItemType' for a tag that publishes a unit and a range, a subtype of 'AlarmConditionType' for something act_on_alarm applies to, 'FolderType' for structure. Every traversal is bounded by `max_nodes` and says in `truncated` whether it stopped early, so a short list is never mistaken for a complete one.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Where to start, as a node ID. Defaults to the Objects folder 'ns=0;i=85', the root of the plant's own address space. Ignored when `browse_path` is given."
           },
           "browse_path": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Where to start, as a slash-separated browse path resolved through the server ('/Objects/Reactor/Temperature', or 'Reactor/Temperature' relative to `node_id`). Use this when you know what a thing is called but not its node ID. A path the server cannot resolve is an error, not an empty result."
           },
           "depth": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "How many levels below the starting node to walk. 1 (the default) lists its immediate children; 0 returns only the starting node itself, which is how to resolve a `browse_path` to a node ID. Clamped to 64."
           },
           "node_class": {
-            "type": "string",
-            "enum": [
-              "Object",
-              "Variable",
-              "Method",
-              "ObjectType",
-              "VariableType",
-              "ReferenceType",
-              "DataType",
-              "View"
-            ],
+            "type": ["string", "null"],
+            "enum": ["Object", "Variable", "Method", "ObjectType", "VariableType", "ReferenceType", "DataType", "View", null],
             "description": "Keep only nodes of this OPC UA NodeClass: 'Variable' for readable tags, 'Object' for structure, 'Method' for callable operations. Every class is returned when unset. Filtering does not prune the walk — an Object is still descended into when `depth` allows."
           },
           "name_filter": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Keep only nodes whose browse name contains this text, case-insensitively. Searching for 'temp' below the Objects folder is how to find a tag whose exact name you do not know."
           },
           "include_values": {
-            "type": "boolean",
+            "type": ["boolean", "null"],
             "description": "Read each Variable's current value as it is found (default false). Costs one extra read per variable, so leave it off when mapping a large address space and read what you need with read_opcua_nodes afterwards."
           },
           "max_nodes": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Stop after inspecting this many nodes (default 500, clamped to 5000). A traversal that stops early sets 'truncated' in the result."
           }
@@ -1047,6 +1054,7 @@
       "reportsCompleteness": true,
       "description": "Read what a node's value has been over time. Without `aggregate_function` this returns the raw stored readings, with ReturnBounds=false: no preceding/following boundary values or BadBoundNotFound placeholders. With it, the server computes one summary value per `processing_interval` over the range instead — 'Average' for a trend, 'Maximum'/'Minimum' for excursions, 'Count' for how often something was recorded — which is how to ask about a week of data without transferring a week of data. Needs a server that keeps history (AccessHistoryDataCapability) or offers aggregates, and `aggregate_function` needs the aggregates; a call the connected server cannot serve is refused with capability_not_supported and a suggestion, before anything is sent. get_server_status reports which of the two the server offers, and its aggregate function names. Aggregate reads follow native continuation points within the same call, preserving the original interval anchor; they return the completed range or an explicit error within the 5000-value bound. The structured result's `completeness` says whether the range held more than came back and how to continue; never infer that from the number of records.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
@@ -1054,24 +1062,24 @@
             "description": "The OPC UA node ID to read history for. Example: 'ns=2;i=2'."
           },
           "start_time": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Start of the time range, ISO-8601 with a timezone: '2026-09-09T12:00:00Z' or '2026-09-09T14:00:00+02:00'. A timestamp with no timezone is refused rather than guessed. Required when `aggregate_function` is given; for a raw read, defaults to one hour before `end_time`."
           },
           "end_time": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "End of the time range, ISO-8601 with a timezone. Defaults to now."
           },
           "num_values": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Maximum number of raw readings to return, capped at 5000. 0 (the default) means as many as that cap allows, not every reading in the range — a raw read of a year of fast data is a request that never returns. When the cap is reached the result says so, and the way to see the whole range is `aggregate_function` rather than a bigger number. Ignored when `aggregate_function` is given, where the number of results is decided by `processing_interval`."
           },
           "aggregate_function": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Summarise each interval with this OPC UA aggregate instead of returning raw readings, by its OPC UA name: 'Average', 'Minimum', 'Maximum', 'Count', 'Total', 'Interpolative', ... Which ones the connected server offers is its own choice, listed by get_server_status under capabilities.aggregate_functions; a name it does not offer is refused with the list it does."
           },
           "processing_interval": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "Width in milliseconds of each interval the aggregate is computed over. 0 (the default) makes the whole range a single interval, giving one result. Only meaningful with `aggregate_function`."
           }
@@ -1096,27 +1104,28 @@
       "reportsCompleteness": true,
       "description": "Read events the OPC UA server stored, for a time range that has already passed. subscribe_events only sees what arrives after you subscribe, so it cannot answer 'what happened overnight' or 'what fired in the ten minutes before the line stopped' — the events are gone by the time anyone asks. This reads them back out of the server's own event archive instead. Same records as read_events and the same fields, so an alarm looks identical whether it was watched live or recovered afterwards. Needs a server that reports AccessHistoryEventsCapability — storing values and storing events are separate features and many servers do one without the other — and against one that does not, a call is refused with capability_not_supported and what to use instead. Point node_id at the notifier that emits the events — the Server object by default, which is where events are collected on most servers. The structured result's `completeness` says whether the range held more events than came back.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The notifier node whose stored events to read. Defaults to the Server object 'ns=0;i=2253', which is where most servers collect events. This is the same node subscribe_events takes."
           },
           "start_time": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Start of the time range, ISO-8601 with a timezone: '2026-09-09T12:00:00Z' or '2026-09-09T14:00:00+02:00'. A timestamp with no timezone is refused rather than guessed. Defaults to one hour before `end_time`."
           },
           "end_time": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "End of the time range, ISO-8601 with a timezone. Defaults to now."
           },
           "num_values": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Maximum number of events to return, capped at 5000. 0 (the default) means as many as that cap allows, not every event in the range — an alarm burst can be tens of thousands of events, and asking for all of them is a request that never returns."
           },
           "severity_min": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Keep only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event. Filtered here rather than by the server, exactly as subscribe_events does, so a server that mishandles a filter cannot silently drop events."
           }
@@ -1134,6 +1143,7 @@
       "resultShape": "serverStatus",
       "description": "Report whether this MCP server is connected to the OPC UA server and what that server says about itself: its endpoint and connection security, its ServerStatus (state, current time, start time, build info) and its NamespaceArray as index -> URI. The one tool that answers while the connection is down — it reports 'connected': false and why, rather than failing — so it is both the health check and the first thing to call when another tool cannot reach the server. The namespace array is also how to tell which 'ns=' index belongs to which namespace URI on this server. 'diagnostics' is the server's own ServerDiagnosticsSummary when it publishes one — session and subscription counts, and how many sessions and requests it has rejected — which is what separates 'the server is slow' from 'the server is refusing us'. OPC UA leaves diagnostics optional, so null there means this server does not say, not zero. 'capabilities' says which optional features — value history, event history, aggregates and their names — the server was found to offer, on which session and when: the answer to why read_opcua_history or read_event_history was refused.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {},
         "required": [],
@@ -1150,6 +1160,7 @@
       "reportsCompleteness": true,
       "description": "List the active OPC UA data-change subscriptions, each with the value changes buffered for it since it was created. This is how to collect what subscribe_opcua_nodes has been watching; the same document is also readable as the 'opcua://subscriptions' resource.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {},
         "required": [],
@@ -1165,14 +1176,15 @@
       "resultShape": "eventRecords",
       "description": "List the alarm and condition instances the server is currently retaining — those that are active, unacknowledged, or both. Asks the server for them directly (the ConditionRefresh method), so the answer is the current state of the plant rather than whatever this MCP server happened to be listening for. Use this to answer 'what is wrong right now'; use read_events to see what has happened since you last looked.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The notifier node whose conditions to list. Defaults to the Server object 'ns=0;i=2253'."
           },
           "timeout_seconds": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "How long to wait for the server to finish sending its retained conditions (default 5). Running out is an error, not an empty list: a partial answer cannot be told apart from 'no alarms'."
           }
@@ -1195,6 +1207,7 @@
       "resultShape": "writeResults",
       "description": "Write a value to one or more OPC UA nodes. THIS CHANGES PHYSICAL EQUIPMENT: a setpoint written here moves a real machine. Each node comes back with the OPC UA status the server answered, in the order asked, so a batch where one node was rejected still reports what the others did. A batch is not a transaction: OPC UA lets some writes land while others are refused, and nothing is rolled back. Without `data_type` this server reads each node first to learn its type and converts the value to match, which costs a round trip and cannot work for a write-only node; give `data_type` to skip that and to be explicit about what is being written. Under the 'operator' profile only nodes on the configured allowlist may be written, and one forbidden target rejects the whole batch before anything is sent.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "nodes": {
@@ -1210,27 +1223,12 @@
                   "description": "The OPC UA node ID to write to. Example: 'ns=2;i=2'."
                 },
                 "value": {
+                  "type": ["boolean", "number", "string", "object", "array"],
                   "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. A value that does not convert is reported for that node and not written."
                 },
                 "data_type": {
-                  "type": "string",
-                  "enum": [
-                    "Boolean",
-                    "SByte",
-                    "Byte",
-                    "Int16",
-                    "UInt16",
-                    "Int32",
-                    "UInt32",
-                    "Int64",
-                    "UInt64",
-                    "Float",
-                    "Double",
-                    "String",
-                    "DateTime",
-                    "Guid",
-                    "ByteString"
-                  ],
+                  "type": ["string", "null"],
+                  "enum": ["Boolean", "SByte", "Byte", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64", "Float", "Double", "String", "DateTime", "Guid", "ByteString", null],
                   "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
                 }
               },
@@ -1256,6 +1254,7 @@
       "resultShape": "methodResult",
       "description": "Call a method on an OPC UA object. THIS CHANGES PHYSICAL EQUIPMENT: a method here starts, stops or reconfigures a real process, and unlike a write it cannot be assumed safe to repeat. Arguments are converted to the types the method declares — this server reads the method's InputArguments definition, so a Boolean argument is sent as a Boolean and an Int32 as an Int32 rather than everything becoming a Double or a String. The method's output arguments come back in `outputs`. Under the 'operator' profile only the (object, method) pairs on the configured allowlist may be called.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "object_node_id": {
@@ -1267,7 +1266,7 @@
             "description": "The OPC UA node ID of the method to call. Example: 'ns=2;i=2'."
           },
           "arguments": {
-            "type": "array",
+            "type": ["array", "null"],
             "maxItems": 64,
             "description": "Arguments in the order the method declares them, at most 64. Each is converted to the declared type, so pass true rather than 'true' where you can; a string is parsed when the method expects a number or a boolean. A declared type derived from a built-in one is sent as that built-in type (a Duration as a Double). For a method that publishes no argument types, a boolean is sent as a Boolean, a number or numeric string as a Double and any other string as a String; null, arrays and objects are refused rather than guessed.",
             "items": {}
@@ -1287,6 +1286,7 @@
       "reportsCompleteness": true,
       "description": "Watch one or more OPC UA nodes for value changes instead of polling them. The OPC UA server pushes each new value into a buffer this MCP server keeps; collect them with list_subscriptions or the 'opcua://subscriptions' resource. This is the right way to answer 'tell me when this changes' or 'what has this been doing' over a short window — repeatedly calling read_opcua_nodes both misses changes between calls and costs a round trip each time. Each node gets its own subscription record and its own ID; cancel them with unsubscribe_opcua_nodes. Subscriptions are re-established automatically if the connection drops.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_ids": {
@@ -1296,33 +1296,33 @@
             "description": "The OPC UA node IDs to monitor. Example: ['ns=2;i=3']. A single node is a one-element list. Each gets its own OPC UA subscription, and this server holds at most 200 at a time."
           },
           "publishing_interval": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "How often (ms) the OPC UA server publishes queued changes. Default 1000. Clamped to at least 50."
           },
           "sampling_interval": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "How often (ms) the OPC UA server samples each node. 0 (the default) means sample at `publishing_interval`; a shorter interval queues several readings per publish."
           },
           "buffer_size": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "How many of the most recent changes to retain per subscription; older ones are discarded. Default 20, clamped to 1..1000."
           },
           "deadband_type": {
-            "type": "string",
-            "enum": ["none", "absolute", "percent"],
+            "type": ["string", "null"],
+            "enum": ["none", "absolute", "percent", null],
             "description": "Filter out changes too small to be worth reporting (OPC UA Part 4 §7.22). 'none' (the default) reports every change the server samples, which on a noisy analogue tag fills the buffer with sensor jitter in about a second. 'absolute' compares against `deadband_value` in the node's own engineering units. 'percent' reads `deadband_value` as a percentage of the node's EURange, and needs the node to publish one."
           },
           "deadband_value": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "How far the value must move to be reported, in engineering units for 'absolute' and in percent of EURange for 'percent'. Ignored when `deadband_type` is 'none' or unset; required when it is not."
           },
           "data_change_trigger": {
-            "type": "string",
-            "enum": ["status", "statusValue", "statusValueTimestamp"],
+            "type": ["string", "null"],
+            "enum": ["status", "statusValue", "statusValueTimestamp", null],
             "description": "What counts as a change. 'statusValue' (the default) reports a change of value or of OPC UA status. 'status' reports only status transitions — useful for watching a tag go bad without caring what it reads. 'statusValueTimestamp' also reports a re-sample that changed nothing but the timestamp, which is how to tell 'the value is steady' from 'the value stopped updating'."
           }
         },
@@ -1340,6 +1340,7 @@
       "reportsCompleteness": true,
       "description": "Cancel one or more active data-change subscriptions and discard what they had buffered. Returns the subscriptions as they were at the moment they were cancelled, so anything still buffered can be read one last time. An ID that is not active is an error naming it, and no subscription is cancelled.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "subscription_ids": {
@@ -1362,19 +1363,20 @@
       "resultShape": "eventSubscription",
       "description": "Start buffering OPC UA events (alarms, condition changes, plain events) from a notifier node. Returns at once; the events themselves are collected in the background and read with read_events. Calling it again for the same node replaces the subscription and discards what it had buffered. Use this to watch for things happening; use list_active_alarms for what is wrong right now.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The notifier node to subscribe to. Defaults to the Server object 'ns=0;i=2253', which is where most servers publish every event they raise."
           },
           "severity_min": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Buffer only events of at least this OPC UA severity (1-1000). Default 0, which keeps every event."
           },
           "buffer_size": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "How many events to hold before the oldest are dropped (default 100, clamped to 10000). read_events reports how many were dropped."
           }
@@ -1393,14 +1395,15 @@
       "reportsCompleteness": true,
       "description": "Read the events buffered by subscribe_events, oldest first. The events returned are removed from the buffer, so a second call returns only what has arrived since. If the buffer overflowed in the meantime, the result says how many were dropped rather than quietly skipping them — in the structured result's `completeness`, which also says whether more are still buffered.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "node_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The subscribed notifier node to read from, as passed to subscribe_events. Defaults to the Server object 'ns=0;i=2253'."
           },
           "limit": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "minimum": 0,
             "description": "Maximum number of events to return (default 50)."
           }
@@ -1423,6 +1426,7 @@
       "resultShape": "acknowledgement",
       "description": "Acknowledge an alarm or condition, identified by the event_id of the event that reported it (from list_active_alarms or read_events). An acknowledgement tells the server an operator has seen the alarm; it does not clear the underlying condition, and it is visible to every other client. Disabled unless the deployment policy explicitly allows it.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "event_id": {
@@ -1430,11 +1434,11 @@
             "description": "The 'event_id' of the event that reported the alarm, exactly as returned (base64)."
           },
           "comment": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Comment to record with the acknowledgement, e.g. who is dealing with it."
           },
           "condition_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "NodeId of the condition instance to acknowledge. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
           }
         },
@@ -1456,6 +1460,7 @@
       "resultShape": "alarmAction",
       "description": "Confirm, annotate or shelve an alarm — the rest of the operator workflow that acknowledge_alarm starts. 'confirm' is the second stage of OPC UA's acknowledge→confirm handshake: not merely 'I have seen this' but 'I have dealt with it'. 'comment' attaches a note without changing the alarm's state. 'shelve' silences a chattering nuisance alarm until it returns to normal, and 'shelveFor' does the same for a set number of milliseconds, after which it comes back whether or not anyone remembers to unshelve it. 'unshelve' puts it back on the board immediately. Every action is visible to every other client on the server, and none of them clears the underlying condition. Disabled unless the deployment policy explicitly allows it. Separate from acknowledge_alarm only because merging the two would rename it out from under every existing caller; they take the same arguments and answer in the same shape.",
       "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "event_id": {
@@ -1468,16 +1473,16 @@
             "description": "What to do. 'acknowledge' is exactly what acknowledge_alarm does, here so one tool can do the whole workflow. 'confirm' needs a condition whose type declares ConfirmedState; 'shelve', 'shelveFor' and 'unshelve' need one that declares ShelvingState. A server that offers neither refuses the call rather than silently doing nothing."
           },
           "comment": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "Note to record with the action, e.g. why it is being shelved. Used by 'confirm' and 'comment'; ignored by the shelving actions, which OPC UA gives no comment argument."
           },
           "shelve_duration_ms": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "description": "How long to shelve for, in milliseconds. Required with action 'shelveFor' and refused with any other — 'shelve' means 'until the alarm clears', and accepting a duration there would silently ignore it."
           },
           "condition_id": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "NodeId of the condition instance to act on. Only needed when the event did not come from this server's own list_active_alarms / read_events output, which is where the condition behind an event_id is otherwise remembered from."
           }
         },

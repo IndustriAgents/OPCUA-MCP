@@ -35,6 +35,7 @@ import {
   notConnectedMessage,
   stillConnectingMessage,
 } from "./connection.js";
+import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
@@ -1016,7 +1017,7 @@ export class OpcuaTools {
 
       let result;
       try {
-        result = await this.dispatch(name, args);
+        result = await this.dispatch(spec.name, args);
       } catch (error) {
         if (!isConnectionError(error)) throw error;
         result = await this.recover(spec, args, callId, audit, session, error);
@@ -1163,8 +1164,11 @@ export class OpcuaTools {
   }
 
   /** Run one tool. The caller has already authorized it and ensured a session. */
-  private async dispatch(name: string, args: Record<string, unknown>) {
+  private async dispatch(name: ToolName, args: Record<string, unknown>) {
     switch (name) {
+      case "get_server_status":
+        return statusResult(await this.getServerStatus());
+
       case "read_opcua_nodes":
         return await this.readOpcuaNodes(args.node_ids as string[]);
 
@@ -1266,8 +1270,10 @@ export class OpcuaTools {
           args.condition_id as string | undefined
         );
 
-      default:
-        throw new Error(message("unknownTool", { tool: name }));
+      default: {
+        const unhandled: never = name;
+        throw new Error(message("unknownTool", { tool: unhandled }));
+      }
     }
   }
 

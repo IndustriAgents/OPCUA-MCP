@@ -345,3 +345,27 @@ describe("requests served while the warm-up is still running", () => {
     }
   );
 });
+
+const FAILURES = JSON.parse(
+  readFileSync(join(ROOT, "tests/fixtures/connection-failures.json"), "utf8")
+).cases;
+const { StatusCodes } = await import("node-opcua-client");
+
+function nativeFailure(testCase) {
+  const error = new Error(testCase.message ?? "");
+  if (["timeout", "futureTimeout"].includes(testCase.kind)) error.name = "TimeoutError";
+  if (testCase.kind === "socket") error.code = testCase.code;
+  if (testCase.kind === "status") error.statusCode = StatusCodes[testCase.code];
+  if (!testCase.wrapped) return error;
+  const wrapper = new Error("Operation failed", { cause: error });
+  if (testCase.cycle) error.cause = wrapper;
+  return wrapper;
+}
+
+describe("native failure recovery (shared fixture)", () => {
+  for (const testCase of FAILURES) {
+    it(testCase.name, () => {
+      assert.equal(isConnectionError(nativeFailure(testCase)), testCase.expected);
+    });
+  }
+});

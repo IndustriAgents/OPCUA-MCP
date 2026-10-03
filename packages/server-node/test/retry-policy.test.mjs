@@ -505,3 +505,77 @@ describe("one outage, one rebuild", () => {
     assert.equal(seen.size, 4);
   });
 });
+
+describe("a service timeout preserves the retry policy (#157 B14)", () => {
+  for (const wrapped of [false, true]) {
+    const timeout = () => {
+      const error = new Error("");
+      error.name = "TimeoutError";
+      return wrapped ? new Error("Operation failed", { cause: error }) : error;
+    };
+    it(`retries a read (wrapped=${wrapped})`, async () => {
+      const { tools, state } = harness({ outcomes: [timeout()] });
+      const result = await tools.callTool({
+        params: { name: "read_opcua_nodes", arguments: { node_ids: ["ns=2;i=1"] } },
+      });
+      assert.equal(result.isError, undefined);
+      assert.equal(state.reconnects, 1);
+      assert.equal(state.attempts.length, 2);
+    });
+    it(`never resends a write (wrapped=${wrapped})`, async () => {
+      const { tools, state } = harness({ env: OPERATOR, outcomes: [timeout()] });
+      const result = await tools.callTool({
+        params: {
+          name: "write_opcua_nodes",
+          arguments: { nodes: [{ node_id: "ns=2;i=5", value: 99.9 }] },
+        },
+      });
+      assert.equal(state.attempts.length, 1);
+      assert.equal(state.reconnects, 1);
+      assert.equal(result.isError, true);
+      assert.equal(
+        result.content[0].text,
+        message("uncertainOutcome", {
+          tool: "write_opcua_nodes",
+          reason: wrapped ? "Operation failed" : "TimeoutError",
+          targets: "node_ids=ns=2;i=5",
+        })
+      );
+    });
+  }
+});
+
+it("keeps a socket cause through the real write handler and never resends", async () => {
+  const { tools, state } = harness({ env: OPERATOR });
+  tools.dispatch = OpcuaTools.prototype.dispatch;
+  tools.operationLimits = async () => ({});
+  tools.checkWriteBounds = async () => {};
+  let writes = 0;
+  tools.requireSession = () => ({
+    write: async () => {
+      writes += 1;
+      const failure = new Error("transport failed");
+      failure.code = "ECONNRESET";
+      throw failure;
+    },
+  });
+  const result = await tools.callTool({
+    params: {
+      name: "write_opcua_nodes",
+      arguments: {
+        nodes: [{ node_id: "ns=2;i=5", value: 99.9, data_type: "Double" }],
+      },
+    },
+  });
+  assert.equal(writes, 1);
+  assert.equal(state.reconnects, 1);
+  assert.equal(result.isError, true);
+  assert.equal(
+    result.content[0].text,
+    message("uncertainOutcome", {
+      tool: "write_opcua_nodes",
+      reason: "Failed to write nodes: transport failed",
+      targets: "node_ids=ns=2;i=5",
+    })
+  );
+});

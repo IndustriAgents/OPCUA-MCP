@@ -116,3 +116,63 @@ def test_the_uncertain_outcome_never_carries_the_value_being_written():
 
 def test_a_guardless_tool_has_nothing_to_name():
     assert describe_targets(SPECS["read_opcua_nodes"], {"node_ids": ["ns=2;i=1"]}) == "unknown"
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("control", [False, True], ids=["read", "write"])
+async def test_a_service_timeout_keeps_the_retry_policy(monkeypatch, wrapped, control):
+    from types import SimpleNamespace
+
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+    from opcua_mcp_server.policy import ToolPolicy, parse_policy_config
+    from opcua_mcp_server.server import create_server
+    from opcua_mcp_server.state import ServerState
+
+    policy = ToolPolicy(
+        parse_policy_config(
+            {
+                "OPCUA_PROFILE": "operator",
+                "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+                "OPCUA_SERVER_CERT": "/pki/server.pem",
+                "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5",
+            }
+        )
+    )
+    state = ServerState(policy=policy)
+    attempts = []
+    rebuilds = []
+    connection = SimpleNamespace(
+        connecting=False,
+        session_id="session-1",
+        session_generation=1,
+        ensure_connected=lambda: None,
+        reconnect=lambda session: rebuilds.append(session),
+    )
+    state.connection = connection
+    mcp = create_server(state)
+
+    async def operation(self, name, arguments, context):
+        attempts.append(name)
+        if len(attempts) == 1:
+            error = TimeoutError()
+            if wrapped:
+                raise ToolError("Operation failed") from error
+            raise error
+        return "ok"
+
+    monkeypatch.setattr(MCPServer, "call_tool", operation)
+    name = "write_opcua_nodes" if control else "read_opcua_nodes"
+    arguments = (
+        {"nodes": [{"node_id": "ns=2;i=5", "value": 99.9}]}
+        if control
+        else {"node_ids": ["ns=2;i=1"]}
+    )
+    if control:
+        with pytest.raises(ToolError, match="whether it took effect is unknown"):
+            await mcp.call_tool(name, arguments)
+        assert attempts == [name]
+    else:
+        assert await mcp.call_tool(name, arguments) == "ok"
+        assert attempts == [name, name]
+    assert rebuilds == ["session-1"]

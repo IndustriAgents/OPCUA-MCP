@@ -487,8 +487,9 @@ What this project does about it, in both runtimes and from the same numbers
   accept a message of any size in any number of chunks.
 - **Enforces** them on what actually arrives, because advertising binds only a
   server that chooses to obey. The Node runtime hands both to `node-opcua`, which
-  enforces them itself. The Python runtime wraps `SecureConnection._receive` so a
-  message past `maxChunkCount` chunks raises, the buffered chunks are dropped,
+  enforces them itself. The Python runtime checks `maxChunkSize` from the wire header before reading
+  the body, and checks `maxMessageSize` and `maxChunkCount` during reassembly.
+  A limit violation raises `UaError`, the buffered chunks are dropped,
   and the connection layer rebuilds the channel the way it does for any other
   dead session.
 

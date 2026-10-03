@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — enforce all Python receive bounds (#175)
+- Reject chunks over `maxChunkSize` before reading their bodies and reject
+  cumulative messages over `maxMessageSize`, in addition to the existing chunk
+  count guard. All limits come from the shared transport contract; refusal
+  releases buffered chunks and fails the channel.
+
 ### Changed — the tool catalogue no longer moves with the plant (#140)
 - **`tools/list` advertises every tool the contract defines, with the same
   schema, whatever the OPC UA endpoint is doing.** It used to be filtered by

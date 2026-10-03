@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   includes unrequested preceding/following values or `BadBoundNotFound`
   placeholders; forward continuation repeats only the boundary timestamp.
 
+### Fixed — preserve standard structured readings as JSON (#171)
+- Library-known namespace-zero ExtensionObjects now retain their original UA
+  field names and values, including nested structures and arrays, on both runtimes.
+  LocalizedText fields retain Locale and Text. Opaque or unsupported structures
+  carry `{"$opcua":"undecodableExtensionObject"}` instead of a library debug string.
+
 ### Changed — the tool catalogue no longer moves with the plant (#140)
 - **`tools/list` advertises every tool the contract defines, with the same
   schema, whatever the OPC UA endpoint is doing.** It used to be filtered by

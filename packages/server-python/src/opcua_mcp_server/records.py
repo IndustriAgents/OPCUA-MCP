@@ -26,6 +26,7 @@ from typing import Any
 
 from .datetimes import format_iso_utc
 from .node_ids import canonical_node_id
+from .structures import extension_to_json
 
 #: An absent StatusCode means Good in OPC UA, so name it rather than return None.
 _DEFAULT_STATUS = "Good"
@@ -111,6 +112,8 @@ def scalar_to_json(value: Any, type_name: str = "") -> Any:
         return _node_id_to_json(value)
     if type_name == "QualifiedName":
         return f"{value.NamespaceIndex}:{value.Name}"
+    if type_name == "ExtensionObject":
+        return extension_to_json(value, scalar_to_json)
 
     # `bool` first: it is a subclass of `int` in Python, and must stay a boolean.
     if isinstance(value, bool):
@@ -132,10 +135,7 @@ def scalar_to_json(value: Any, type_name: str = "") -> Any:
     if isinstance(value, (list, tuple)):
         return [scalar_to_json(item, type_name) for item in value]
 
-    # Structured and opaque types (ExtensionObject, XmlElement, …) degrade to a
-    # string. Those are not the shape of anything a server historises as a
-    # variable value, and a faithful cross-runtime encoding of them would be a
-    # much larger undertaking than this record is worth.
+    # Remaining opaque scalar types (for example XmlElement) retain their text.
     return str(value)
 
 

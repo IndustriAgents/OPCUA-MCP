@@ -134,6 +134,14 @@
       "type": "Null",
       "expected": null,
       "note": "No value at all — an aggregate interval the server holds no data for."
-    }
+    },
+    {"name": "extension_range", "type": "ExtensionObject", "expected": {"Low": -50, "High": 250}},
+    {"name": "extension_eu_information", "type": "ExtensionObject", "expected": {"NamespaceUri": "http://www.opcfoundation.org/UA/units/un/cefact", "UnitId": 4408652, "DisplayName": {"Locale": "en", "Text": "°C"}, "Description": {"Locale": "en", "Text": "degrees Celsius"}}},
+    {"name": "extension_argument", "type": "ExtensionObject", "expected": {"Name": "target", "DataType": "ns=0;i=11", "ValueRank": 2, "ArrayDimensions": [2, 3], "Description": {"Locale": "en", "Text": "Target"}}},
+    {"name": "extension_axis_information", "type": "ExtensionObject", "expected": {"EngineeringUnits": {"NamespaceUri": "http://www.opcfoundation.org/UA/units/un/cefact", "UnitId": 4408652, "DisplayName": {"Locale": "en", "Text": "°C"}, "Description": {"Locale": "en", "Text": "degrees Celsius"}}, "EURange": {"Low": -50, "High": 250}, "Title": {"Locale": "en", "Text": "Temperature"}, "AxisScaleType": 0, "AxisSteps": [1.5, 2.5]}},
+    {"name": "extension_range_array", "type": "ExtensionObject", "expected": [{"Low": -50, "High": 250}, {"Low": 0, "High": 100}]},
+    {"name": "extension_opaque", "type": "ExtensionObject", "expected": {"$opcua": "undecodableExtensionObject"}},
+    {"name": "extension_variant_field", "type": "ExtensionObject", "expected": {"Key": {"NamespaceIndex": 2, "Name": "target"}, "Value": {"Low": -50, "High": 250}}},
+    {"name": "extension_cycle", "type": "ExtensionObject", "expected": {"$opcua": "undecodableExtensionObject"}}
   ]
 }

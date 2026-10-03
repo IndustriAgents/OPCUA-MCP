@@ -3,7 +3,7 @@ import copy
 import logging
 import random
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from opcua import Server, ua
 from opcua.common.node import Node
@@ -352,6 +352,22 @@ class IndustrialControlSystem:
                 ua.StatusCode(ua.StatusCodes.BadNotReadable),
             )
         )
+
+        # A ByteString and a DateTime to write to with a matching data_type, so
+        # the write codec's own refusals (an over-long ByteString, a zone-less
+        # DateTime) are reached rather than stopped earlier by a type mismatch.
+        scratch_bytes = scratch_folder.add_variable(
+            ua.NodeId(121, 2),
+            ua.QualifiedName("ScratchBytes", 2),
+            ua.Variant(b"", ua.VariantType.ByteString),
+        )
+        scratch_bytes.set_writable(True)
+        scratch_datetime = scratch_folder.add_variable(
+            ua.NodeId(122, 2),
+            ua.QualifiedName("ScratchDateTime", 2),
+            ua.Variant(datetime(2026, 1, 1, tzinfo=timezone.utc), ua.VariantType.DateTime),
+        )
+        scratch_datetime.set_writable(True)
 
     @staticmethod
     def _retype(node: Node, type_definition: int):

@@ -94,6 +94,8 @@ Discover these any time with `browse_opcua_nodes`.
 | Line1 / LineLabel | `ns=2;i=117` | String | read/write |
 | Recipes / SecretRecipe | `ns=2;i=119` | String | read |
 | Scratch / WriteOnlySetpoint | `ns=2;i=120` | Double, AccessLevel `CurrentWrite` only | write |
+| Scratch / ScratchBytes | `ns=2;i=121` | ByteString | read/write |
+| Scratch / ScratchDateTime | `ns=2;i=122` | DateTime | read/write |
 
 > Method NodeIds account for the per-method `InputArguments`/`OutputArguments`
 > property nodes. Always browse the `Methods` folder rather than hard-coding.

@@ -1000,7 +1000,8 @@
     "alarmScopeUnreadable": "Condition {condition_id} could not be checked against the operator policy's alarm scope ({reason}), so nothing was acknowledged or changed.",
     "alarmSourceNotAllowed": "Condition {condition_id} is raised by {source_node_id}, which is not in the operator policy's alarm_sources. Nothing was acknowledged or changed.",
     "alarmTooSevere": "Condition {condition_id} has severity {severity}, above the operator policy's alarm_max_severity of {limit}, so a person has to handle it. Nothing was acknowledged or changed.",
-    "preconditionNotMet": "The operator policy allows changing {target} only while {requirement}; {node_id} is {current} now. Nothing was sent."
+    "preconditionNotMet": "The operator policy allows changing {target} only while {requirement}; {node_id} is {current} now. Nothing was sent.",
+    "preconditionUnresolved": "The operator policy has an interlock (preconditions) on {entry}, which does not resolve on this server, so no write or method call is sent until it does. get_server_status reports it under policy_check."
   },
   "writeSkips": {
     "$comment": "Why write_opcua_nodes did not send one node's write, as that record's `error`, with the status named beside each in the spec. Decided from the node's own attributes (NodeClass, AccessLevel, UserAccessLevel, DataType, ValueRank, ArrayDimensions), read once per session and cached. These are per-node, like a value that will not convert: the node cannot take this write whoever asks, and the other writes in the batch still go. A missing attribute skips its check and leaves the decision to the OPC UA server. Pinned by tests/fixtures/write-plan.json for both runtimes. Placeholders are {name}.",

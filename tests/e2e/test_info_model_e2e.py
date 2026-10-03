@@ -670,7 +670,12 @@ async def test_an_alarm_outside_the_policys_sources_is_not_acknowledged(
     async with connect(server) as session:
         alarm = await _active_alarm(session)
         refused = await session.call_tool(
-            "acknowledge_alarm", {"condition_id": alarm["condition_id"], "comment": "e2e"}
+            "acknowledge_alarm",
+            {
+                "event_id": alarm["event_id"],
+                "condition_id": alarm["condition_id"],
+                "comment": "e2e",
+            },
         )
 
     assert refused.is_error is True, impl
@@ -689,7 +694,12 @@ async def test_an_alarm_from_a_listed_source_is_acknowledged(impl, alarm_opcua_s
     async with connect(server) as session:
         alarm = await _active_alarm(session)
         acknowledged = await session.call_tool(
-            "acknowledge_alarm", {"condition_id": alarm["condition_id"], "comment": "e2e"}
+            "acknowledge_alarm",
+            {
+                "event_id": alarm["event_id"],
+                "condition_id": alarm["condition_id"],
+                "comment": "e2e",
+            },
         )
 
     assert not acknowledged.is_error, f"{impl}: {text_of(acknowledged)}"
@@ -710,7 +720,12 @@ async def test_an_alarm_above_the_policys_severity_is_left_to_a_person(
     async with connect(server) as session:
         alarm = await _active_alarm(session)
         refused = await session.call_tool(
-            "acknowledge_alarm", {"condition_id": alarm["condition_id"], "comment": "e2e"}
+            "acknowledge_alarm",
+            {
+                "event_id": alarm["event_id"],
+                "condition_id": alarm["condition_id"],
+                "comment": "e2e",
+            },
         )
 
     assert refused.is_error is True, impl
@@ -721,3 +736,34 @@ async def test_an_alarm_above_the_policys_severity_is_left_to_a_person(
         severity=alarm["severity"],
         limit=severity - 1,
     ), impl
+
+
+async def test_an_interlock_whose_target_does_not_resolve_stops_all_control(
+    impl, opcua_server, tmp_path
+):
+    """An interlock that guards nothing must not fail open.
+
+    The precondition names a path the server does not have, while the node it was
+    meant for is allowlisted by id: without this, the write would go through with
+    the interlock silently off.
+    """
+    missing = "/Objects/IndustrialControlSystem/Scratch/NoSuchSetpoint"
+    policy = {
+        "profile": "operator",
+        "allow_insecure_control": True,
+        "control": {
+            "writable_nodes": [INTERLOCKED_SETPOINT],
+            "preconditions": [
+                {"targets": [missing], "require": [{"node": INTERLOCK_PERMIT, "equals": True}]}
+            ],
+        },
+    }
+    async with connect(with_policy(impl, opcua_server, policy, str(tmp_path))) as session:
+        status = await server_status(session)
+        refused = await write(session, {"node_id": INTERLOCKED_SETPOINT, "value": 1})
+
+    assert refused.is_error is True, impl
+    assert text_of(refused) == sentence("errors", "preconditionUnresolved", entry=missing), impl
+    assert {"entry": missing, "problem": sentence("policyCheck", "unresolved", entry=missing)} in (
+        status["policy_check"]["findings"]
+    ), f"{impl}: {status['policy_check']}"

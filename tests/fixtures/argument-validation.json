@@ -202,7 +202,7 @@
       "name": "an argument from another tool",
       "tool": "read_opcua_nodes",
       "arguments": { "node_ids": ["ns=2;i=1"], "depth": 2 },
-      "error": "read_opcua_nodes has no argument depth. It accepts: node_ids."
+      "error": "read_opcua_nodes has no argument depth. It accepts: node_ids, include_write_access."
     },
     {
       "name": "an unknown key inside a write entry",
@@ -221,7 +221,7 @@
       "name": "an argument named constructor",
       "tool": "read_opcua_nodes",
       "arguments": { "node_ids": ["ns=2;i=1"], "constructor": 1 },
-      "error": "read_opcua_nodes has no argument constructor. It accepts: node_ids."
+      "error": "read_opcua_nodes has no argument constructor. It accepts: node_ids, include_write_access."
     },
     {
       "name": "an argument named toString",
@@ -234,7 +234,7 @@
       "name": "an argument named __proto__",
       "tool": "read_opcua_nodes",
       "arguments": { "node_ids": ["ns=2;i=1"], "__proto__": { "polluted": true } },
-      "error": "read_opcua_nodes has no argument __proto__. It accepts: node_ids."
+      "error": "read_opcua_nodes has no argument __proto__. It accepts: node_ids, include_write_access."
     },
     {
       "name": "an inherited name inside a write entry",

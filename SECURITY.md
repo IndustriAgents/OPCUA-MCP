@@ -277,7 +277,9 @@ or matches more than one child at any step, allows nothing.
 - **`preconditions`** are interlocks: a write to a `target` or a call to one of
   the `methods` is refused unless every `require` holds when it is sent —
   `equals`, `in`, or `min`/`max` against the node's current value. A requirement
-  node that cannot be read, or reads Bad, does not hold.
+  node that cannot be read, or reads Bad, does not hold. A target or method that
+  does not resolve on the session refuses every write and method call until it
+  does — an interlock that guards nothing must not quietly switch itself off.
 - **`alarm_sources`** and **`alarm_max_severity`** scope the alarm tools: a
   condition is acknowledged or acted on only when its `SourceNode` is listed and
   its `Severity` is at most the limit. A condition whose source or severity

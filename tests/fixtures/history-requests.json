@@ -1,0 +1,8 @@
+{
+  "$comment": "The raw HistoryRead request on both runtimes, without library-default bounds (#172). Cases name meaningful windows: a range opening before data exists and an inclusive forward continuation must not return a preceding bound or a BadBoundNotFound placeholder.",
+  "cases": [
+    {"name": "window-before-first-value", "start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z", "count": 25, "returnBounds": false},
+    {"name": "inclusive-continuation", "start": "2026-01-01T12:00:00Z", "end": "2026-01-02T00:00:00Z", "count": 25, "returnBounds": false},
+    {"name": "backward-window", "start": "2026-01-02T00:00:00Z", "end": "2026-01-01T00:00:00Z", "count": 25, "returnBounds": false}
+  ]
+}

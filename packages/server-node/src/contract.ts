@@ -79,6 +79,7 @@ export interface ToolSpec {
 
 export const CONTRACT: {
   resultShapes: Record<string, any>;
+  history: { rawReturnBounds: boolean };
   /** Optional server features, keyed by name; `$`-prefixed keys are prose. See
    *  capabilities.ts. */
   capabilities: Record<string, CapabilitySpec>;

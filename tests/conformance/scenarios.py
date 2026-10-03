@@ -782,9 +782,7 @@ def _iso(when: datetime) -> str:
 
 
 #: What a server puts where a bounding value would go when there is none.
-#: Both client libraries ask for bounds (ReturnBounds=true) by default, so a
-#: window that opens before the first stored value starts with one of these.
-#: It is a placeholder the server was asked for, not a stored reading (#172).
+#: Neither runtime requests bounds: these placeholders are a regression (#172).
 BOUND_STATUSES = {"BadBoundNotFound", "BadBoundNotSupported"}
 
 
@@ -822,10 +820,18 @@ async def history_raw(ctx: Context) -> Outcome:
         return failed(f"no history returned: {ctx.redact(result.text)}")
     if not all(_good(r.get("status")) for r in values):
         return failed(f"history statuses {sorted(set(_statuses(values)))}")
-    placeholders = f", plus {bounds} BadBoundNotFound bound placeholder(s)" if bounds else ""
-    return passed(
-        f"{len(values)} raw values{placeholders}", count=len(values), bound_placeholders=bounds
-    )
+    if bounds:
+        return failed(
+            "raw history contains unrequested bound placeholders", bound_placeholders=bounds
+        )
+    start = now - timedelta(minutes=10)
+    if any(
+        datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00")) < start
+        for r in values
+        if r.get("timestamp")
+    ):
+        return failed("raw history contains a reading before the requested start")
+    return passed(f"{len(values)} raw values", count=len(values), bound_placeholders=0)
 
 
 async def history_continuation(ctx: Context) -> Outcome:
@@ -880,21 +886,23 @@ async def history_continuation(ctx: Context) -> Outcome:
                 **evidence,
             )
         # Follow it the way the contract says: merge, call again, and skip
-        # records already seen by timestamp. A follow-up repeats more than the
-        # record at its inclusive start — with bounds requested, the server
-        # also returns the value just before it — so each call asks for the
-        # full count again rather than for exactly what is still missing.
+        # records already seen by timestamp. The inclusive boundary can repeat,
+        # but a preceding value or bound placeholder is a regression (#172).
         seen = {v.get("timestamp") for v in values}
         collected, calls, current = len(values), 1, first
         while collected < wanted and current and current.get("continuation") and calls < 20:
             arguments = {**arguments, **current["continuation"]}
             more = await session.call("read_opcua_history", arguments)
             calls += 1
-            fresh = [
-                v
-                for v in _history_values(_history_records(more))[0]
-                if v.get("timestamp") not in seen
-            ]
+            readings, more_bounds = _history_values(_history_records(more))
+            boundary = datetime.fromisoformat(arguments["start_time"].replace("Z", "+00:00"))
+            if more_bounds or any(
+                datetime.fromisoformat(v["timestamp"].replace("Z", "+00:00")) < boundary
+                for v in readings
+                if v.get("timestamp")
+            ):
+                return failed("continuation includes unrequested bounds or earlier readings")
+            fresh = [v for v in readings if v.get("timestamp") not in seen]
             if more.is_error:
                 current = None
                 break

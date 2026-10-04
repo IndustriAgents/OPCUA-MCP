@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract alarm application ports (#141)
+- Separate alarm duration checks, cached-condition lookup and result framing
+  from native refresh/action methods. Preserve caller-specific shapes, Good
+  subcodes, one service attempt and lazy session selection on refusals.
+
 ### Changed — extract event application ports (#141)
 - Separate event subscription settings, buffer drains, notices and history
   completeness from native services in both runtimes. Per-instance buffers,

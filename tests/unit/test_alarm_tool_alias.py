@@ -18,7 +18,7 @@ CASES = json.loads((ROOT / "tests/fixtures/alarm-tool-alias.json").read_text(enc
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
-def test_actual_alarm_handler(case, monkeypatch):
+async def test_actual_alarm_handler(case, monkeypatch):
     calls = []
 
     def call(requests):
@@ -36,15 +36,15 @@ def test_actual_alarm_handler(case, monkeypatch):
         request_context=SimpleNamespace(lifespan_context={"opcua_client": client})
     )
 
-    def invoke():
-        return getattr(server, case["tool"])(ctx=ctx, **case["arguments"])
+    async def invoke():
+        return await getattr(server, case["tool"])(ctx=ctx, **case["arguments"])
 
     if "error" in case:
         with pytest.raises(ToolError) as raised:
-            invoke()
+            await invoke()
         assert str(raised.value) == message(case["error"], **case["fields"])
     else:
-        assert invoke().structured_content["result"] == case["expected"]
+        assert (await invoke()).structured_content["result"] == case["expected"]
     assert len(calls) == 1
     assert calls[0].ObjectId == ua.NodeId(7, 2)
     assert calls[0].InputArguments[0].Value == b"\x01"

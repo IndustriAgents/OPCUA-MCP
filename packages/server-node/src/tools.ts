@@ -6,6 +6,8 @@
 import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { actOnAlarm, listAlarms } from "./application/alarms.js";
+import { NodeOpcuaAlarmPort } from "./adapters/opcua-alarms.js";
 import { subscribeEvents, readEvents, readEventHistory } from "./application/events.js";
 import { NodeOpcuaEventPort } from "./adapters/opcua-events.js";
 import { readHistory } from "./application/history.js";
@@ -61,14 +63,7 @@ import {
 import { notice } from "./notices.js";
 import { validateArguments } from "./validation.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
-import {
-  DEFAULT_NOTIFIER,
-  EVENT_DEFAULTS,
-  EventRecord,
-  EventSubscriptions,
-  alarmAction,
-  listActiveAlarms,
-} from "./events.js";
+import { DEFAULT_NOTIFIER, EVENT_DEFAULTS, EventSubscriptions } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { prettyJson } from "./result-text.js";
 import { describeSecurity, securityConfig } from "./security.js";
@@ -88,7 +83,6 @@ import {
   toolPolicy,
   valuesAt,
 } from "./policy.js";
-import { isGood } from "./status.js";
 import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
@@ -1343,34 +1337,12 @@ export class OpcuaTools {
     return historyResult(result.records, result.completeness, "eventHistoryTruncated");
   }
 
-  private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {
-    let alarms: EventRecord[];
-    try {
-      alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
-    } catch (error) {
-      throw new ToolFailure(
-        message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }),
-        {
-          cause: error,
-        }
-      );
-    }
-
-    this.events.remember(alarms);
-    return eventResult(alarms);
+  private alarmPort() {
+    return new NodeOpcuaAlarmPort(() => this.requireSession(), this.events);
   }
-
-  /** Both alarm tools, through one implementation.
-   *
-   * `acknowledge_alarm` is `act_on_alarm` with the action fixed, so there is only
-   * ever one copy of "find the condition, resolve the method, call it, report the
-   * status" to drift — the property the 17→13 consolidation was about, held to
-   * here rather than assumed.
-   *
-   * The refusal wording is the one difference: `acknowledge_alarm` has said
-   * `acknowledgeFailed` since it existed, and changing that would break a caller
-   * matching on it for no gain.
-   */
+  private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {
+    return eventResult(await listAlarms(this.alarmPort(), nodeId, timeoutSeconds));
+  }
   private async actOnAlarm(
     eventId: string,
     action: string,
@@ -1379,61 +1351,16 @@ export class OpcuaTools {
     conditionId: string | undefined,
     acknowledgement: boolean
   ) {
-    // A relationship between two arguments, which the contract's own schema
-    // cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
-    // on any other action would silently ignore it. Refusing says which action
-    // the caller probably meant.
-    if (action === "shelveFor" && durationMs === null) {
-      throw new ToolFailure(message("shelveForNeedsDuration"));
-    }
-    if (action !== "shelveFor" && durationMs !== null) {
-      throw new ToolFailure(message("shelveDurationNotAllowed", { action }));
-    }
-
-    const condition = conditionId || this.events.conditionFor(eventId);
-    if (!condition) {
-      throw new ToolFailure(message("unknownEventId", { event_id: eventId }));
-    }
-
-    const failed = (reason: string, cause?: unknown) =>
-      new ToolFailure(
-        acknowledgement
-          ? message("acknowledgeFailed", { condition_id: condition, reason })
-          : message("alarmActionFailed", { action, condition_id: condition, reason }),
-        { cause }
-      );
-
-    let statusCode;
-    try {
-      statusCode = await alarmAction(
-        this.requireSession(),
-        condition,
+    return objectResult(
+      await actOnAlarm(
+        this.alarmPort(),
         eventId,
         action,
         comment,
-        durationMs
-      );
-    } catch (error) {
-      throw failed(describeError(error), error);
-    }
-    // Good severity: an acknowledgement the server answered with a Good subcode
-    // happened, and reporting it as a failure invites a retry. The subcode is in
-    // `status`.
-    if (!isGood(statusCode)) {
-      throw failed(statusCode.name);
-    }
-
-    const record: Record<string, unknown> = {
-      event_id: eventId,
-      condition_id: canonicalNodeId(condition),
-      status: statusCode.name,
-    };
-    // `acknowledge_alarm` answers with the shape it always has; `act_on_alarm`
-    // adds the action even when acknowledging, because 'shelve' and 'shelveFor' are one argument apart
-    // and the record should say which one happened.
-    if (!acknowledgement) {
-      return objectResult({ ...record, action, status: statusCode.name });
-    }
-    return objectResult(record);
+        durationMs,
+        conditionId,
+        acknowledgement
+      )
+    );
   }
 }

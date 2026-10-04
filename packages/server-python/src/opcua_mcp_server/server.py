@@ -85,6 +85,7 @@ from .method_arguments import built_in_type, guess_variant
 from .node_ids import canonical_node_id
 from .node_metadata import AnalogInfo
 from .notices import notice
+from .numeric import json_text
 from .operation_limits import (
     browse_chunk,
     read_chunk,
@@ -1918,7 +1919,7 @@ def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: An
     wanted = as_number(value)
     if wanted is None:
         raise ToolError(
-            error_message("valueNotComparable", node_id=node_id, value=json.dumps(value))
+            error_message("valueNotComparable", node_id=node_id, value=json_text(value))
         )
     change = abs(wanted - present)
     if change > bound.max_change:

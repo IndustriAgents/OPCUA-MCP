@@ -23,6 +23,7 @@ import { toDate } from "./dates.js";
 import { ContractRefusal, message } from "./errors.js";
 import { MAX_BYTE_STRING_BYTES } from "./limits.js";
 import { exactInteger, numericText } from "./numeric.js";
+import { hasUnpairedSurrogate } from "./unicode-text.js";
 
 const INTEGER_RANGES = new Map<DataType, [bigint, bigint]>([
   [DataType.SByte, [-128n, 127n]],
@@ -147,12 +148,8 @@ function stringOnly(raw: unknown, dataType: DataType): string {
   if (typeof raw !== "string") {
     throw new Error(`${typeName(dataType)} values must be a JSON string`);
   }
-  // for-of combines valid UTF-16 pairs; a remaining surrogate cannot encode as UTF-8.
-  for (const character of raw) {
-    const code = character.codePointAt(0)!;
-    if (code >= 0xd800 && code <= 0xdfff) {
-      throw new Error(`${typeName(dataType)} values must not contain unpaired Unicode surrogates`);
-    }
+  if (hasUnpairedSurrogate(raw)) {
+    throw new Error(`${typeName(dataType)} values must not contain unpaired Unicode surrogates`);
   }
   return raw;
 }

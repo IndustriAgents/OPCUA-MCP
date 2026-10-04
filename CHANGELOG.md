@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QualifiedName and NodeId values, including arrays and inferred method arguments.
   Valid supplementary characters remain unchanged. Python JSON result and refusal
   text escapes lone surrogates consistently with Node.
+- Refuse malformed Unicode values and property names at the request boundary,
+  before validation or OPC UA work, with one shared error frame. Nonnumeric
+  max-change refusals now use the same compact JSON text, including Unicode.
 
 ### Fixed — hide unexpected tool crash messages consistently (#157 B19)
 - Unexpected feature failures expose only the contract’s tool-name frame on both

@@ -904,6 +904,7 @@
     "capabilityUnknown": "capability_unknown: {tool} needs {requirement}, and whether the OPC UA server at {url} offers it could not be determined on session generation {generation} ({reason}). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities.",
     "tooManyItems": "{tool} accepts at most {limit} entries in {argument}, got {count}. Nothing was sent to the OPC UA server; split the request.",
     "requestTooLarge": "{tool} arguments are {size} bytes of JSON, over the {limit}-byte limit on one request (limits.maxRequestBytes). Nothing was sent to the OPC UA server.",
+    "invalidUnicode": "{tool} argument {argument} contains an unpaired Unicode surrogate. Nothing was sent to the OPC UA server. Use valid Unicode text.",
     "stringTooLong": "{tool} argument {argument} is a string of {size} bytes, over the {limit}-byte limit on one string (limits.maxStringBytes). Nothing was sent to the OPC UA server.",
     "arrayTooLong": "{tool} argument {argument} has {count} items, over the {limit}-item limit on one array (limits.maxArrayItems). Nothing was sent to the OPC UA server.",
     "nestedTooDeep": "{tool} argument {argument} nests arrays or objects more than {limit} levels deep, counting the arguments themselves (limits.maxNestingDepth). Nothing was sent to the OPC UA server.",

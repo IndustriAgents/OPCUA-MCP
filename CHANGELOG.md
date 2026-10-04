@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — separate runtime, protocol and audit ownership (#141)
+- Move connection/cache/subscription lifecycle, protocol startup/shutdown and
+  audit construction into instance-owned modules. Cap central and extracted
+  modules at 400 lines and functions at complexity 25 in CI and release gates.
+
 ### Changed — extract protocol handlers and presenters (#141)
 - Move MCP tool signatures, contract dispatch and result/schema framing into
   small protocol modules. Preserve external names, default arguments, result

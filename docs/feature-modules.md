@@ -2,12 +2,12 @@
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
 extracts one feature at a time. **Reads, browse, writes, methods, value history, events, alarms, subscriptions and diagnostics have moved so far.**
-Other tools still use the existing execution and feature code.
+Every feature uses the shared execution and recovery pipeline; central modules compose instance-owned runtime and protocol adapters.
 
 | Layer | Python | Node | Ownership |
 |---|---|---|---|
 | Protocol registration/results | `protocol/tools.py`, `protocol/value_tools.py`, `protocol/monitoring_tools.py`, `protocol/results.py` | `protocol/dispatch.ts`, `protocol/results.ts` | Stable tool signatures, contract dispatch, context lookup, output schemas and MCP result conversion |
-| MCP adapter | `server.py:read_opcua_nodes` | `tools.ts:readOpcuaNodes` | Context lookup, injected port construction, protocol result/error conversion |
+| MCP adapter | `protocol/value_tools.py`, `protocol/monitoring_tools.py` | `protocol/feature-handlers.ts` | Context lookup, injected port construction, protocol result/error conversion |
 | Read use case and port | `application/read.py` | `application/read.ts` | Ordered logical reads, sequential service batches, one metadata lookup, JSON records |
 | Browse use case and port | `application/browse.py` | `application/browse.ts` | Path matching, bounded breadth-first traversal, filtering, cycle detection and completeness |
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
@@ -49,9 +49,7 @@ to check the adapter. Import and file-size checks in
 `tests/unit/test_feature_boundaries.py` enforce the new application and adapter
 boundaries. As subsequent features move, these checks apply to their modules.
 
-The remaining slices are
-extraction of the common execution pipeline and protocol-independent typed errors. This document does not claim
-that the central modules already meet #141's final size or dependency limits.
+Central `server.py` and `tools.ts`, and all new application, native, protocol and infrastructure modules, are capped at 400 lines by boundary tests.
 
 Browse uses normalized references rather than native NodeIds, names or enums.
 The native adapter drains reference continuation points, reads attributes and
@@ -158,5 +156,6 @@ uses an immutable catalogue of stateless functions. Node contract dispatch uses
 injected handler methods. Protocol modules import no native SDK and do not
 import the central server, and each is capped at 400 lines by boundary tests.
 Completeness-schema and limit-ownership checks follow the extracted owners.
-Native lifecycle/cache wiring and audit construction still need their final
-central-module ownership extraction.
+Native lifecycle/cache wiring lives in `adapters/opcua_lifecycle.py` and `adapters/opcua-runtime.ts`. Audit construction lives in `infrastructure/control_audit.py` and `infrastructure/control-audit.ts`; both consume plain connection facts. Python protocol lifecycle, signals, catalogue and invocation adapters have separate modules. The central entry points compose these owners and retain public compatibility exports. Tests for native history behavior target the extracted feature handler rather than manufacturing an uninitialized central server.
+
+CI and the release conformance action enforce a per-function complexity limit of 25 for the central composition modules and extracted application, native, protocol and infrastructure modules. Python uses Ruff’s McCabe rule; Node uses Oxlint’s modified cyclomatic rule, which counts contract dispatch switches as one branch. These limits complement the 400-line import-boundary tests. Run `npm run lint:complexity --prefix packages/server-node` and `uv run ruff check --select C901 packages/server-python/src/opcua_mcp_server/{server.py,application,adapters,protocol,infrastructure}` locally.

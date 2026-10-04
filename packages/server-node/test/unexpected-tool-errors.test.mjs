@@ -26,7 +26,7 @@ function harness(failure) {
     attempts++;
     throw failure;
   };
-  tools.getServerStatus = tools.dispatch;
+  tools.featureHandlers.getServerStatus = tools.dispatch;
   return { tools, attempts: () => attempts };
 }
 for (const c of fixture.cases)

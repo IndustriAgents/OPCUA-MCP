@@ -24,6 +24,10 @@ extend-exclude = ["packages/server-node/build", "packages/server-node/node_modul
 # rather than tear down the stdio transport.
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
 
+# C901 is scoped to the extracted feature/adapter/composition owners in CI.
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
 [tool.ruff.lint.per-file-ignores]
 # Tests reach into a sibling module by name (they run with the tests/ dir on
 # sys.path), and pytest fixtures legitimately shadow their own names.

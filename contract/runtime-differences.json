@@ -193,7 +193,7 @@
       "python": "python-opcua's exception text, for example a status code rendered by that library or a formatted traceback line from its handshake.",
       "node": "node-opcua's error message for the same failure.",
       "observable": true,
-      "rationale": "Every error frame comes from contract/tools.json -> errors and is compared in full by tests/e2e/test_runtime_differential.py. The reason is what the OPC UA library says went wrong; rewording it would lose information, and the decisions that depend on it (dead session, retry) key on status codes and errno values rather than on this text. This covers the library's own words only: a frame this project doubles, a reason one runtime raises and the other never does, or a crash one SDK hides are bugs, tracked in #157.",
+      "rationale": "Every error frame comes from contract/tools.json -> errors and is compared in full by tests/e2e/test_runtime_differential.py. The reason is what the OPC UA library says went wrong; rewording it would lose information, and the decisions that depend on it (dead session, retry) key on status codes and errno values rather than on this text. This covers anticipated library failures only. Unexpected feature failures expose the contract's tool-name frame on both runtimes, including their audit failure records, as asserted by tests/fixtures/unexpected-tool-errors.json. A doubled frame or a reason one runtime raises and the other never does is still a parity bug.",
       "evidence": [
         "contract/tools.json",
         "tests/e2e/test_runtime_differential.py",

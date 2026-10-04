@@ -321,11 +321,14 @@ def _without_sdk_prefix(name: str, error: BaseException) -> BaseException:
     failure. ``contract/tools.json`` -> ``errors`` now words both, and this is
     what stops the SDK re-framing one of them.
 
-    ``UnexpectedToolError`` is left exactly as it is: its message deliberately
-    carries nothing but the tool name, because the original was a crash and is
-    withheld from the client on purpose.
+    Unexpected failures expose only the contract's tool-name frame. Their
+    original cause remains internal for recovery classification and diagnosis.
     """
-    if isinstance(error, UnexpectedToolError) or not isinstance(error, ToolError):
+    if isinstance(error, UnexpectedToolError):
+        reported = UnexpectedToolError(error_message("unexpectedToolError", tool=name))
+        reported.__cause__ = error.__cause__
+        return reported
+    if not isinstance(error, ToolError):
         return error
     prefix = f"{_SDK_TOOL_ERROR_PREFIX}{name}: "
     text = str(error)

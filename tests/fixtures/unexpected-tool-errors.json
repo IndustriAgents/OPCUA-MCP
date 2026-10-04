@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {"tool":"read_opcua_nodes","arguments":{"node_ids":["ns=2;i=5"]},"internal":"crash containing opaque-test-secret","public":"Error executing tool read_opcua_nodes"},
+    {"tool":"list_subscriptions","arguments":{},"internal":"unexpected café 崩溃","public":"Error executing tool list_subscriptions"},
+    {"tool":"get_server_status","arguments":{},"internal":"private debug state","public":"Error executing tool get_server_status"},
+    {"tool":"write_opcua_nodes","arguments":{"nodes":[{"node_id":"ns=2;i=5","value":1}]},"internal":"control crash containing opaque-test-secret","public":"Error executing tool write_opcua_nodes"}
+  ],
+  "anticipated":"Known failure: café"
+}

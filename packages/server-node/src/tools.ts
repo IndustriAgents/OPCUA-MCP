@@ -39,7 +39,7 @@ import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
-import { ContractRefusal, message } from "./errors.js";
+import { ContractRefusal, ToolFailure, UnexpectedToolFailure, message } from "./errors.js";
 import {
   MAX_HISTORY_VALUES,
   MAX_SUBSCRIPTIONS,
@@ -989,7 +989,9 @@ export class OpcuaTools {
       // say so. Everything below needs a session first.
       if (name === "get_server_status") {
         await this.awaitWarmUp();
-        return statusResult(await this.getServerStatus());
+        return await this.invokeFeature(spec.name, args, async () =>
+          statusResult(await this.getServerStatus())
+        );
       }
 
       // Connecting is attempted before dispatching, so that a server that is
@@ -1018,7 +1020,7 @@ export class OpcuaTools {
 
       let result;
       try {
-        result = await this.dispatch(spec.name, args);
+        result = await this.invokeFeature(spec.name, args);
       } catch (error) {
         if (!isConnectionError(error)) throw error;
         result = await this.recover(spec, args, callId, audit, session, error);
@@ -1161,7 +1163,22 @@ export class OpcuaTools {
     // tool gets here, and every capability-gated tool is one (#140).
     await this.ensureCapabilities(spec, args);
 
-    return await this.dispatch(spec.name, args);
+    return await this.invokeFeature(spec.name, args);
+  }
+
+  /** Anticipated failures keep their wording; crashes share the Python SDK boundary. */
+  private async invokeFeature(
+    name: ToolName,
+    args: Record<string, unknown>,
+    operation = () => this.dispatch(name, args)
+  ) {
+    try {
+      return await operation();
+    } catch (error) {
+      // Recovery still sees native connection failures, including their causes.
+      if (error instanceof ToolFailure || isConnectionError(error)) throw error;
+      throw new UnexpectedToolFailure(name, error);
+    }
   }
 
   /** Run one tool. The caller has already authorized it and ensured a session. */
@@ -1273,7 +1290,7 @@ export class OpcuaTools {
 
       default: {
         const unhandled: never = name;
-        throw new Error(message("unknownTool", { tool: unhandled }));
+        throw new ToolFailure(message("unknownTool", { tool: unhandled }));
       }
     }
   }
@@ -1325,7 +1342,7 @@ export class OpcuaTools {
 
   private requireSession(): ClientSession {
     if (!this.session) {
-      throw new Error("No OPC UA session available");
+      throw new ToolFailure("No OPC UA session available");
     }
     return this.session;
   }
@@ -1367,7 +1384,9 @@ export class OpcuaTools {
   private async readOpcuaNodes(nodeIds: string[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new Error(message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" }));
+      throw new ToolFailure(
+        message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" })
+      );
     }
     const chunk = readChunk(await this.operationLimits());
 
@@ -1386,7 +1405,9 @@ export class OpcuaTools {
         )
       );
     } catch (error) {
-      throw new Error(message("readFailed", { reason: describeError(error) }), { cause: error });
+      throw new ToolFailure(message("readFailed", { reason: describeError(error) }), {
+        cause: error,
+      });
     }
   }
 
@@ -1412,7 +1433,7 @@ export class OpcuaTools {
     // runtime and bare on the other — the request never reached the OPC UA
     // server, so nothing failed to be read.
     if (aggregateFunction !== undefined && request.start === undefined) {
-      throw new Error(message("aggregateNeedsStart"));
+      throw new ToolFailure(message("aggregateNeedsStart"));
     }
 
     try {
@@ -1427,7 +1448,7 @@ export class OpcuaTools {
           numValuesPerNode: wanted,
           returnBounds: CONTRACT.history.rawReturnBounds,
         });
-        if (historyReadings.length !== 1) throw new Error("Read history failed");
+        if (historyReadings.length !== 1) throw new ToolFailure("Read history failed");
         const reading = historyReadings[0];
         // Good severity, not plain Good: GoodNoData is an empty range with
         // completeness complete, not a failed read (#157).
@@ -1521,9 +1542,12 @@ export class OpcuaTools {
       // A refusal of the request never reached the server, so it did not fail
       // to be read — and wrapping it would say it had.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(message("historyFailed", { node_id: nodeId, reason: describeError(error) }), {
-        cause: error,
-      });
+      throw new ToolFailure(
+        message("historyFailed", { node_id: nodeId, reason: describeError(error) }),
+        {
+          cause: error,
+        }
+      );
     }
   }
 
@@ -1647,9 +1671,12 @@ export class OpcuaTools {
         traversalCompleteness({ returned: found.length, truncated, maxNodes, unbrowsable })
       );
     } catch (error) {
-      throw new Error(message("browseFailed", { node_id: root, reason: describeError(error) }), {
-        cause: error,
-      });
+      throw new ToolFailure(
+        message("browseFailed", { node_id: root, reason: describeError(error) }),
+        {
+          cause: error,
+        }
+      );
     }
   }
 
@@ -1664,7 +1691,7 @@ export class OpcuaTools {
       { nodeId, attributeId: AttributeIds.NodeClass },
     ]);
     if (!isGood(browseName.statusCode)) {
-      throw new Error(`Browse failed with status: ${browseName.statusCode.name}`);
+      throw new ToolFailure(`Browse failed with status: ${browseName.statusCode.name}`);
     }
     const name = browseName.value?.value;
     return {
@@ -1801,7 +1828,7 @@ export class OpcuaTools {
     const session = this.requireSession();
     const segments = browsePath.split("/").filter((segment) => segment.length > 0);
     if (segments.length === 0) {
-      throw new Error(`browse_path "${browsePath}" names no elements`);
+      throw new ToolFailure(`browse_path "${browsePath}" names no elements`);
     }
 
     // A leading "/" is written from the Root folder, which is how a person says
@@ -1814,7 +1841,7 @@ export class OpcuaTools {
         browseNameMatches(segment, reference.browseName.namespaceIndex, reference.browseName.name)
       );
       if (!match) {
-        throw new Error(
+        throw new ToolFailure(
           `browse_path "${browsePath}" does not resolve: no child "${segment}" under ${current}`
         );
       }
@@ -1843,7 +1870,9 @@ export class OpcuaTools {
   private async writeOpcuaNodes(nodes: WriteRequest[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodes) || nodes.length === 0) {
-      throw new Error(message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" }));
+      throw new ToolFailure(
+        message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" })
+      );
     }
     const serverLimits = await this.operationLimits();
     const limit = writeLimit(serverLimits);
@@ -1966,7 +1995,9 @@ export class OpcuaTools {
       // bury the reason under a framing that says the plant rejected the value
       // when in fact this server never sent it.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(message("writeFailed", { reason: describeError(error) }), { cause: error });
+      throw new ToolFailure(message("writeFailed", { reason: describeError(error) }), {
+        cause: error,
+      });
     }
   }
 
@@ -2041,7 +2072,7 @@ export class OpcuaTools {
       // that happened, and refusing it would report as failed an action the
       // plant carried out. The subcode is reported in `status` instead.
       if (!isGood(callResult.statusCode)) {
-        throw new Error(`Method call failed with status: ${callResult.statusCode.name}`);
+        throw new ToolFailure(`Method call failed with status: ${callResult.statusCode.name}`);
       }
 
       return objectResult({
@@ -2054,7 +2085,7 @@ export class OpcuaTools {
       // Refused before the call was sent, so it did not fail: wrapping it in
       // "Failed to call method" would say the plant had turned it down.
       if (error instanceof ContractRefusal) throw error;
-      throw new Error(
+      throw new ToolFailure(
         message("methodFailed", {
           method_node_id: methodNodeId,
           object_node_id: objectNodeId,
@@ -2121,7 +2152,7 @@ export class OpcuaTools {
     filter: SubscriptionFilter
   ) {
     if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new Error(
+      throw new ToolFailure(
         message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
       );
     }
@@ -2131,7 +2162,7 @@ export class OpcuaTools {
     // it is willing to hold, with nothing here counting them.
     const active = this.subs.list().length;
     if (active + nodeIds.length > MAX_SUBSCRIPTIONS) {
-      throw new Error(
+      throw new ToolFailure(
         message("tooManySubscriptions", {
           active,
           limit: MAX_SUBSCRIPTIONS,
@@ -2149,7 +2180,7 @@ export class OpcuaTools {
       const engineering = await this.metadata.forNodes(session, nodeIds);
       for (const nodeId of nodeIds) {
         if (!engineering.get(nodeId)?.eu_range) {
-          throw new Error(message("percentDeadbandNeedsRange", { node_id: nodeId }));
+          throw new ToolFailure(message("percentDeadbandNeedsRange", { node_id: nodeId }));
         }
       }
     }
@@ -2162,7 +2193,7 @@ export class OpcuaTools {
       try {
         records.push(await this.subs.subscribe(session, nodeId, options, filter));
       } catch (error) {
-        throw new Error(
+        throw new ToolFailure(
           message("subscribeFailed", { node_id: nodeId, reason: describeError(error) }),
           { cause: error }
         );
@@ -2179,7 +2210,7 @@ export class OpcuaTools {
    */
   private async unsubscribeOpcuaNodes(subscriptionIds: string[]) {
     if (!Array.isArray(subscriptionIds) || subscriptionIds.length === 0) {
-      throw new Error(
+      throw new ToolFailure(
         message("emptyArray", {
           tool: "unsubscribe_opcua_nodes",
           argument: "subscription_ids",
@@ -2189,7 +2220,7 @@ export class OpcuaTools {
     const active = new Set(this.subs.list().map((record) => record.subscription_id));
     const unknown = subscriptionIds.filter((id) => !active.has(id));
     if (unknown.length > 0) {
-      throw new Error(unknownSubscriptionsMessage(unknown));
+      throw new ToolFailure(unknownSubscriptionsMessage(unknown));
     }
 
     const records: SubscriptionRecord[] = [];
@@ -2218,7 +2249,7 @@ export class OpcuaTools {
         bufferSize
       ));
     } catch (error) {
-      throw new Error(
+      throw new ToolFailure(
         message("eventSubscribeFailed", { node_id: nodeId, reason: describeError(error) }),
         { cause: error }
       );
@@ -2235,7 +2266,7 @@ export class OpcuaTools {
   private readEvents(nodeId: string, limit: number) {
     const drained = this.events.drain(this.requireSession(), nodeId, limit);
     if (drained === null) {
-      throw new Error(message("notSubscribedToEvents", { node_id: nodeId }));
+      throw new ToolFailure(message("notSubscribedToEvents", { node_id: nodeId }));
     }
     // In the response, not only on stderr: an agent that cannot tell a complete
     // event stream from one that lost alarms reads the gap as quiet. As a field
@@ -2303,7 +2334,7 @@ export class OpcuaTools {
         "eventHistoryTruncated"
       );
     } catch (error) {
-      throw new Error(
+      throw new ToolFailure(
         message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) }),
         { cause: error }
       );
@@ -2315,9 +2346,12 @@ export class OpcuaTools {
     try {
       alarms = await listActiveAlarms(this.requireSession(), nodeId, timeoutSeconds);
     } catch (error) {
-      throw new Error(message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }), {
-        cause: error,
-      });
+      throw new ToolFailure(
+        message("alarmsFailed", { node_id: nodeId, reason: describeError(error) }),
+        {
+          cause: error,
+        }
+      );
     }
 
     this.events.remember(alarms);
@@ -2347,19 +2381,19 @@ export class OpcuaTools {
     // on any other action would silently ignore it. Refusing says which action
     // the caller probably meant.
     if (action === "shelveFor" && durationMs === null) {
-      throw new Error(message("shelveForNeedsDuration"));
+      throw new ToolFailure(message("shelveForNeedsDuration"));
     }
     if (action !== "shelveFor" && durationMs !== null) {
-      throw new Error(message("shelveDurationNotAllowed", { action }));
+      throw new ToolFailure(message("shelveDurationNotAllowed", { action }));
     }
 
     const condition = conditionId || this.events.conditionFor(eventId);
     if (!condition) {
-      throw new Error(message("unknownEventId", { event_id: eventId }));
+      throw new ToolFailure(message("unknownEventId", { event_id: eventId }));
     }
 
     const failed = (reason: string, cause?: unknown) =>
-      new Error(
+      new ToolFailure(
         action === "acknowledge"
           ? message("acknowledgeFailed", { condition_id: condition, reason })
           : message("alarmActionFailed", { action, condition_id: condition, reason }),

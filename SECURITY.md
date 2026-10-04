@@ -609,3 +609,8 @@ Please include:
 
 We aim to acknowledge reports within a few days and will coordinate a fix and
 disclosure timeline with you.
+
+Unexpected exceptions during tool feature execution expose only the tool name
+to the MCP client and the control audit failure record. Anticipated OPC UA
+failures retain their actionable reason text. Native exception causes remain
+internal so recovery classification and control no-resend rules still apply.

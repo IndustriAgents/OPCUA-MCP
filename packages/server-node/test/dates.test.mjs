@@ -14,6 +14,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { toDate } from "../build/dates.js";
+import { ToolFailure } from "../build/errors.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const { cases } = JSON.parse(
@@ -28,6 +29,7 @@ describe("date/time parsing, from the shared table", () => {
           () => toDate(testCase.input),
           (error) => {
             assert.equal(error.message, testCase.error);
+            assert.ok(error instanceof ToolFailure);
             return true;
           }
         );

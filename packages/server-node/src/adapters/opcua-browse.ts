@@ -8,7 +8,11 @@ import {
   type DataValue,
   type Variant,
 } from "node-opcua-client";
-import { type BrowsePort, type NodeRefRecord } from "../application/browse.js";
+import {
+  type BrowsePort,
+  type BrowseReference,
+  type NodeRefRecord,
+} from "../application/browse.js";
 import { browseAllReferences, typeDefinitionOf } from "../browse.js";
 import { CONTRACT } from "../contract.js";
 import { AdapterFailure, describeError } from "../errors.js";
@@ -48,7 +52,7 @@ export class NodeOpcuaBrowsePort implements BrowsePort {
     private readonly session: ClientSession,
     private readonly limits: () => Promise<ServerOperationLimits>
   ) {}
-  async children(nodeId: string) {
+  async children(nodeId: string): Promise<BrowseReference[]> {
     try {
       const refs = await browseAllReferences(this.session, nodeId);
       return refs.map((ref) => ({

@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from .contract import CONTRACT
 from .errors import message
+from .unicode_text import has_unpaired_surrogate
 
 LIMITS = CONTRACT["limits"]
 MAX_NODES_PER_READ: int = LIMITS["maxNodesPerRead"]
@@ -111,6 +112,8 @@ def check_request_bounds(tool: str, arguments: Any) -> None:
 
 def _walk(tool: str, value: Any, path: str, depth: int) -> None:
     if isinstance(value, str):
+        if has_unpaired_surrogate(value):
+            raise LimitExceeded(message("invalidUnicode", tool=tool, argument=path or "arguments"))
         size = utf8_bytes(value)
         if size > MAX_STRING_BYTES:
             raise LimitExceeded(
@@ -149,6 +152,8 @@ def _walk(tool: str, value: Any, path: str, depth: int) -> None:
             _walk(tool, item, f"{path}[{index}]", depth + 1)
         return
     for key, item in value.items():
+        if isinstance(key, str) and has_unpaired_surrogate(key):
+            raise LimitExceeded(message("invalidUnicode", tool=tool, argument=path or "arguments"))
         _walk(tool, item, f"{path}.{key}" if path else str(key), depth + 1)
 
 

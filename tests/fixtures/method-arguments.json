@@ -29,6 +29,9 @@
     { "name": "a hierarchy that loops is refused rather than walked forever", "data_type": "ns=2;i=6000", "error": "DataType ns=2;i=6000 is not a subtype of any built-in OPC UA type, so an argument of it cannot be encoded; nothing was sent" }
   ],
   "guessed": [
+    {"name": "unpaired high surrogate is refused before call", "value": "\ud800", "error": "String values must not contain unpaired Unicode surrogates"},
+    {"name": "unpaired low surrogate is refused before call", "value": "\udfff", "error": "String values must not contain unpaired Unicode surrogates"},
+    {"name": "valid supplementary Unicode survives inference", "value": "caf\u00e9 \ud83d\ude42", "expected": {"type": "String", "value": "caf\u00e9 \ud83d\ude42"}},
     { "name": "a boolean", "value": true, "expected": { "type": "Boolean", "value": true } },
     { "name": "an integer is a Double, not Python's Int64", "value": 5, "expected": { "type": "Double", "value": 5 } },
     { "name": "a fraction", "value": 5.5, "expected": { "type": "Double", "value": 5.5 } },

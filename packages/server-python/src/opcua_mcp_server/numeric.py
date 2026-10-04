@@ -132,6 +132,15 @@ def array_index(key: str) -> int | None:
     return number if str(number) == key and number < 2**32 - 1 else None
 
 
+def _json_string(value: str) -> str:
+    # JSON.stringify escapes lone UTF-16 surrogates while leaving valid Unicode literal.
+    return re.sub(
+        "[\ud800-\udfff]",
+        lambda match: f"\\u{ord(match[0]):04x}",
+        json.dumps(value, ensure_ascii=False),
+    )
+
+
 def json_text(value: Any) -> str:
     """``value`` as ``JSON.stringify`` would write it, for echoing in a message.
 
@@ -152,7 +161,7 @@ def json_text(value: Any) -> str:
     if isinstance(value, float):
         return js_number(value) if math.isfinite(value) else "null"
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _json_string(value)
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(json_text(item) for item in value) + "]"
     if isinstance(value, dict):
@@ -161,6 +170,6 @@ def json_text(value: Any) -> str:
             value,
             key=lambda k: (0, array_index(str(k))) if array_index(str(k)) is not None else (1, 0),
         )
-        members = (f"{json.dumps(str(k), ensure_ascii=False)}:{json_text(value[k])}" for k in keys)
+        members = (f"{_json_string(str(k))}:{json_text(value[k])}" for k in keys)
         return "{" + ",".join(members) + "}"
-    return json.dumps(str(value), ensure_ascii=False)
+    return _json_string(str(value))

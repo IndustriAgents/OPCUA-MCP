@@ -84,7 +84,7 @@ def guess_variant(value: Any, index: int) -> ua.Variant:
     ):
         return ua.Variant(convert_for_variant(value, ua.VariantType.Double), ua.VariantType.Double)
     if isinstance(value, str):
-        return ua.Variant(value, ua.VariantType.String)
+        return ua.Variant(convert_for_variant(value, ua.VariantType.String), ua.VariantType.String)
     raise ValueError(
         f"arguments[{index}] is {_kind(value)}, and the method publishes no "
         "InputArguments to say what type it expects; pass a boolean, a number or a string"

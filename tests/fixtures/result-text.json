@@ -1,6 +1,15 @@
 {
   "cases": [
     {
+      "name": "unpaired surrogates in values and keys",
+      "value": {
+        "\ud800": "\udfff",
+        "valid": "🙂"
+      },
+      "pretty": "{\n  \"valid\": \"🙂\",\n  \"\\ud800\": \"\\udfff\"\n}",
+      "compact": "{\"\\ud800\":\"\\udfff\",\"valid\":\"🙂\"}"
+    },
+    {
       "name": "unicode",
       "value": {
         "unit": "°C",

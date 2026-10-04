@@ -23,6 +23,7 @@ import { toDate } from "./dates.js";
 import { ContractRefusal, message } from "./errors.js";
 import { MAX_BYTE_STRING_BYTES } from "./limits.js";
 import { exactInteger, numericText } from "./numeric.js";
+import { hasUnpairedSurrogate } from "./unicode-text.js";
 
 const INTEGER_RANGES = new Map<DataType, [bigint, bigint]>([
   [DataType.SByte, [-128n, 127n]],
@@ -146,6 +147,9 @@ function floating(raw: unknown, dataType: DataType): number {
 function stringOnly(raw: unknown, dataType: DataType): string {
   if (typeof raw !== "string") {
     throw new Error(`${typeName(dataType)} values must be a JSON string`);
+  }
+  if (hasUnpairedSurrogate(raw)) {
+    throw new Error(`${typeName(dataType)} values must not contain unpaired Unicode surrogates`);
   }
   return raw;
 }

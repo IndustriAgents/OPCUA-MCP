@@ -1,15 +1,15 @@
 # RFC 0001: Identity and isolation before a remote gateway
 
-- **Status:** Proposed; review and acceptance are required before implementation
+- **Status:** Accepted; implementation remains subject to the security gates below
 - **Date:** 2026-10-03
-- **Decision owner:** Repository maintainer; acceptance has not been recorded
+- **Decision owner:** Repository maintainer; accepted on 2026-10-04 in PR #196
 - **Tracks:** [#148](https://github.com/IndustriAgents/OPCUA-MCP/issues/148)
 - **Gates:** [#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14),
   [#15](https://github.com/IndustriAgents/OPCUA-MCP/issues/15),
   [#88](https://github.com/IndustriAgents/OPCUA-MCP/issues/88)
 - **Support model:** [ADR 0001](../adr/0001-two-first-class-runtimes.md)
 
-## Present boundary and proposed decision
+## Present boundary and accepted decision
 
 The shipped product is a local MCP stdio process serving one MCP client context
 and one configured OPC UA endpoint. The OPC UA server may be on another machine;
@@ -26,12 +26,12 @@ that boundary; it does not enable a listener or add a tool argument.
 
 Options considered:
 
-| Option | Benefit | Cost / reason |
-|---|---|---|
-| Separate local processes, one per endpoint | Existing bounded, simple ownership | Sessions grow with local clients; this remains the supported product |
-| Add HTTP or an endpoint argument to the existing server | Small initial change | Process-wide policy and credentials cannot authorize a caller; reject this approach |
-| Gateway with isolated workers and authenticated routing | Explicit ownership and failure containment | Additional identity provider, supervisor, durable audit and operating responsibility; proposed future design |
-| Pool all clients in one OPC UA session | Fewer licensed sessions | OPC UA identity, subscriptions and failure state become shared; reject cross-principal pooling |
+| Option                                                  | Benefit                                    | Cost / reason                                                                                                |
+| ------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Separate local processes, one per endpoint              | Existing bounded, simple ownership         | Sessions grow with local clients; this remains the supported product                                         |
+| Add HTTP or an endpoint argument to the existing server | Small initial change                       | Process-wide policy and credentials cannot authorize a caller; reject this approach                          |
+| Gateway with isolated workers and authenticated routing | Explicit ownership and failure containment | Additional identity provider, supervisor, durable audit and operating responsibility; accepted future design |
+| Pool all clients in one OPC UA session                  | Fewer licensed sessions                    | OPC UA identity, subscriptions and failure state become shared; reject cross-principal pooling               |
 
 ## Trust boundaries and ownership
 
@@ -52,18 +52,18 @@ state. The supervisor restricts a worker's egress and bounds its CPU, memory,
 file access and lifetime. Separate OS processes are the minimum boundary;
 containers alone do not replace authentication or policy evaluation.
 
-| Object | Owner / key | Mandatory rule |
-|---|---|---|
-| Tenant | Server-admin assigned tenant ID | A token claim is mapped through trusted configuration, never accepted as an arbitrary tenant selector |
-| Principal | Validated issuer + subject, within tenant | Immutable verified identity on every request; display names and operator labels grant no authority |
-| Endpoint registry entry | Tenant + stable endpoint ID + registry revision | Admin-controlled URL, expected ApplicationUri, server trust, allowed networks, policy and secret references |
-| OPC UA credential | Tenant + endpoint + principal binding + credential version | Least-privileged username/X.509 identity; never supplied as a tool argument |
-| Effective policy | Tenant + principal + endpoint + policy revision | Intersection of role, endpoint and tool/value limits; deny by default |
-| Worker / OPC UA session | Tenant + principal + endpoint + credential version + policy revision | Never shared across different isolation keys, even if credentials happen to be identical |
-| Subscription / buffered data | Isolation key + random handle + owner client context | Check ownership on read, cancel and notification delivery; handles are not credentials |
-| Namespace, capability, metadata cache | Isolation key + registry revision + session generation | Invalidate on replacement; never reuse another worker's namespace indexes |
-| History continuation state | Owner + endpoint + query digest + generation + expiry | No native serialized objects; release on completion, cancel, expiry and shutdown |
-| Audit record | Tenant-scoped durable stream | Verified principal, service instance, isolation key, endpoint and revisions accompany each decision |
+| Object                                | Owner / key                                                          | Mandatory rule                                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Tenant                                | Server-admin assigned tenant ID                                      | A token claim is mapped through trusted configuration, never accepted as an arbitrary tenant selector       |
+| Principal                             | Validated issuer + subject, within tenant                            | Immutable verified identity on every request; display names and operator labels grant no authority          |
+| Endpoint registry entry               | Tenant + stable endpoint ID + registry revision                      | Admin-controlled URL, expected ApplicationUri, server trust, allowed networks, policy and secret references |
+| OPC UA credential                     | Tenant + endpoint + principal binding + credential version           | Least-privileged username/X.509 identity; never supplied as a tool argument                                 |
+| Effective policy                      | Tenant + principal + endpoint + policy revision                      | Intersection of role, endpoint and tool/value limits; deny by default                                       |
+| Worker / OPC UA session               | Tenant + principal + endpoint + credential version + policy revision | Never shared across different isolation keys, even if credentials happen to be identical                    |
+| Subscription / buffered data          | Isolation key + random handle + owner client context                 | Check ownership on read, cancel and notification delivery; handles are not credentials                      |
+| Namespace, capability, metadata cache | Isolation key + registry revision + session generation               | Invalidate on replacement; never reuse another worker's namespace indexes                                   |
+| History continuation state            | Owner + endpoint + query digest + generation + expiry                | No native serialized objects; release on completion, cancel, expiry and shutdown                            |
+| Audit record                          | Tenant-scoped durable stream                                         | Verified principal, service instance, isolation key, endpoint and revisions accompany each decision         |
 
 Routing is performed from an authorized registry ID before creating a worker.
 No request may supply an OPC UA URL, trust material, private key, password or
@@ -226,23 +226,23 @@ registry administrator, supervisor and durable audit service are trusted parts o
 the deployment; their compromise requires revocation and incident recovery.
 Network access or a signed plant value never confers control permission.
 
-| Threat | Control | Acceptance test before gateway release |
-|---|---|---|
-| Forged/expired/wrong-audience identity | Verify every request; no client-provided identity | Reject forged issuer, signature, tenant and audience on every supported SDK revision |
-| Confused deputy / token passthrough | Endpoint-role mapping; distinct OPC UA credentials | MCP token cannot become plant identity or be logged/forwarded |
-| Cross-tenant endpoint selection | Registry authorization before worker acquisition | Tenant A cannot route, enumerate or probe tenant B's endpoints |
-| Namespace-index collision | URI allowlists scoped to endpoint/generation | Identical index/id on two endpoints never grants cross-endpoint control; reorder re-authorizes |
-| Session/subscription theft | Owner-bound opaque handles and isolation keys | Another principal cannot read, drain, cancel or resume a subscription or legacy session |
-| Stale continuation or cache | Query/revision/generation/expiry binding | Reconnect, policy change and expiry refuse stale state and release server points |
-| Endpoint spoofing / redirected discovery | Per-endpoint trust, expected URI and egress rules | Impostor, identity mismatch and unregistered discovery target fail closed |
-| SSRF through endpoint parameters/DNS | Admin-only registry and reconnect egress checks | Tool URL, redirect and DNS change cannot reach an unregistered service |
-| Credential rotation/revocation race | Versioned workers and atomic replacement | Revoked identity cannot keep a session or queued control; no insecure fallback |
-| Lost control response or worker crash | No control replay; durable attempt accounting | Drop answer after actuation: one send and uncertain outcome, including cancellation/restart |
-| Queue flood / slow consumer / reconnect storm | Hierarchical budgets and fair scheduling | Saturating one principal/endpoint leaves reserved diagnostics and other endpoints available |
-| Audit failure / spoofed label | Durable fail-closed control audit, verified context | Audit unavailability sends no control; label spoofing does not alter recorded principal |
-| TLS proxy bypass / DNS rebinding | Protected backend, validated headers and Origin | Direct backend and forged forwarding/Origin requests fail; no unauthenticated session reuse |
-| Malicious server payload / event content | Transport bounds, inert data, process restriction | Oversize reply kills only its worker; event text cannot select endpoint or issue control |
-| Worker compromise | One isolation key, egress/secret/process restrictions | Worker cannot read another tenant's secret, IPC context, cache or audit stream |
+| Threat                                        | Control                                               | Acceptance test before gateway release                                                         |
+| --------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Forged/expired/wrong-audience identity        | Verify every request; no client-provided identity     | Reject forged issuer, signature, tenant and audience on every supported SDK revision           |
+| Confused deputy / token passthrough           | Endpoint-role mapping; distinct OPC UA credentials    | MCP token cannot become plant identity or be logged/forwarded                                  |
+| Cross-tenant endpoint selection               | Registry authorization before worker acquisition      | Tenant A cannot route, enumerate or probe tenant B's endpoints                                 |
+| Namespace-index collision                     | URI allowlists scoped to endpoint/generation          | Identical index/id on two endpoints never grants cross-endpoint control; reorder re-authorizes |
+| Session/subscription theft                    | Owner-bound opaque handles and isolation keys         | Another principal cannot read, drain, cancel or resume a subscription or legacy session        |
+| Stale continuation or cache                   | Query/revision/generation/expiry binding              | Reconnect, policy change and expiry refuse stale state and release server points               |
+| Endpoint spoofing / redirected discovery      | Per-endpoint trust, expected URI and egress rules     | Impostor, identity mismatch and unregistered discovery target fail closed                      |
+| SSRF through endpoint parameters/DNS          | Admin-only registry and reconnect egress checks       | Tool URL, redirect and DNS change cannot reach an unregistered service                         |
+| Credential rotation/revocation race           | Versioned workers and atomic replacement              | Revoked identity cannot keep a session or queued control; no insecure fallback                 |
+| Lost control response or worker crash         | No control replay; durable attempt accounting         | Drop answer after actuation: one send and uncertain outcome, including cancellation/restart    |
+| Queue flood / slow consumer / reconnect storm | Hierarchical budgets and fair scheduling              | Saturating one principal/endpoint leaves reserved diagnostics and other endpoints available    |
+| Audit failure / spoofed label                 | Durable fail-closed control audit, verified context   | Audit unavailability sends no control; label spoofing does not alter recorded principal        |
+| TLS proxy bypass / DNS rebinding              | Protected backend, validated headers and Origin       | Direct backend and forged forwarding/Origin requests fail; no unauthenticated session reuse    |
+| Malicious server payload / event content      | Transport bounds, inert data, process restriction     | Oversize reply kills only its worker; event text cannot select endpoint or issue control       |
+| Worker compromise                             | One isolation key, egress/secret/process restrictions | Worker cannot read another tenant's secret, IPC context, cache or audit stream                 |
 
 Threat-model tests must exercise two tenants, two principals, two endpoints and
 namespace collisions simultaneously on both runtimes. Fault injection must lose
@@ -256,7 +256,7 @@ or identity provider can undermine every isolation key. Endpoint policy and plan
 interlocks remain separate controls. Initial per-principal isolation consumes more
 licensed sessions than global pooling; quotas make that cost explicit.
 
-## Migration and approval gate
+## Migration and implementation gate
 
 Local users keep `OPCUA_SERVER_URL`, stdio, existing tools and per-process policy.
 Multiple local endpoints remain separate named MCP client entries/processes.
@@ -271,14 +271,18 @@ identity, audit, isolation, uncertainty and overload evidence passes on both sta
 
 Before reopening #14, #15 or #88 for implementation:
 
-- Record maintainer/security review and acceptance of this RFC on its PR.
+- Link the maintainer’s accepted architecture decision in PR #196; obtain security
+  review of the concrete implementation and its evidence before release.
 - Resolve every threat-model row with testable implementation ownership and budgets.
 - Publish a protocol/SDK compatibility matrix and a deployment/rotation plan.
 - Link feature issues to this gate, with dependent acceptance criteria.
 
 Those feature issues cannot close independently of the gateway security evidence.
-#148 remains open until review/acceptance is recorded. A merged draft document
-alone does not assert approval or shipped gateway support. Revisit the design if
+The maintainer reviewed and accepted the per-principal/per-endpoint worker design
+and threat model on 2026-10-04. This satisfies the architecture decision in #148;
+it does not assert that a gateway has been implemented or independently certified.
+Implementation security review and the evidence above remain release gates.
+Revisit the design if
 per-principal session cost makes it unworkable; any weaker pooling boundary needs
 a new threat model and proof of equivalent authorization, never an undocumented
 optimization.

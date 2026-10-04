@@ -1,3 +1,15 @@
+import { dispatchFeature } from "./protocol/dispatch.js";
+import {
+  withNotice,
+  historyResult,
+  subscriptionResult,
+  eventResult,
+  objectResult,
+  statusResult,
+  recordBlocks,
+  outputSchema,
+  type ServerStatusReport,
+} from "./protocol/results.js";
 // The OPC UA tool implementations.
 //
 // Current-value reads delegate to the application port and native adapter.
@@ -92,117 +104,6 @@ import { randomBytes } from "crypto";
 
 export { checkEuRange } from "./application/write.js";
 export { checkMaxChange } from "./adapters/opcua-write.js";
-
-/** A text block for a reader that only has the text, repeating `completeness`.
- *
- * Only for a loss the caller did not choose — this server's cap, the OPC UA
- * server's, or a full buffer — never for a count the caller asked for and got:
- * telling someone who asked for 10 readings that there may be more would be
- * noise on every small read. `completeness` reports that case on its own.
- */
-function withNotice<T extends { content: Array<{ type: string; text: string }> }>(
-  result: T,
-  text: string | null
-): T {
-  if (text === null) return result;
-  return { ...result, content: [...result.content, { type: "text", text }] };
-}
-
-/** History records (resultShapes.historyRecords), and whether they are all of them.
- *
- * One text block per record, as FastMCP splits the Python server's list, plus
- * the `completeness` object beside `result` in structuredContent (issue #137).
- * The notice for a capped read predates that object and is kept for text-only
- * readers, and fires exactly when it always did: when this server's own cap was
- * reached, which is `contractLimit`.
- */
-function historyResult(records: unknown[], completeness: Completeness, capNotice: string) {
-  let text: string | null = null;
-  if (completeness.reasons.includes("contractLimit")) {
-    // The cap, not the count returned: an event-history read reaches its cap on
-    // what the server sent, and `severity_min` may have kept fewer.
-    text = notice(capNotice, { count: completeness.limit ?? completeness.returned });
-  } else if (completeness.reasons.includes("serverLimit")) {
-    text = notice("serverTruncated", { count: completeness.returned });
-  }
-  return withNotice(recordBlocks(records, completeness), text);
-}
-
-/** The same framing for the subscription family (resultShapes.subscriptionRecords).
- *
- * Each record carries its own ring buffer's `dropped`; `completeness` totals them
- * so one field answers for the whole result.
- */
-function subscriptionResult(records: SubscriptionRecord[]) {
-  return recordBlocks(records, bufferCompleteness(records));
-}
-
-/** And for the event family (resultShapes.eventRecords).
- *
- * `list_active_alarms` passes no completeness: a refresh that does not finish is
- * an error, never a shorter list, so its answer is whole or it is not given.
- */
-function eventResult(records: unknown[], completeness?: Completeness) {
-  return recordBlocks(records, completeness);
-}
-
-/** A result that is one object rather than a list of records.
- *
- * One text block and a `result` that is the object itself. Used by every shape
- * where a list would be a lie about the answer's structure: a browse has one
- * `truncated` flag for the whole walk, a method call has one result, and a
- * status report is one report. The Python server frames these identically.
- */
-function objectResult(record: unknown, completeness?: Completeness) {
-  return {
-    content: [{ type: "text", text: prettyJson(record) }],
-    structuredContent: completeness ? { result: record, completeness } : { result: record },
-  };
-}
-
-/** `resultShapes.serverStatus`: what the server says, and what it was found to support. */
-type ServerStatusReport = ServerStatusRecord & { capabilities: CapabilityStatusRecord };
-
-/** The diagnostics report (resultShapes.serverStatus). */
-function statusResult(status: ServerStatusReport) {
-  return objectResult(status);
-}
-
-function recordBlocks(records: unknown[], completeness?: Completeness) {
-  return {
-    content: records.map((record) => ({
-      type: "text",
-      text: prettyJson(record),
-    })),
-    // Beside `result`, never inside it: `result` stays the array every existing
-    // client already reads, and a record list that sometimes ends in something
-    // that is not a record would be worse than the prose it replaces.
-    structuredContent: completeness ? { result: records, completeness } : { result: records },
-  };
-}
-
-/** What tools/list advertises a tool returns: `result`, and `completeness` if it
- *  can be partial. `PolicyMCPServer.list_tools` in server.py builds the same one. */
-function outputSchema(tool: ToolSpec): Tool["outputSchema"] {
-  if (!tool.resultShape) return undefined;
-  if (!tool.reportsCompleteness) {
-    return {
-      type: "object",
-      properties: { result: CONTRACT.resultShapes[tool.resultShape] },
-      required: ["result"],
-      additionalProperties: false,
-    } as Tool["outputSchema"];
-  }
-  return {
-    type: "object",
-    properties: {
-      result: CONTRACT.resultShapes[tool.resultShape],
-      completeness: CONTRACT.completeness.schema,
-    },
-    required: ["result", "completeness"],
-    additionalProperties: false,
-  } as Tool["outputSchema"];
-}
 
 /** What a call was aimed at, for a message a human will read.
  *
@@ -782,121 +683,23 @@ export class OpcuaTools {
     }
   }
 
-  /** Run one tool. The caller has already authorized it and ensured a session. */
   private async dispatch(name: ToolName, args: Record<string, unknown>) {
-    switch (name) {
-      case "get_server_status":
-        return statusResult(await this.getServerStatus());
-
-      case "read_opcua_nodes":
-        return await this.readOpcuaNodes(args.node_ids as string[]);
-
-      case "browse_opcua_nodes":
-        return await this.browseOpcuaNodes({
-          nodeId: args.node_id as string | undefined,
-          browsePath: args.browse_path as string | undefined,
-          depth: args.depth as number | undefined,
-          nodeClass: args.node_class as string | undefined,
-          nameFilter: args.name_filter as string | undefined,
-          includeValues: args.include_values as boolean | undefined,
-          maxNodes: args.max_nodes as number | undefined,
-        });
-
-      case "read_opcua_history":
-        return await this.readOpcuaHistory({
-          nodeId: args.node_id as string,
-          start: args.start_time as string | undefined,
-          end: args.end_time as string | undefined,
-          numValues: (args.num_values as number) || 0,
-          aggregateFunction: args.aggregate_function as string | undefined,
-          processingInterval: (args.processing_interval as number) || 0,
-        });
-
-      case "read_event_history":
-        return await this.readEventHistory({
-          nodeId: (args.node_id as string) || DEFAULT_NOTIFIER,
-          start: args.start_time as string | undefined,
-          end: args.end_time as string | undefined,
-          numValues: (args.num_values as number) || 0,
-          severityMin: (args.severity_min as number) || EVENT_DEFAULTS.severityMin,
-        });
-
-      case "write_opcua_nodes":
-        return await this.writeOpcuaNodes(args.nodes as WriteRequest[]);
-
-      case "call_opcua_method":
-        return await this.callOpcuaMethod(
-          args.object_node_id as string,
-          args.method_node_id as string,
-          args.arguments as unknown[] | undefined
-        );
-
-      case "subscribe_opcua_nodes":
-        return await this.subscribeOpcuaNodes(
-          args.node_ids as string[],
-          {
-            publishingInterval: args.publishing_interval as number | undefined,
-            samplingInterval: args.sampling_interval as number | undefined,
-            bufferSize: args.buffer_size as number | undefined,
-          },
-          resolveFilter({
-            deadbandType: args.deadband_type as string | undefined,
-            deadbandValue: args.deadband_value as number | undefined,
-            dataChangeTrigger: args.data_change_trigger as string | undefined,
-          })
-        );
-
-      case "unsubscribe_opcua_nodes":
-        return await this.unsubscribeOpcuaNodes(args.subscription_ids as string[]);
-
-      case "list_subscriptions":
-        const listed = listSubscriptions(this.subscriptionPort());
-        return recordBlocks(listed.records, listed.completeness);
-
-      case "subscribe_events":
-        return await this.subscribeEvents(
-          (args.node_id as string) || DEFAULT_NOTIFIER,
-          (args.severity_min as number) ?? EVENT_DEFAULTS.severityMin,
-          (args.buffer_size as number) || EVENT_DEFAULTS.bufferSize
-        );
-
-      case "read_events":
-        return this.readEvents(
-          (args.node_id as string) || DEFAULT_NOTIFIER,
-          (args.limit as number) || EVENT_DEFAULTS.readLimit
-        );
-
-      case "list_active_alarms":
-        return await this.listActiveAlarms(
-          (args.node_id as string) || DEFAULT_NOTIFIER,
-          (args.timeout_seconds as number) ?? EVENT_DEFAULTS.refreshTimeoutSeconds
-        );
-
-      case "acknowledge_alarm":
-        return await this.actOnAlarm(
-          args.event_id as string,
-          "acknowledge",
-          (args.comment as string) ?? "",
-          null,
-          args.condition_id as string | undefined,
-          true
-        );
-
-      case "act_on_alarm":
-        return await this.actOnAlarm(
-          args.event_id as string,
-          args.action as string,
-          (args.comment as string) ?? "",
-          (args.shelve_duration_ms as number | undefined) ?? null,
-          args.condition_id as string | undefined,
-          false
-        );
-
-      default: {
-        const unhandled: never = name;
-        throw new ToolFailure(message("unknownTool", { tool: unhandled }));
-      }
-    }
+    return await dispatchFeature(name, args, {
+      getServerStatus: this.getServerStatus.bind(this),
+      readOpcuaNodes: this.readOpcuaNodes.bind(this),
+      browseOpcuaNodes: this.browseOpcuaNodes.bind(this),
+      readOpcuaHistory: this.readOpcuaHistory.bind(this),
+      readEventHistory: this.readEventHistory.bind(this),
+      writeOpcuaNodes: this.writeOpcuaNodes.bind(this),
+      callOpcuaMethod: this.callOpcuaMethod.bind(this),
+      subscribeOpcuaNodes: this.subscribeOpcuaNodes.bind(this),
+      unsubscribeOpcuaNodes: this.unsubscribeOpcuaNodes.bind(this),
+      subscriptionPort: this.subscriptionPort.bind(this),
+      subscribeEvents: this.subscribeEvents.bind(this),
+      readEvents: this.readEvents.bind(this),
+      listActiveAlarms: this.listActiveAlarms.bind(this),
+      actOnAlarm: this.actOnAlarm.bind(this),
+    });
   }
 
   /** The `get_server_status` report: connection state, then what the server says.

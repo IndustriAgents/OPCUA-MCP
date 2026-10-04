@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-import json
 import os
 import secrets
 import signal
@@ -16,36 +15,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import ToolAnnotations
 
-from . import events
-from .adapters.opcua_alarms import PythonOpcuaAlarmPort
-from .adapters.opcua_browse import PythonOpcuaBrowsePort
-from .adapters.opcua_diagnostics import PythonOpcuaDiagnosticsPort
-from .adapters.opcua_events import PythonOpcuaEventPort
-from .adapters.opcua_history import PythonOpcuaHistoryPort
-from .adapters.opcua_methods import PythonOpcuaMethodPort
-from .adapters.opcua_read import PythonOpcuaReadPort
-from .adapters.opcua_subscriptions import PythonOpcuaSubscriptionPort
-from .adapters.opcua_write import PythonOpcuaWritePort
-from .application.alarms import act_on_alarm as act_on_alarm_use_case
-from .application.alarms import list_alarms
-from .application.browse import browse_nodes
-from .application.diagnostics import get_server_status as get_server_status_use_case
-from .application.events import read_event_history as read_event_history_use_case
-from .application.events import read_events as read_events_use_case
-from .application.events import subscribe_events as subscribe_events_use_case
 from .application.execution import ExecutionCall as _Call
 from .application.execution import execute_tool
-from .application.history import read_history
 from .application.invocation import invoke_tool
-from .application.methods import call_method
-from .application.read import read_nodes
-from .application.subscriptions import list_subscriptions as list_subscriptions_use_case
-from .application.subscriptions import subscribe_nodes, unsubscribe_nodes
-from .application.write import write_nodes
 from .audit import (
     AuditSink,
     AuditWriteError,
@@ -57,7 +33,6 @@ from .audit import (
 from .capabilities import (
     CapabilityAnswers,
     answers_from,
-    capability_status,
     client_aggregate_functions,
     client_supports_history,
     client_supports_history_events,
@@ -74,30 +49,67 @@ from .connection import (
     not_connected_message,
 )
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
-from .errors import AdapterFailure, ApplicationRefusal
 from .errors import message as error_message
 from .generated_contract import TOOL_NAMES
-from .limits import (
-    LimitExceeded,
-)
-from .notices import notice
 from .operation_limits import (
-    read_chunk,
     read_operation_limits,
-    write_limit,
 )
 from .policy import (
     control_gate,
     describe_policy,
-    server_identity_record,
     values_at,
 )
-from .result_text import normalize_result_text, pretty_json
-from .security import describe_security, security_config
-from .state import ServerState
-from .subscriptions import (
-    resolve_filter,
+from .protocol.tools import (
+    acknowledge_alarm as acknowledge_alarm,
 )
+from .protocol.tools import (
+    act_on_alarm as act_on_alarm,
+)
+from .protocol.tools import (
+    browse_opcua_nodes as browse_opcua_nodes,
+)
+from .protocol.tools import (
+    call_opcua_method as call_opcua_method,
+)
+from .protocol.tools import (
+    get_server_status as get_server_status,
+)
+from .protocol.tools import (
+    handler_for,
+)
+from .protocol.tools import (
+    list_active_alarms as list_active_alarms,
+)
+from .protocol.tools import (
+    list_subscriptions as list_subscriptions,
+)
+from .protocol.tools import (
+    read_event_history as read_event_history,
+)
+from .protocol.tools import (
+    read_events as read_events,
+)
+from .protocol.tools import (
+    read_opcua_history as read_opcua_history,
+)
+from .protocol.tools import (
+    read_opcua_nodes as read_opcua_nodes,
+)
+from .protocol.tools import (
+    subscribe_events as subscribe_events,
+)
+from .protocol.tools import (
+    subscribe_opcua_nodes as subscribe_opcua_nodes,
+)
+from .protocol.tools import (
+    unsubscribe_opcua_nodes as unsubscribe_opcua_nodes,
+)
+from .protocol.tools import (
+    write_opcua_nodes as write_opcua_nodes,
+)
+from .result_text import normalize_result_text, pretty_json
+from .security import security_config
+from .state import ServerState
 from .version import package_version
 
 
@@ -788,505 +800,6 @@ class PolicyMCPServer(MCPServer):
         return await invoke_tool(Port(), call)
 
 
-# --- helpers shared by the tool bodies ------------------------------------------
-
-
-def _state(ctx: Context) -> ServerState:
-    """This server's state, as a tool body reaches it.
-
-    The tools are handed a ``Context`` and no ``self``, so they come at the state
-    through the lifespan rather than through the instance. It is the same object
-    :attr:`PolicyMCPServer.state` returns, put there by :func:`opcua_lifespan`.
-    """
-    return ctx.request_context.lifespan_context["state"]
-
-
-_TRAVERSAL = CONTRACT["traversal"]
-
-#: The standard Root folder, which an absolute browse path is written from.
-_ROOT_FOLDER = "ns=0;i=84"
-
-
-def _clamp_int(value: int, low: int, high: int) -> int:
-    return max(low, min(int(value), high))
-
-
-def _data_type_name(variant: Any) -> str | None:
-    """The OPC UA name of a variant's data type: 'Double', 'Boolean', 'Int32'."""
-    variant_type = getattr(variant, "VariantType", None)
-    name = getattr(variant_type, "name", None)
-    return None if name in (None, "Null") else str(name)
-
-
-def _records_result(
-    records: list[dict], completeness: dict | None = None, text: str | None = None
-) -> CallToolResult:
-    """Records, one text block each, and whether they are all of them.
-
-    The same framing ``MCPServer`` gives a returned list — one block per record
-    and ``{"result": [...]}`` — built by hand because ``completeness`` sits
-    beside ``result`` (issue #137), never inside it: ``result`` stays the array
-    every existing client already reads. ``recordBlocks`` in tools.ts is the
-    Node half.
-
-    ``text`` is a notice for a reader that only has the text, repeating what
-    ``completeness`` says. Only for a loss the caller did not choose — this
-    server's cap, the OPC UA server's, or a full buffer — never for a count the
-    caller asked for and got: telling someone who asked for 10 readings that
-    there may be more would be noise on every small read.
-    """
-    content = [TextContent(type="text", text=json.dumps(record, indent=2)) for record in records]
-    if text is not None:
-        content.append(TextContent(type="text", text=text))
-    structured: dict[str, Any] = {"result": records}
-    if completeness is not None:
-        structured["completeness"] = completeness
-    return CallToolResult(content=content, structured_content=structured)
-
-
-def _history_result(records: list[dict], completeness: dict, cap_notice: str) -> CallToolResult:
-    """History records (``resultShapes.historyRecords``), and whether they are all.
-
-    The notice for a capped read predates ``completeness`` and is kept for
-    text-only readers, and fires exactly when it always did: when this server's
-    own cap was reached, which is ``contractLimit``. The count it names is the
-    cap rather than the records returned — an event-history read reaches its cap
-    on what the server sent, and ``severity_min`` may have kept fewer.
-    """
-    text = None
-    if "contractLimit" in completeness["reasons"]:
-        count = completeness["limit"] if completeness["limit"] is not None else len(records)
-        text = notice(cap_notice, count=count)
-    elif "serverLimit" in completeness["reasons"]:
-        text = notice("serverTruncated", count=completeness["returned"])
-    return _records_result(records, completeness, text)
-
-
-def _object_result(record: Any, completeness: dict | None = None) -> CallToolResult:
-    """A result that is one object rather than a list of records.
-
-    One text block and a ``result`` that is the object itself. Used by every
-    shape where a list would be a lie about the answer's structure: a browse has
-    one ``truncated`` flag for the whole walk, a method call has one result, and
-    a status report is one report. The Node server frames these identically.
-    """
-    structured: dict[str, Any] = {"result": record}
-    if completeness is not None:
-        structured["completeness"] = completeness
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(record, indent=2))],
-        structured_content=structured,
-    )
-
-
-# --- reading --------------------------------------------------------------------
-
-
-async def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
-    """
-    Read the current value of one or more OPC UA nodes in a single request.
-
-    Parameters:
-        node_ids (list[str]): The node IDs to read. Example: ['ns=2;i=2', 'ns=2;i=3'].
-
-    More than ``limits.maxNodesPerRead`` is refused by the input schema's
-    ``maxItems`` before this runs: a short list of readings is indistinguishable
-    from a complete one, so the list is never quietly cut. A server whose
-    MaxNodesPerRead is lower gets the list in consecutive Reads instead.
-
-    Returns:
-        list[dict]: One record per node, shaped by `contract/tools.json` ->
-            `resultShapes.nodeValues`. A node the server rejects is one 'Bad…'
-            status among the others; only a failure of the whole operation is
-            raised as a `ToolError`.
-    """
-    client = ctx.request_context.lifespan_context["opcua_client"]
-    state = _state(ctx)
-    port = PythonOpcuaReadPort(client, state.node_metadata)
-    try:
-        return await read_nodes(port, node_ids, read_chunk(state.operation_limits))
-    except (AdapterFailure, ApplicationRefusal) as error:
-        raise ToolError(str(error)) from error
-
-
-async def read_opcua_history(
-    node_id: str,
-    ctx: Context,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    num_values: int = 0,
-    aggregate_function: str | None = None,
-    processing_interval: float = 0,
-) -> CallToolResult:
-    """
-    Read a node's stored history, raw or summarised by a server-side aggregate.
-
-    The two used to be separate tools with separate implementations of the same
-    framing. They differ in one request and share everything else, so they are
-    one tool whose ``aggregate_function`` argument decides which is sent.
-
-    Returns:
-        CallToolResult: One record per reading or interval, shaped by
-            ``resultShapes.historyRecords``, and ``completeness`` beside them.
-    """
-    state = _state(ctx)
-    offered = state.capabilities.aggregate_functions
-    port = PythonOpcuaHistoryPort(ctx.request_context.lifespan_context["opcua_client"], offered)
-    try:
-        result = await read_history(
-            port,
-            {
-                "node_id": node_id,
-                "start": start_time,
-                "end": end_time,
-                "num_values": num_values,
-                "aggregate_function": aggregate_function,
-                "processing_interval": processing_interval,
-            },
-            list(offered),
-        )
-        return _history_result(result["records"], result["completeness"], "historyTruncated")
-    except (ApplicationRefusal, AdapterFailure, LimitExceeded) as error:
-        raise ToolError(str(error)) from error
-
-
-# Registered and advertised always; a call is checked against the capabilities
-# of the session it rides on (#140). Nothing here touches the network at import.
-
-
-async def read_event_history(
-    ctx: Context,
-    node_id: str = events.DEFAULT_NOTIFIER,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    num_values: int = 0,
-    severity_min: int = events.DEFAULTS["severityMin"],
-) -> CallToolResult:
-    """
-    Read the events the server stored, for a range that has already passed.
-
-    ``subscribe_events`` only sees what arrives after it subscribes, so it
-    cannot answer what fired before anyone was watching. This reads the server's
-    own event archive instead, and returns the same records, so an alarm looks
-    identical whether it was seen live or recovered afterwards.
-
-    Returns:
-        CallToolResult: One record per event, shaped by the shared
-            ``resultShapes.eventRecords`` in ``contract/tools.json``, and
-            ``completeness`` beside them.
-    """
-    port = PythonOpcuaEventPort(
-        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
-    )
-    try:
-        result = await read_event_history_use_case(
-            port,
-            {
-                "node_id": node_id,
-                "start": start_time,
-                "end": end_time,
-                "num_values": num_values,
-                "severity_min": severity_min,
-            },
-        )
-        return _history_result(result["records"], result["completeness"], "eventHistoryTruncated")
-    except (ApplicationRefusal, AdapterFailure, LimitExceeded) as error:
-        raise ToolError(str(error)) from error
-
-
-# Tool: Report the connection and what the OPC UA server says about itself.
-async def get_server_status(ctx: Context) -> CallToolResult:
-    """Report status without joining an existing connection round.
-
-    Capabilities are sampled after the liveness read, which may replace the
-    native session and update its generation. Connection failure is a status
-    record rather than a tool error.
-    """
-    state = _state(ctx)
-    connection = ctx.request_context.lifespan_context["opcua_connection"]
-    port = PythonOpcuaDiagnosticsPort(connection, lambda: capability_status(state.capabilities))
-    return _object_result(
-        await get_server_status_use_case(
-            port, describe_security(security_config()), server_identity_record(state.policy.config)
-        )
-    )
-
-
-# --- browsing --------------------------------------------------------------------
-
-
-async def browse_opcua_nodes(
-    ctx: Context,
-    node_id: str = _TRAVERSAL["rootNodeId"],
-    browse_path: str | None = None,
-    depth: int = _TRAVERSAL["defaultDepth"],
-    node_class: str | None = None,
-    name_filter: str | None = None,
-    include_values: bool = False,
-    max_nodes: int = _TRAVERSAL["defaultMaxNodes"],
-) -> CallToolResult:
-    """
-    Explore the address space: list children, walk a subtree, resolve a path, search.
-
-    One traversal serving what used to be ``browse_opcua_node_children`` and
-    ``get_all_variables`` — and, with ``browse_path`` and ``name_filter``, what
-    issue #11 asked two more tools for. They were two separate walks over the
-    same address space, which is how the missing continuation-point drain (#75)
-    reached both of them independently.
-
-    Filtering never prunes the walk: an Object excluded by ``node_class`` is
-    still descended into while ``depth`` allows, because the thing being looked
-    for is usually *below* the structure, not in it.
-
-    Returns:
-        CallToolResult: One record of ``resultShapes.nodeRefs`` — the nodes
-            found, whether the walk was truncated, and how many were inspected.
-    """
-    client = ctx.request_context.lifespan_context["opcua_client"]
-    port = PythonOpcuaBrowsePort(client, _state(ctx).operation_limits)
-    try:
-        result = await browse_nodes(
-            port,
-            node_id=node_id,
-            browse_path=browse_path,
-            depth=depth,
-            node_class=node_class,
-            name_filter=name_filter,
-            include_values=include_values,
-            max_nodes=max_nodes,
-        )
-        return _object_result(result["result"], result["completeness"])
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-# --- writing ---------------------------------------------------------------------
-
-
-async def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
-    """
-    Write a value to one or more OPC UA nodes.
-
-    Nodes given an explicit ``data_type`` skip the read-first inference entirely,
-    which is what makes a *write-only* node writable — reading it to learn its
-    type is exactly what such a node refuses (issue #9). The rest are read first,
-    in one batch, and converted to the type the server reports.
-
-    The whole batch goes out as one Write, and that is a promise rather than an
-    accident (issue #139). A batch over the server's MaxNodesPerWrite is refused
-    here, before anything is read or sent, instead of being split: OPC UA lets
-    one Write partially succeed already, and splitting would add a failure where
-    the first part has moved the plant and the second never arrives — which
-    ``uncertainOutcome`` could not then describe. ``limits.maxNodesPerWrite`` is
-    the schema's ``maxItems``, enforced before this runs.
-
-    Returns:
-        list[dict]: One record per node, in the order asked, shaped by
-            ``resultShapes.writeResults``. A node the server rejects is one
-            status among them; only a failure of the whole operation is raised
-            as a `ToolError`.
-    """
-    if not nodes:
-        raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
-    state = _state(ctx)
-    port = PythonOpcuaWritePort(
-        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata
-    )
-    bounds = {}
-    for index, node in enumerate(nodes):
-        bound = state.policy.bound_for(str(node.get("node_id", "")))
-        bounds[index] = bound.max_change if bound else None
-    try:
-        return await write_nodes(
-            port,
-            nodes,
-            {
-                "write": write_limit(state.operation_limits),
-                "read": read_chunk(state.operation_limits),
-            },
-            bounds,
-            state.policy.config.allow_out_of_range_writes,
-        )
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-async def call_opcua_method(
-    object_node_id: str,
-    method_node_id: str,
-    ctx: Context,
-    arguments: list[Any] | None = None,
-) -> CallToolResult:
-    """
-    Call a method on an OPC UA object, with arguments of the types it declares.
-
-    The declared types come from the method's own InputArguments definition
-    (issue #10). Without it this parsed every argument float then int then string
-    and forced Double or String, so a method expecting a Boolean or an Int32 was
-    called with the wrong type and either failed or — worse — did something with
-    a coerced value.
-
-    Returns:
-        CallToolResult: One record of ``resultShapes.methodResult``.
-    """
-    port = PythonOpcuaMethodPort(ctx.request_context.lifespan_context["opcua_client"])
-    try:
-        return _object_result(await call_method(port, object_node_id, method_node_id, arguments))
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-# --- data-change subscriptions ---------------------------------------------------
-
-
-def _subscription_port(ctx: Context):
-    state = _state(ctx)
-    return PythonOpcuaSubscriptionPort(
-        lambda: ctx.request_context.lifespan_context["opcua_client"],
-        state.subscriptions,
-        state.node_metadata,
-    )
-
-
-async def subscribe_opcua_nodes(
-    node_ids: list[str],
-    ctx: Context,
-    publishing_interval: float = 1000,
-    sampling_interval: float = 0,
-    buffer_size: int = 20,
-    deadband_type: str | None = None,
-    deadband_value: float | None = None,
-    data_change_trigger: str | None = None,
-) -> CallToolResult:
-    """Watch nodes for changes, validating percent ranges before creating subscriptions."""
-    if not node_ids:
-        raise ToolError(
-            error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
-        )
-    try:
-        data_filter = resolve_filter(deadband_type, deadband_value, data_change_trigger)
-        result = await subscribe_nodes(
-            _subscription_port(ctx),
-            node_ids,
-            {
-                "publishingInterval": publishing_interval,
-                "samplingInterval": sampling_interval,
-                "bufferSize": buffer_size,
-            },
-            data_filter,
-        )
-        return _records_result(result["records"], result["completeness"])
-    except (ValueError, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-def list_subscriptions(ctx: Context) -> CallToolResult:
-    """Read existing buffers even when the OPC UA connection is unavailable."""
-    result = list_subscriptions_use_case(_subscription_port(ctx))
-    return _records_result(result["records"], result["completeness"])
-
-
-async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> CallToolResult:
-    """Validate every subscription ID before cancelling any subscription."""
-    if not subscription_ids:
-        raise ToolError(
-            error_message("emptyArray", tool="unsubscribe_opcua_nodes", argument="subscription_ids")
-        )
-    try:
-        result = await unsubscribe_nodes(_subscription_port(ctx), subscription_ids)
-        return _records_result(result["records"], result["completeness"])
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-# --- events and Alarms & Conditions -----------------------------------------------
-
-
-async def subscribe_events(
-    ctx: Context,
-    node_id: str = events.DEFAULT_NOTIFIER,
-    severity_min: int = events.DEFAULTS["severityMin"],
-    buffer_size: int = events.DEFAULTS["bufferSize"],
-) -> CallToolResult:
-    """Start buffering OPC UA events from a notifier node."""
-    port = PythonOpcuaEventPort(
-        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
-    )
-    try:
-        return _object_result(
-            await subscribe_events_use_case(port, node_id, severity_min, buffer_size)
-        )
-    except AdapterFailure as error:
-        raise ToolError(str(error)) from error
-
-
-async def read_events(
-    ctx: Context, node_id: str = events.DEFAULT_NOTIFIER, limit: int = events.DEFAULTS["readLimit"]
-) -> CallToolResult:
-    """Drain buffered events and report truncation, overflow and reconnect gaps."""
-    port = PythonOpcuaEventPort(
-        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
-    )
-    try:
-        result = await read_events_use_case(port, node_id, limit or events.DEFAULTS["readLimit"])
-    except ApplicationRefusal as error:
-        raise ToolError(str(error)) from error
-    response = _records_result(result["records"], result["completeness"])
-    response.content.extend(TextContent(type="text", text=text) for text in result["notices"])
-    return response
-
-
-def _alarm_port(ctx: Context):
-    return PythonOpcuaAlarmPort(
-        lambda: ctx.request_context.lifespan_context["opcua_client"], lambda: _state(ctx).events
-    )
-
-
-async def list_active_alarms(
-    ctx: Context,
-    node_id: str = events.DEFAULT_NOTIFIER,
-    timeout_seconds: float = events.DEFAULTS["refreshTimeoutSeconds"],
-) -> list[dict]:
-    """List retained alarm/condition instances and remember their EventIds."""
-    try:
-        return await list_alarms(_alarm_port(ctx), node_id, timeout_seconds)
-    except AdapterFailure as error:
-        raise ToolError(str(error)) from error
-
-
-async def acknowledge_alarm(
-    event_id: str, ctx: Context, comment: str = "", condition_id: str | None = None
-) -> CallToolResult:
-    """Acknowledge an alarm, preserving the dedicated acknowledgement result shape."""
-    try:
-        return _object_result(
-            await act_on_alarm_use_case(
-                _alarm_port(ctx), event_id, "acknowledge", comment, None, condition_id, True
-            )
-        )
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
-async def act_on_alarm(
-    event_id: str,
-    action: str,
-    ctx: Context,
-    comment: str = "",
-    shelve_duration_ms: float | None = None,
-    condition_id: str | None = None,
-) -> CallToolResult:
-    """Apply an alarm action, retaining the action tool's result shape and frame."""
-    try:
-        return _object_result(
-            await act_on_alarm_use_case(
-                _alarm_port(ctx), event_id, action, comment, shelve_duration_ms, condition_id, False
-            )
-        )
-    except (ApplicationRefusal, AdapterFailure) as error:
-        raise ToolError(str(error)) from error
-
-
 # --- building a server ------------------------------------------------------------
 
 # Registration names are generated from the canonical contract (#138).
@@ -1312,7 +825,7 @@ def create_server(state: ServerState | None = None) -> PolicyMCPServer:
         state=state,
     )
     for name in TOOL_NAMES:
-        mcp.tool(description=DESC[name])(globals()[name])
+        mcp.tool(description=DESC[name])(handler_for(name))
 
     # The same subscription records as `list_subscriptions`, re-readable without a
     # tool call. A closure rather than a module-level function because `MCPServer`

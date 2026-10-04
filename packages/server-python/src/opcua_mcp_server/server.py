@@ -22,12 +22,15 @@ from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from . import events
+from .adapters.opcua_alarms import PythonOpcuaAlarmPort
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
 from .adapters.opcua_events import PythonOpcuaEventPort
 from .adapters.opcua_history import PythonOpcuaHistoryPort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
 from .adapters.opcua_write import PythonOpcuaWritePort
+from .application.alarms import act_on_alarm as act_on_alarm_use_case
+from .application.alarms import list_alarms
 from .application.browse import browse_nodes
 from .application.events import read_event_history as read_event_history_use_case
 from .application.events import read_events as read_events_use_case
@@ -77,7 +80,6 @@ from .limits import (
     LimitExceeded,
     check_request_bounds,
 )
-from .node_ids import canonical_node_id
 from .notices import notice
 from .operation_limits import (
     read_chunk,
@@ -1443,62 +1445,39 @@ async def read_events(
     return response
 
 
-def list_active_alarms(
+def _alarm_port(ctx: Context):
+    return PythonOpcuaAlarmPort(
+        lambda: ctx.request_context.lifespan_context["opcua_client"], lambda: _state(ctx).events
+    )
+
+
+async def list_active_alarms(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
     timeout_seconds: float = events.DEFAULTS["refreshTimeoutSeconds"],
 ) -> list[dict]:
-    """
-    List the alarm/condition instances the server is currently retaining.
-
-    Returns:
-        list[dict]: One record per retained condition, shaped by the shared
-            ``resultShapes.eventRecords`` in ``contract/tools.json``.
-    """
-    client = ctx.request_context.lifespan_context["opcua_client"]
+    """List retained alarm/condition instances and remember their EventIds."""
     try:
-        alarms = events.list_active_alarms(client, node_id, timeout_seconds)
-    except Exception as e:
-        raise ToolError(
-            error_message("alarmsFailed", node_id=node_id, reason=describe_error(e))
-        ) from e
-    _state(ctx).events.remember(alarms)
-    return alarms
+        return await list_alarms(_alarm_port(ctx), node_id, timeout_seconds)
+    except AdapterFailure as error:
+        raise ToolError(str(error)) from error
 
 
-def acknowledge_alarm(
-    event_id: str,
-    ctx: Context,
-    comment: str = "",
-    condition_id: str | None = None,
+async def acknowledge_alarm(
+    event_id: str, ctx: Context, comment: str = "", condition_id: str | None = None
 ) -> CallToolResult:
-    """
-    Acknowledge an alarm or condition by the event_id that reported it.
-
-    Returns:
-        CallToolResult: One record of ``resultShapes.acknowledgement``.
-    """
-    condition = condition_id or _state(ctx).events.condition_for(event_id)
-    if not condition:
-        raise ToolError(error_message("unknownEventId", event_id=event_id))
-
-    client = ctx.request_context.lifespan_context["opcua_client"]
+    """Acknowledge an alarm, preserving the dedicated acknowledgement result shape."""
     try:
-        status = events.acknowledge_alarm(client, condition, event_id, comment)
-    except Exception as e:
-        raise ToolError(
-            error_message("acknowledgeFailed", condition_id=condition, reason=describe_error(e))
-        ) from e
-    return _object_result(
-        {
-            "event_id": event_id,
-            "condition_id": canonical_node_id(condition),
-            "status": status,
-        }
-    )
+        return _object_result(
+            await act_on_alarm_use_case(
+                _alarm_port(ctx), event_id, "acknowledge", comment, None, condition_id, True
+            )
+        )
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
-def act_on_alarm(
+async def act_on_alarm(
     event_id: str,
     action: str,
     ctx: Context,
@@ -1506,44 +1485,15 @@ def act_on_alarm(
     shelve_duration_ms: float | None = None,
     condition_id: str | None = None,
 ) -> CallToolResult:
-    """
-    Confirm, annotate or shelve an alarm — the rest of the operator workflow.
-
-    Returns:
-        CallToolResult: One record of ``resultShapes.alarmAction``.
-    """
-    # A relationship between two arguments, which the contract's own schema
-    # cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
-    # on any other action would silently ignore it. Refusing says which action
-    # the caller probably meant.
-    if action == "shelveFor" and shelve_duration_ms is None:
-        raise ToolError(error_message("shelveForNeedsDuration"))
-    if action != "shelveFor" and shelve_duration_ms is not None:
-        raise ToolError(error_message("shelveDurationNotAllowed", action=action))
-
-    condition = condition_id or _state(ctx).events.condition_for(event_id)
-    if not condition:
-        raise ToolError(error_message("unknownEventId", event_id=event_id))
-
-    client = ctx.request_context.lifespan_context["opcua_client"]
+    """Apply an alarm action, retaining the action tool's result shape and frame."""
     try:
-        status = events.alarm_action(
-            client, condition, event_id, action, comment, shelve_duration_ms
-        )
-    except Exception as e:
-        raise ToolError(
-            error_message(
-                "alarmActionFailed", action=action, condition_id=condition, reason=describe_error(e)
+        return _object_result(
+            await act_on_alarm_use_case(
+                _alarm_port(ctx), event_id, action, comment, shelve_duration_ms, condition_id, False
             )
-        ) from e
-    return _object_result(
-        {
-            "event_id": event_id,
-            "condition_id": canonical_node_id(condition),
-            "action": action,
-            "status": status,
-        }
-    )
+        )
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 # --- building a server ------------------------------------------------------------

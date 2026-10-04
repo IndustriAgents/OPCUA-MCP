@@ -1,7 +1,7 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Current-value reads, browse, writes, methods, value history and events have moved so far.**
+extracts one feature at a time. **Reads, browse, writes, methods, value history, events and alarms have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
@@ -12,6 +12,8 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Alarm use cases and port | `application/alarms.py` | `application/alarms.ts` | Duration relationships, cached condition selection, caller-specific results, status/error framing and one action |
+| Native alarm adapter | `adapters/opcua_alarms.py` | `adapters/opcua-alarms.ts` | Condition refresh, native action methods, status normalization and lazy client/session selection |
 | Event use cases and port | `application/events.py` | `application/events.ts` | Applied subscription settings, ordered loss notices, history windows and filtered-page completeness |
 | Native event adapter | `adapters/opcua_events.py` | `adapters/opcua-events.ts` | Native event subscription/history calls and normalized per-instance buffer drains |
 | History use case and port | `application/history.py` | `application/history.ts` | Date windows, aggregate names, interval bounds and structured completeness |
@@ -40,7 +42,7 @@ to check the adapter. Import and file-size checks in
 `tests/unit/test_feature_boundaries.py` enforce the new application and adapter
 boundaries. As subsequent features move, these checks apply to their modules.
 
-The remaining slices are alarms,
+The remaining slices are
 subscriptions and diagnostics, followed by extraction of the common execution
 pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
@@ -95,3 +97,13 @@ subscription/history exceptions retain their original causes. Shared cases in
 `events-port.json` cover buffer clamping, missing subscriptions, overflow plus a
 reconnect gap, empty drains and the omitted one-hour history window with an
 injected clock. Alarm actions remain in the next slice.
+
+Alarm ports select a client/session lazily when a service is needed, so invalid
+duration relationships and unknown EventIds remain refusals before a service.
+Successful refreshes update the existing remembered condition cache; failed
+refreshes do not. The application preserves Good subcode names, distinguishes
+the dedicated acknowledgement shape from the action shape, and performs one
+native action. Shared `alarms-port.json` cases characterize those rules and
+failure framing; native timeout tests retain the original cause across the
+Python worker boundary. The separate #157 alias fix is applied when this stack
+rebases onto main; the extraction itself preserves the current calling shims.

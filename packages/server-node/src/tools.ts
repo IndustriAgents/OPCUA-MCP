@@ -9,13 +9,13 @@ import {
   Variant,
   VariantArrayType,
   DataValue,
-  CallMethodResult,
   AggregateFunction,
-  BrowseDirection,
   ClientSession,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { callMethod } from "./application/methods.js";
+import { NodeOpcuaMethodPort } from "./adapters/opcua-methods.js";
 import { browseNodes, type BrowseRequest } from "./application/browse.js";
 import { NodeOpcuaBrowsePort } from "./adapters/opcua-browse.js";
 import { readNodes } from "./application/read.js";
@@ -119,14 +119,10 @@ import {
   type ValueBound,
 } from "./policy.js";
 import { convertForVariant } from "./variant-codec.js";
-import { builtInType, guessVariant } from "./method-arguments.js";
 import { isGood } from "./status.js";
 import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
-
-/** The HasSubtype reference type (ns=0), which links a DataType to its parent. */
-const HAS_SUBTYPE = 45;
 
 /** One attempted write (resultShapes.writeResults). */
 interface WriteResultRecord {
@@ -1667,100 +1663,8 @@ export class OpcuaTools {
     methodNodeId: string,
     methodArgs?: unknown[]
   ) {
-    const session = this.requireSession();
-    const args = methodArgs ?? [];
-
-    try {
-      const declared = await this.inputArgumentTypes(session, methodNodeId);
-      const inputArguments = args.map((arg, index) => {
-        const declaredType = declared[index];
-        if (declaredType === undefined) return guessVariant(arg, index);
-        return new Variant({
-          dataType: declaredType.dataType,
-          arrayType: declaredType.arrayType,
-          value: convertForVariant(arg, declaredType.dataType, declaredType.arrayType),
-        });
-      });
-
-      const callResult: CallMethodResult = await session.call({
-        objectId: objectNodeId,
-        methodId: methodNodeId,
-        inputArguments,
-      });
-      // Good severity, not plain Good: GoodClamped or GoodLocalOverride is a call
-      // that happened, and refusing it would report as failed an action the
-      // plant carried out. The subcode is reported in `status` instead.
-      if (!isGood(callResult.statusCode)) {
-        throw new ToolFailure(`Method call failed with status: ${callResult.statusCode.name}`);
-      }
-
-      return objectResult({
-        object_node_id: canonicalNodeId(objectNodeId),
-        method_node_id: canonicalNodeId(methodNodeId),
-        status: callResult.statusCode.name,
-        outputs: (callResult.outputArguments ?? []).map((variant) => variantToJson(variant)),
-      });
-    } catch (error) {
-      // Refused before the call was sent, so it did not fail: wrapping it in
-      // "Failed to call method" would say the plant had turned it down.
-      if (error instanceof ContractRefusal) throw error;
-      throw new ToolFailure(
-        message("methodFailed", {
-          method_node_id: methodNodeId,
-          object_node_id: objectNodeId,
-          reason: describeError(error),
-        }),
-        { cause: error }
-      );
-    }
-  }
-
-  /** The declared type of each input argument, or [] when the method publishes none.
-   *
-   * A declared DataType that is not itself built in (`Duration`, `UtcTime`, an
-   * enumeration) is resolved to the built-in type it is encoded as, and one that
-   * resolves to none throws: that is a method whose argument cannot be encoded,
-   * not one that declares nothing, and guessing would send it anyway.
-   */
-  private async inputArgumentTypes(
-    session: ClientSession,
-    methodNodeId: string
-  ): Promise<Array<{ dataType: DataType; arrayType: VariantArrayType }>> {
-    let definition;
-    try {
-      definition = await session.getArgumentDefinition(methodNodeId);
-    } catch {
-      // Not every method publishes InputArguments, and a method with no
-      // arguments has nothing to publish. Fall back rather than refuse.
-      return [];
-    }
-
-    const supertypeOf = async (dataType: string): Promise<string | null> => {
-      // Every inverse reference, filtered here rather than by the server:
-      // python-opcua's server answers a browse filtered to HasSubtype with
-      // nothing at all, and the Python runtime does the same for that reason.
-      const result = await session.browse({
-        nodeId: dataType,
-        browseDirection: BrowseDirection.Inverse,
-        resultMask: 63,
-      });
-      if (!isGood(result.statusCode)) return null;
-      const parent = (result.references ?? []).find(
-        (reference) =>
-          reference.referenceTypeId.namespace === 0 &&
-          reference.referenceTypeId.value === HAS_SUBTYPE
-      );
-      return parent ? canonicalNodeId(parent.nodeId.toString()) : null;
-    };
-
-    const declared = [];
-    for (const argument of definition.inputArguments ?? []) {
-      declared.push({
-        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), supertypeOf),
-        arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
-      });
-    }
-    return declared;
+    const port = new NodeOpcuaMethodPort(this.requireSession());
+    return objectResult(await callMethod(port, objectNodeId, methodNodeId, methodArgs));
   }
 
   // --- data-change subscriptions -------------------------------------------

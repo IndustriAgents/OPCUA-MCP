@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared event-history capability node to the standard `ns=0;i=11242`; the old
   `i=11194` probe missed event archives on independent servers (#144).
 
-- Add explicit Python maintained-client qualification and legacy rollback selection; the default backend stays legacy pending complete qualification (#144).
+- Add explicit Python maintained-client qualification and legacy rollback selection; the default backend is asyncua and legacy is the one-release rollback path (#144).
 
 - Qualify instance-owned maintained OPC UA services through the existing application ports, preserving typed writes, derived method metadata and numeric failure classification (#144).
 
-- Qualify asyncua native value encodings and internal UA request DTOs against the existing contract while keeping the production backend unchanged (#144).
+- Qualify asyncua native value encodings and internal UA request DTOs against the existing contract at the MCP contract boundary (#144).
 
 ### Changed — separate runtime, protocol and audit ownership (#141)
 - Move connection/cache/subscription lifecycle, protocol startup/shutdown and

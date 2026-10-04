@@ -119,7 +119,7 @@ def parse_security_config(
             if node_only:
                 raise ValueError(
                     f'Security policy "{node_only}" is supported only by the Node runtime; '
-                    f"the Python runtime (python-opcua) supports: {', '.join(POLICIES)}"
+                    f"the Python runtime supports: {', '.join(POLICIES)}"
                 )
             raise ValueError(
                 f'Invalid OPCUA_SECURITY_POLICY: "{raw_policy}". Use one of: {", ".join(POLICIES)}'

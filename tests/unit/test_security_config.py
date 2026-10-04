@@ -100,7 +100,7 @@ def test_rejects_a_node_only_policy_by_name():
         parse({"OPCUA_SECURITY_POLICY": "Aes256_Sha256_RsaPss", **CERTS})
     assert str(excinfo.value) == (
         'Security policy "Aes256_Sha256_RsaPss" is supported only by the Node runtime; '
-        "the Python runtime (python-opcua) supports: None, Basic128Rsa15, Basic256, Basic256Sha256"
+        "the Python runtime supports: None, Basic128Rsa15, Basic256, Basic256Sha256"
     )
 
 

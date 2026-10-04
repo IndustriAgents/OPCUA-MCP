@@ -33,7 +33,7 @@ def test_invalid_backend_refuses_before_constructing_a_client(monkeypatch):
     monkeypatch.setattr(security, "Client", lambda _: pytest.fail("constructed a client"))
     with pytest.raises(ValueError, match="Invalid OPCUA_PYTHON_BACKEND"):
         security.create_client("opc.tcp://localhost:4840")
-    assert parse_python_backend({}) == "legacy"
+    assert parse_python_backend({}) == "asyncua"
 
 
 def test_security_setup_failure_closes_maintained_client_and_keeps_original_failure(monkeypatch):

@@ -54,12 +54,12 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 
 | Package | Range | What it does here | Security-sensitive |
 |---|---|---|---|
-| `cryptography` | `>=50.0.1,<51` | X.509 parsing for the ApplicationUri; python-opcua's channel signing and encryption | Certificates |
+| `cryptography` | `>=50.0.1,<51` | X.509 parsing for the ApplicationUri; maintained and rollback channel signing and encryption | Certificates |
 | `jsonschema` | `>=4.23,<5` | Draft 2020-12 input and result validation | Schema validation |
 | `typing-extensions` | `>=4.12,<5` | Generated TypedDict types on Python 3.10 | Static contract types |
 | `mcp[cli]` | `>=2.2.0,<3` | MCP protocol, stdio transport, tool input-schema validation | MCP protocol, schema validation |
-| `asyncua` | `>=2.0.1,<2.1` | Maintained adapter migration and bounded transport qualification | OPC UA transport, certificates |
-| `opcua` | `>=0.98.13,<0.99` | OPC UA client stack (python-opcua) | OPC UA transport, certificates |
+| `asyncua` | `>=2.0.1,<2.1` | Default OPC UA client and bounded transport | OPC UA transport, certificates |
+| `opcua` | `>=0.98.13,<0.99` | Internal UA DTOs and one-release legacy rollback client | OPC UA transport, certificates |
 
 ### `opcua-mcp-server` on npm — `packages/server-node/package.json`
 
@@ -85,7 +85,7 @@ Floor notes:
 - `opcua` has one release in range and no successor: python-opcua is
   unmaintained, and its open advisory (CVE-2022-25304) is mitigated in this
   project as [SECURITY.md](../SECURITY.md#known-advisories-in-dependencies)
-  describes. Moving off it is [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144).
+  describes. Its wire parser is used only by the explicit one-release rollback backend; the default uses asyncua. Migration is [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144).
 - `httpx` used to be declared by the Python package. Nothing imported it — the
   MCP SDK moved to `httpx2` — so it is no longer a dependency at all.
 
@@ -214,8 +214,9 @@ message on Python 3.12+ — and a new one arrives unnoticed under the volume. So
   dependency qualifies: one attributed to our own code is ours to fix.
 
 Current allowlist: python-opcua's `datetime.utcnow()` / `utcfromtimestamp()`
-warnings on Python 3.12+, tracked by #144 and removed when the Python runtime
-stops depending on python-opcua. No upstream release will fix them.
+warnings on Python 3.12+, retained for explicit legacy rollback and legacy test
+fixtures. The default maintained client does not emit them; remove the allowance
+when that remaining legacy use is retired. No upstream release will fix them.
 
 Node's `--throw-deprecation` has no per-warning exception. If an upstream
 package starts emitting a Node runtime deprecation in the unit tests, the

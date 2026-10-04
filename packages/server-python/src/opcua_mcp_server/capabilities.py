@@ -244,10 +244,8 @@ def client_supports_history_events(client) -> Probe:
 
     A separate node and a separate answer from :func:`client_supports_history`:
     Part 11 §5.4 lets a server historise values without historising events, and
-    most do. Note that the node is commonly absent rather than present-and-false
-    — python-opcua's own server has no ns=0;i=11194 at all — which reads the
-    same way here, and should: a server that cannot say it keeps event history
-    is one whose event history nobody should go looking for.
+    most do. An absent capability node and a false value both mean that this
+    server does not advertise an event archive.
     """
     return _boolean_probe(
         client, HISTORY_EVENTS_NODE_ID, CAPABILITIES["historyEvents"]["browseName"]

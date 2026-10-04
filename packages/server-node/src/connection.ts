@@ -687,10 +687,8 @@ export class OpcuaConnection {
    *
    * A different node and a different answer from `accessHistoryDataCapability`:
    * Part 11 §5.4 lets a server keep values without keeping events, and most do.
-   * The node is commonly absent rather than present-and-false — python-opcua's
-   * server has no ns=0;i=11194 at all — which reads the same way here, and
-   * should: a server that cannot say it keeps event history is one whose event
-   * history nobody should go looking for.
+   * An absent capability node and a false value both mean that this server
+   * does not advertise an event archive.
    */
   async accessHistoryEventsCapability(on?: ClientSession): Promise<Probe> {
     return await this.booleanCapability("historyEvents", on);

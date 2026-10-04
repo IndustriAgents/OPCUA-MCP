@@ -795,7 +795,7 @@ the cap, `num_values` or the server stopped the read, and gives the `start_time`
 to continue from.
 
 Served only when the server advertises `AccessHistoryEventsCapability`
-(`ns=0;i=11194`), and refused with `capability_not_supported` otherwise — listed
+(`ns=0;i=11242`), and refused with `capability_not_supported` otherwise — listed
 either way. That is a different node and a different answer from the one
 `read_opcua_history` needs: OPC UA Part 11 §5.4 lets a server keep values
 without keeping events, and most do.

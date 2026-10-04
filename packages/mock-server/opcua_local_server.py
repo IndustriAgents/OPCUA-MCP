@@ -50,8 +50,7 @@ class Server(NativeServer):
 def _engineering_units(display: str, description: str) -> ua.EUInformation:
     """One ``EUInformation``, built field by field.
 
-    python-opcua's generated structures take no keyword arguments, so this is
-    what constructing one looks like. ``UnitId`` is the UNECE code the spec
+    ``UnitId`` is the UNECE code the spec
     points at — 4408652 is "CEL", degree Celsius — and a real server publishes
     it, so a mock that omitted it would teach the wrong shape.
     """
@@ -114,7 +113,7 @@ class IndustrialControlSystem:
 
     #: The URI for namespace index 2, where every node in this mock lives.
     #:
-    #: Registered rather than left implicit. python-opcua lets a node be created
+    #: Registered rather than left implicit. The SDK lets a node be created
     #: at a bare index, so every node here sat at `ns=2` while the server's own
     #: NamespaceArray listed only indexes 0 and 1 — a server whose node ids point
     #: at a namespace it does not admit to having. Real servers publish a URI for
@@ -127,7 +126,7 @@ class IndustrialControlSystem:
         """Setup the OPC UA address space with industrial control structure."""
 
         # Index 2, matching where every node below is created. Asserted rather
-        # than assumed: python-opcua appends, so a namespace registered earlier
+        # than assumed: the SDK appends, so a namespace registered earlier
         # would silently shift this and leave every `ns=2` id pointing elsewhere.
         index = self.server.register_namespace(self.NAMESPACE_URI)
         assert index == 2, f"expected namespace index 2 for {self.NAMESPACE_URI}, got {index}"
@@ -165,10 +164,10 @@ class IndustrialControlSystem:
 
     #: The OperationLimits this mock publishes (Part 5 §6.3.11), both below the
     #: MCP servers' own per-call caps (contract limits: 500 per read, 100 per
-    #: write). python-opcua's default is 10000 for every one, which no client
+    #: write). The SDK's default is 10000 for every one, which no client
     #: limit is ever lower than — so against the default, the path where a
     #: server's stated limit is the one that binds would never run in the suite.
-    #: python-opcua does not enforce them; they are a statement for clients to
+    #: the SDK does not enforce them; they are a statement for clients to
     #: honour, which is exactly what is being tested (issue #139).
     MAX_NODES_PER_READ = 100
     MAX_NODES_PER_WRITE = 50
@@ -244,7 +243,7 @@ class IndustrialControlSystem:
         """Announce alarm transitions as OPC UA events.
 
         Emitted from the **Server** object (`ns=0;i=2253`) rather than from the
-        plant folder, because python-opcua's server delivers an event only to
+        plant folder, because the SDK's server delivers an event only to
         monitored items on the node that emits it — it does not propagate one up
         the notifier hierarchy the way a spec-complete server does. A client
         subscribing to the Server object, which is where clients look first and
@@ -252,9 +251,8 @@ class IndustrialControlSystem:
         these. `SourceNode`/`SourceName` still name the plant, so the event says
         what it is about.
 
-        These are plain `BaseEventType` events, not conditions: python-opcua has
-        no condition model, so there is nothing here to acknowledge and
-        `ConditionRefresh` is not implemented. `packages/mock-server-alarms` is
+        This mock emits plain `BaseEventType` events and does not model
+        conditions, acknowledgement or `ConditionRefresh`. `packages/mock-server-alarms` is
         the mock that covers that half.
         """
         self.event_generator = self.server.get_event_generator()
@@ -268,7 +266,7 @@ class IndustrialControlSystem:
     def _historize_events(self):
         """Keep the events, so a client can look backwards at an alarm burst.
 
-        Two pieces of setup, neither of which python-opcua does for you:
+        Two pieces of setup, neither of which the SDK does for you:
 
         `historize_node_event` subscribes to the event types the *source*
         declares it generates, so a node with no `GeneratesEvent` reference gets
@@ -276,21 +274,15 @@ class IndustrialControlSystem:
         history is silently always empty. The Server object here emits
         `BaseEventType`, so that is what it has to declare.
 
-        And `AccessHistoryEventsCapability` (`ns=0;i=11194`) does not exist in
-        python-opcua's namespace 0 at all, so it has to be created. It is the
-        node a client reads to decide whether asking for event history is worth
-        a round trip, and a server that stores events but never says so is a
-        server whose history nobody looks for.
+        The maintained namespace already defines `AccessHistoryEventsCapability`
+        (`ns=0;i=11242`). Publish it only when event storage is enabled, so a
+        client's capability probe describes the configured archive.
         """
         emitter = self.server.get_node(ua.NodeId(ua.ObjectIds.Server))
         emitter.add_reference(ua.NodeId(ua.ObjectIds.BaseEventType), ua.ObjectIds.GeneratesEvent)
         self.server.historize_node_event(emitter, period=timedelta(minutes=10), count=0)
 
-        capabilities = self.server.get_node(ua.NodeId(ua.ObjectIds.HistoryServerCapabilities))
-        node = capabilities.add_variable(
-            ua.NodeId(11194), ua.QualifiedName("AccessHistoryEventsCapability", 0), True
-        )
-        node.add_reference(ua.NodeId(ua.ObjectIds.PropertyType), ua.ObjectIds.HasTypeDefinition)
+        self.server.get_node(ua.NodeId(11242)).set_value(True)
         logging.info("event history enabled")
 
     def _emit_alarm_transitions(self):
@@ -857,12 +849,12 @@ def main():
         # Setup the address space
         industrial_system.setup_address_space()
 
-        # Start the server
-        server.start()
+        # Publish capabilities before the listener admits clients.
         industrial_system.advertise_operation_limits()
         if not args.no_history:
             industrial_system.historize()
         industrial_system.setup_events(keep_history=not args.no_history)
+        server.start()
         logging.info(f"OPC UA Server started at {args.endpoint}")
         logging.info("Server is running and ready for connections")
 

@@ -330,7 +330,7 @@ Some tools only work against servers that support them:
 | Capability | Probe | Needed by |
 |---|---|---|
 | `history` | Read `AccessHistoryDataCapability` (`ns=0;i=11193`) is true | `read_opcua_history` |
-| `historyEvents` | Read `AccessHistoryEventsCapability` (`ns=0;i=11194`) is true | `read_event_history` |
+| `historyEvents` | Read `AccessHistoryEventsCapability` (`ns=0;i=11242`) is true | `read_event_history` |
 | `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_opcua_history`, and its `aggregate_function` argument |
 
 Until #140 each runtime filtered `tools/list` by these: a tool the server could

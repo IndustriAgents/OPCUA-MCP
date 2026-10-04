@@ -664,7 +664,7 @@
                     "not_supported",
                     "unknown"
                   ],
-                  "description": "AccessHistoryEventsCapability (ns=0;i=11194): read_event_history."
+                  "description": "AccessHistoryEventsCapability (ns=0;i=11242): read_event_history."
                 },
                 "aggregate": {
                   "type": "string",

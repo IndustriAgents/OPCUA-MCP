@@ -463,7 +463,7 @@
                 "historyEvents": {
                   "type": "string",
                   "enum": ["supported", "not_supported", "unknown"],
-                  "description": "AccessHistoryEventsCapability (ns=0;i=11194): read_event_history."
+                  "description": "AccessHistoryEventsCapability (ns=0;i=11242): read_event_history."
                 },
                 "aggregate": {
                   "type": "string",
@@ -871,10 +871,10 @@
       "check": "readBooleanTrue"
     },
     "historyEvents": {
-      "$comment": "Part 11 \u00a75.4's HistoryServerCapabilities. A separate node from AccessHistoryDataCapability and a separate answer: storing values and storing events are different features, and a server commonly does one and not the other. Note that this node is genuinely absent from some servers' namespace 0 rather than present-and-false \u2014 python-opcua is one \u2014 which reads the same way here and should: a server that cannot say it keeps event history is one whose event history nobody should go looking for.",
+      "$comment": "Part 11 \u00a75.4 HistoryServerCapabilities. Event storage and value storage are separate capabilities. Read the standard AccessHistoryEventsCapability node i=11242. A missing node and a false value both mean that the server does not advertise an event archive.",
       "label": "event history",
       "remediation": "This server keeps no event archive, so past events cannot be read back. Capture events from now on with subscribe_events and read_events, or list the alarms that are active now with list_active_alarms; to keep events, enable event historizing on the OPC UA server.",
-      "nodeId": "ns=0;i=11194",
+      "nodeId": "ns=0;i=11242",
       "browseName": "AccessHistoryEventsCapability",
       "check": "readBooleanTrue"
     },

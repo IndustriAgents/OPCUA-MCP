@@ -586,11 +586,11 @@ name = "opcua-local-server"
 version = "0.5.1"
 source = { editable = "packages/mock-server" }
 dependencies = [
-    { name = "opcua" },
+    { name = "asyncua" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "opcua", specifier = ">=0.98.13,<0.99" }]
+requires-dist = [{ name = "asyncua", specifier = ">=2.0.1,<2.1" }]
 
 [[package]]
 name = "opcua-mcp-server"

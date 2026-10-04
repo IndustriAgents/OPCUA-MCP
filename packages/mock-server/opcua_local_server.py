@@ -1,53 +1,50 @@
 import argparse
-import copy
 import logging
 import random
 import time
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
-from opcua import Server, ua
-from opcua.common.node import Node
-from opcua.server.address_space import AttributeService
+from asyncua import ua
+from asyncua.server.address_space import AttributeService
+from asyncua.sync import Server as NativeServer
+from asyncua.sync import SyncNode as Node
 
 
-def answer_writes_to_unknown_nodes():
-    """Make a write to a node the server does not have an answer, not a hang-up.
+class MockAttributeService(AttributeService):
+    """Preserve per-item unknown-node answers and source times for stored values."""
 
-    python-opcua checks the AccessLevel bits of every node a non-admin session
-    writes to — which is every client here, since the endpoints are anonymous —
-    and reads them straight off what ``get_attribute_value`` returns. For a node
-    id the address space does not have, that is an empty ``DataValue`` carrying
-    BadNodeIdUnknown and a null Variant, so the bit test raises ``TypeError:
-    unsupported operand type(s) for &: 'NoneType' and 'int'`` out of the request
-    handler. The server then never answers the WriteRequest and drops the
-    connection; the client waits out its own transaction timeout (15s in
-    node-opcua) and every other node in the same batch is lost with it (#64).
+    async def write(self, params, *args, **kwargs):
+        statuses = []
+        for item in params.NodesToWrite:
+            if item.NodeId not in self._aspace:
+                statuses.append(ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown))
+                continue
+            if item.AttributeId == ua.AttributeIds.Value and item.Value.SourceTimestamp is None:
+                item = replace(
+                    item, Value=replace(item.Value, SourceTimestamp=datetime.now(timezone.utc))
+                )
+            result = await super().write(replace(params, NodesToWrite=[item]), *args, **kwargs)
+            statuses.extend(result)
+        return statuses
 
-    A conformant server answers per item: BadNodeIdUnknown for the node it does
-    not have, Good for the ones it wrote. So screen the unknown ids out here and
-    let the library write the rest. python-opcua is archived upstream in favour
-    of asyncua, so this is patched at the mock rather than waiting for a release.
-    """
-    original_write = AttributeService.write
 
-    def write(self, params, *args, **kwargs):
-        known = [item for item in params.NodesToWrite if item.NodeId in self._aspace]
-        if len(known) == len(params.NodesToWrite):
-            return original_write(self, params, *args, **kwargs)
+class Server(NativeServer):
+    """Small synchronous facade around the maintained mock server's SDK loop."""
 
-        statuses = iter(())
-        if known:
-            screened = copy.copy(params)
-            screened.NodesToWrite = known
-            statuses = iter(original_write(self, screened, *args, **kwargs))
-        return [
-            next(statuses)
-            if item.NodeId in self._aspace
-            else ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown)
-            for item in params.NodesToWrite
-        ]
+    def __init__(self):
+        super().__init__()
+        # Only this owned mock instance changes; no library class is patched.
+        self.aio_obj.iserver.attribute_service = MockAttributeService(self.aio_obj.iserver.aspace)
 
-    AttributeService.write = write
+    def get_objects_node(self):
+        return self.nodes.objects
+
+    def historize_node_data_change(self, node, **kwargs):
+        return self.tloop.post(self.aio_obj.historize_node_data_change(node.aio_obj, **kwargs))
+
+    def historize_node_event(self, node, **kwargs):
+        return self.tloop.post(self.aio_obj.historize_node_event(node.aio_obj, **kwargs))
 
 
 def _engineering_units(display: str, description: str) -> ua.EUInformation:
@@ -234,8 +231,8 @@ class IndustrialControlSystem:
         for child in industrial_system.get_children():
             for variable in child.get_variables():
                 logging.info(
-                    f"historize {child.get_display_name().to_string()};"
-                    f"{variable.get_display_name().to_string()}"
+                    f"historize {child.read_display_name().to_string()};"
+                    f"{variable.read_display_name().to_string()}"
                 )
                 self.server.historize_node_data_change(
                     variable, period=timedelta(minutes=10), count=0
@@ -291,9 +288,7 @@ class IndustrialControlSystem:
 
         capabilities = self.server.get_node(ua.NodeId(ua.ObjectIds.HistoryServerCapabilities))
         node = capabilities.add_variable(
-            ua.NodeId(11194),
-            ua.QualifiedName("AccessHistoryEventsCapability", 0),
-            True,
+            ua.NodeId(11194), ua.QualifiedName("AccessHistoryEventsCapability", 0), True
         )
         node.add_reference(ua.NodeId(ua.ObjectIds.PropertyType), ua.ObjectIds.HasTypeDefinition)
         logging.info("event history enabled")
@@ -836,8 +831,6 @@ def main():
 
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    answer_writes_to_unknown_nodes()
 
     # Create and configure the server
     server = Server()

@@ -9,6 +9,7 @@ def test_native_protocol_factory_is_bounded_without_patching_library_classes():
     original = UASocketProtocol.data_received
     first = ApplicationOwnedClient("opc.tcp://localhost:4840")
     second = ApplicationOwnedClient("opc.tcp://localhost:4841")
+    assert first.name == first.description == "OPC UA MCP Client"
     selected = first.uaclient._make_protocol()
     other = second.uaclient._make_protocol()
     assert isinstance(selected, BoundedProtocol)

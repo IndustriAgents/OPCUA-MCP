@@ -27,8 +27,10 @@ class BoundedUaClient(UaClient):
 
 
 class ApplicationOwnedClient(Client):
-    def __init__(self, url, timeout=4):
+    def __init__(self, url, timeout=4, application_name="OPC UA MCP Client"):
         super().__init__(url, timeout=timeout, auto_reconnect=False)
+        self.name = application_name
+        self.description = application_name
         self.uaclient = BoundedUaClient(timeout)
         self.uaclient.pre_request_hook = self._wait_until_ready
         self.nodes = Shortcuts(self.uaclient.session)

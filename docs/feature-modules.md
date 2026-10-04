@@ -1,7 +1,7 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Current-value reads, browse, writes and method calls have moved so far.**
+extracts one feature at a time. **Current-value reads, browse, writes, method calls and value history have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
@@ -12,6 +12,8 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| History use case and port | `application/history.py` | `application/history.ts` | Date windows, aggregate names, interval bounds and structured completeness |
+| Native history adapter | `adapters/opcua_history.py` | `adapters/opcua-history.ts` | Native history requests, page drain/release, status and value codecs |
 | Method use case and port | `application/methods.py` | `application/methods.ts` | Match raw arguments to normalized declarations, canonical result identifiers, one call and error framing |
 | Native method adapter | `adapters/opcua_methods.py` | `adapters/opcua-methods.ts` | Resolve native datatype ancestry, encode variants, call the service once, normalize native status and outputs |
 | Native read adapter | `adapters/opcua_read.py` | `adapters/opcua-read.ts` | Native node/attribute/variant access, codec, typed failure with its original cause |
@@ -36,7 +38,7 @@ to check the adapter. Import and file-size checks in
 `tests/unit/test_feature_boundaries.py` enforce the new application and adapter
 boundaries. As subsequent features move, these checks apply to their modules.
 
-The remaining slices are history, events, alarms,
+The remaining slices are events, alarms,
 subscriptions and diagnostics, followed by extraction of the common execution
 pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
@@ -73,3 +75,12 @@ conversion failures keep their per-node status. There is at most one send,
 including when that send fails. Shared fake-port cases in `write-port.json`
 characterize those boundaries without a connection. Native adapter tests retain
 the original timeout cause before Python crosses its worker-thread boundary.
+
+Value history uses normalized records across its port. Native continuation points
+remain within one adapter call: raw reads release their point; aggregate reads
+drain every bounded native page with the original request details. The application
+owns date windows, offered aggregate names, interval refusal and completeness,
+including whether a forward read has a resumable timestamp. The clock is
+injectable for omitted aggregate end times. `history-port.json` characterizes
+those query rules and typed failures; existing native request/page tests retain
+the continuation protocol checks. Event history moves with the events slice.

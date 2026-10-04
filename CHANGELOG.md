@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract the value-history application port (#141)
+- Separate date windows, aggregate validation and completeness from native
+  history requests and continuation handling in both runtimes. Native points
+  remain scoped to a single call; public records and refusal frames are stable.
+
 ### Changed — extract the write application port (#141)
 - Move whole-batch write bounds, inference ordering and result correlation behind
   async ports in both runtimes. Native adapters own prepared Variants and issue

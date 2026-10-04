@@ -20,15 +20,15 @@ from typing import Any
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from opcua import ua
 
 from . import events
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
+from .adapters.opcua_history import PythonOpcuaHistoryPort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
 from .adapters.opcua_write import PythonOpcuaWritePort
-from .aggregates import validate_aggregate_function
 from .application.browse import browse_nodes
+from .application.history import read_history
 from .application.methods import call_method
 from .application.read import read_nodes
 from .application.write import write_nodes
@@ -71,20 +71,10 @@ from .diagnostics import disconnected_status, read_server_status
 from .errors import AdapterFailure, ApplicationRefusal
 from .errors import message as error_message
 from .generated_contract import TOOL_NAMES
-from .history import (
-    aggregate_pages,
-    continues,
-    raw_details,
-    read_continuation,
-    release_continuation_point,
-)
 from .limits import (
-    MAX_HISTORY_VALUES,
     MAX_SUBSCRIPTIONS,
     LimitExceeded,
-    aggregate_intervals,
     check_request_bounds,
-    chunked,
     event_buffer_size,
     history_values,
 )
@@ -98,11 +88,9 @@ from .operation_limits import (
 from .policy import (
     control_gate,
     describe_policy,
-    format_number,
     server_identity_record,
     values_at,
 )
-from .records import history_data, history_records
 from .result_text import normalize_result_text, pretty_json
 from .security import describe_security, security_config
 from .state import ServerState
@@ -984,22 +972,6 @@ def _forward_from(start: datetime | None, end: datetime | None, last: Any) -> st
     return last if isinstance(last, str) else None
 
 
-def _read_values(client: Any, node_ids: list[Any], attribute: Any, chunk: int) -> list[Any]:
-    """One logical read, sent as consecutive Reads of at most ``chunk`` nodes.
-
-    Sequential rather than in parallel: the chunking exists because the server
-    said how much one request may carry, and firing every chunk at once would
-    put the same load on it in a different envelope. The results are
-    concatenated in the order asked, so each node keeps its own status in its
-    own place (issue #139).
-    """
-    return [
-        value
-        for part in chunked(node_ids, chunk)
-        for value in client.uaclient.get_attributes(part, attribute)
-    ]
-
-
 def _object_result(record: Any, completeness: dict | None = None) -> CallToolResult:
     """A result that is one object rather than a list of records.
 
@@ -1047,7 +1019,7 @@ async def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
         raise ToolError(str(error)) from error
 
 
-def read_opcua_history(
+async def read_opcua_history(
     node_id: str,
     ctx: Context,
     start_time: str | None = None,
@@ -1067,116 +1039,25 @@ def read_opcua_history(
         CallToolResult: One record per reading or interval, shaped by
             ``resultShapes.historyRecords``, and ``completeness`` beside them.
     """
-    client = ctx.request_context.lifespan_context["opcua_client"]
-
-    if aggregate_function is None:
-        # `0` used to mean "every reading in the range", which against a node
-        # historised at 100ms is a request that never returns — and the browse
-        # caps beside it have always been refusals rather than tuning knobs.
-        wanted = history_values(num_values)
-        try:
-            start = parse_iso_datetime(start_time)
-            end = parse_iso_datetime(end_time)
-            # What `Node.read_raw_history` sends, through the call that keeps the
-            # continuation point it throws away; see history.py.
-            details = raw_details(start, end, wanted)
-            result = client.get_node(node_id).history_read(details)
-            # Good severity, not `StatusCode.check()`'s plain Good: GoodNoData is
-            # an empty range with completeness complete, not a failed read (#157).
-            values = history_data(result, "Read history", "DataValues")
-            continued = continues(result.ContinuationPoint)
-            release_continuation_point(client, node_id, result.ContinuationPoint, details)
-            records = history_records(values)
-            return _history_result(
-                records,
-                history_completeness(
-                    returned=len(records),
-                    fetched=len(records),
-                    wanted=wanted,
-                    continuation_point=continued,
-                    next_start=_forward_from(
-                        start, end, records[-1]["timestamp"] if records else None
-                    ),
-                ),
-                "historyTruncated",
-            )
-        except Exception as e:
-            raise ToolError(
-                error_message("historyFailed", node_id=node_id, reason=describe_error(e))
-            ) from e
-
-    if start_time is None:
-        raise ToolError(error_message("aggregateNeedsStart"))
-
-    # `_ensure_capabilities` has already refused a server that offers none, on
-    # answers read on this very session; what is left is a name it does not.
-    aggregate_functions = _state(ctx).capabilities.aggregate_functions
-    # Both runtimes reject an unsupported function with the same sentence, so the
-    # message is part of the contract and must reach the client rather than be
-    # masked as a crash — hence ToolError. See `validate_aggregate_function`.
+    state = _state(ctx)
+    offered = state.capabilities.aggregate_functions
+    port = PythonOpcuaHistoryPort(ctx.request_context.lifespan_context["opcua_client"], offered)
     try:
-        validate_aggregate_function(aggregate_function, aggregate_functions)
-    except ValueError as e:
-        raise ToolError(str(e)) from e
-
-    try:
-        details = ua.ReadProcessedDetails()
-        details.StartTime = parse_iso_datetime(start_time)
-        # UTC, not naive local time: `parse_iso_datetime` yields aware UTC, so a
-        # naive `datetime.now()` here would shift the window end by the host's UTC
-        # offset and pad the result with an empty bucket per interval in between.
-        details.EndTime = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
-        details.ProcessingInterval = processing_interval
-        details.AggregateType = [aggregate_functions[aggregate_function]]
-
-        # The number of results is decided by `processing_interval` over the
-        # range, which is the whole point of asking for one — it is how to see a
-        # week without transferring a week. It is still a number of records,
-        # though, and a millisecond interval over a year is billions of them; so
-        # it is bounded by the same cap as a raw read, and refused before it is
-        # sent.
-        intervals = aggregate_intervals(
-            details.StartTime.timestamp() * 1000,
-            details.EndTime.timestamp() * 1000,
-            processing_interval,
+        result = await read_history(
+            port,
+            {
+                "node_id": node_id,
+                "start": start_time,
+                "end": end_time,
+                "num_values": num_values,
+                "aggregate_function": aggregate_function,
+                "processing_interval": processing_interval,
+            },
+            list(offered),
         )
-        if intervals > MAX_HISTORY_VALUES:
-            raise LimitExceeded(
-                error_message(
-                    "tooManyIntervals",
-                    tool="read_opcua_history",
-                    count=intervals,
-                    processing_interval=format_number(processing_interval),
-                    limit=MAX_HISTORY_VALUES,
-                )
-            )
-
-        result = client.get_node(node_id).history_read(details)
-        values = aggregate_pages(
-            result,
-            lambda point: read_continuation(client, node_id, point, details),
-            lambda point: release_continuation_point(client, node_id, point, details),
-        )
-        records = history_records(values)
-        # All native pages were consumed; a short server page is not a short range.
-        return _history_result(
-            records,
-            history_completeness(
-                returned=len(records),
-                fetched=len(records),
-                wanted=None,
-                continuation_point=False,
-                next_start=None,
-            ),
-            "historyTruncated",
-        )
-    except LimitExceeded as e:
-        # Preserve contract refusals, including a bounded continuation drain.
-        raise ToolError(str(e)) from e
-    except Exception as e:
-        raise ToolError(
-            error_message("historyFailed", node_id=node_id, reason=describe_error(e))
-        ) from e
+        return _history_result(result["records"], result["completeness"], "historyTruncated")
+    except (ApplicationRefusal, AdapterFailure, LimitExceeded) as error:
+        raise ToolError(str(error)) from error
 
 
 # Registered and advertised always; a call is checked against the capabilities

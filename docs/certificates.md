@@ -222,6 +222,9 @@ and CRL material. Broken links and non-files are ignored; a store with no usable
 anchors refuses connection. Limits apply to the target bytes and each selected
 file entry, so links cannot bypass the material bounds.
 
+Peer leaf certificates are limited to 1 MiB DER before cryptographic path
+validation in both runtimes.
+
 Material is bounded to 100 files across all folders, 1 MiB per file, 16 MiB total
 and a verified chain of at most eight certificates. The Node native issuer
 search is additionally bounded to 64 expansions, refusing cyclic or overly

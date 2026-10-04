@@ -1,5 +1,6 @@
 {
   "now": "2026-10-04T00:00:00Z",
+  "peerCertificateBytes": 1048576,
   "cases": [
     {
       "certificate": "server.pem",

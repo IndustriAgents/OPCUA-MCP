@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from OpenSSL import crypto
 
 MAX_FILES = 100
@@ -113,6 +114,8 @@ def certificate_problem(
         issuers = [_certificate(data) for data in material["issuers/certs"]]
         if not anchors:
             return "BadCertificateUntrusted"
+        if len(certificate.public_bytes(serialization.Encoding.DER)) > MAX_FILE_BYTES:
+            return "BadCertificateInvalid"
         for anchor in anchors:
             anchor.verify_directly_issued_by(anchor)
         try:

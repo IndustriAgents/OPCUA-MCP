@@ -123,3 +123,30 @@ def test_server_defined_class_cannot_impersonate_a_standard_structure():
     }
     with pytest.raises(TypeError, match="Unsupported internal UA request type"):
         native_request(impostor)
+
+
+def test_local_request_can_reuse_a_node_id_from_a_native_response():
+    request = legacy.CallMethodRequest()
+    request.ObjectId = ua.NodeId("condition", 2)
+    request.MethodId = ua.NodeId(9111)
+    request.InputArguments = [legacy.Variant("café 🙂", legacy.VariantType.String)]
+    converted = native_request(request)
+    assert converted.ObjectId == request.ObjectId
+    assert converted.MethodId == request.MethodId
+    assert converted.InputArguments[0].Value == "café 🙂"
+
+
+def test_expanded_node_id_preserves_namespace_uri_and_server_index():
+    node_id = legacy.NodeId(42, 2)
+    node_id.NamespaceUri = "urn:plant:measurements"
+    node_id.ServerIndex = 3
+    converted = native_request(node_id)
+    assert isinstance(converted, ua.ExpandedNodeId)
+    assert converted.NamespaceUri == node_id.NamespaceUri
+    assert converted.ServerIndex == 3
+    assert converted.Identifier == 42
+
+
+def test_cyclic_local_request_is_refused_before_native_serialization():
+    with pytest.raises(ValueError, match="DTO nesting limit"):
+        native_request(NATIVE["extension_cycle"])

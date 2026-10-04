@@ -1,20 +1,20 @@
 """Maintained-library values at the existing internal UA request boundary.
 
-Only locally constructed legacy request DTOs are serialized here. Network
-responses are parsed by asyncua and never decoded by the legacy library.
+Only locally constructed legacy request DTOs are converted here. The maintained
+library owns binary encoding and parsing; legacy DTOs provide a rollback boundary.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import fields, is_dataclass
+from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
 from asyncua import ua
-from asyncua.common.utils import Buffer
-from asyncua.ua import ua_binary, uaprotocol_auto
+from asyncua.ua import uaprotocol_auto
 from opcua import ua as legacy
-from opcua.ua import ua_binary as legacy_binary
 
 
 def standard_fields(value):
@@ -55,20 +55,56 @@ def standard_fields(value):
 
 
 def native_request(value):
-    """Convert a local request DTO to asyncua without maintaining a second UA field map."""
+    """Convert local DTO fields into maintained native types without legacy binary parsing."""
+    return _native_request(value, 0)
+
+
+def _native_request(value, depth):
+    # Internal UA envelopes add nesting beyond the independently bounded JSON
+    # arguments. Refuse cycles without reaching the interpreter recursion limit.
+    if depth > 32:
+        raise ValueError("Internal UA request exceeds the DTO nesting limit")
     if isinstance(value, (list, tuple)):
-        return [native_request(item) for item in value]
+        return [_native_request(item, depth + 1) for item in value]
     cls = type(value)
-    if cls is getattr(ua, cls.__name__, None):
+    if cls in (getattr(ua, cls.__name__, None), getattr(uaprotocol_auto, cls.__name__, None)):
         return value
     if cls is getattr(legacy, cls.__name__, None):
+        if isinstance(value, legacy.NodeId):
+            kind = ua.NodeIdType(value.NodeIdType.value)
+            if value.NamespaceUri or value.ServerIndex:
+                return ua.ExpandedNodeId(
+                    value.Identifier,
+                    value.NamespaceIndex,
+                    kind,
+                    value.NamespaceUri,
+                    value.ServerIndex,
+                )
+            return ua.NodeId(value.Identifier, value.NamespaceIndex, kind)
         target = getattr(ua, cls.__name__, None)
         if target is None:
             raise TypeError(f"Unsupported internal UA request type: {cls.__name__}")
         if isinstance(value, Enum):
             return target(value.value)
-        encoded = legacy_binary.to_binary(cls.__name__, value)
-        return ua_binary.from_binary(target, Buffer(encoded))
+        if isinstance(value, legacy.Variant):
+            return ua.Variant(
+                _native_request(value.Value, depth + 1),
+                ua.VariantType(value.VariantType.value),
+                value.Dimensions,
+                is_array=value.is_array,
+            )
+        if is_dataclass(target) and hasattr(value, "ua_types"):
+            names = {field.name for field in fields(target) if field.init}
+            return target(
+                **{
+                    name: _native_request(getattr(value, name), depth + 1)
+                    for name, _kind in value.ua_types
+                    if name in names
+                }
+            )
     if value is None or isinstance(value, (str, bytes, bool, int, float)):
+        return value
+    # DateTime and Guid are native Python values in both libraries.
+    if isinstance(value, (datetime, UUID)):
         return value
     raise TypeError(f"Unsupported internal UA request type: {cls.__name__}")

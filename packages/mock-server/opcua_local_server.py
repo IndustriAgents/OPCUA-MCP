@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from asyncua import ua
 from asyncua.server.address_space import AttributeService
+from asyncua.server.history import HistoryDict
 from asyncua.sync import Server as NativeServer
 from asyncua.sync import SyncNode as Node
 
@@ -29,6 +30,19 @@ class MockAttributeService(AttributeService):
         return statuses
 
 
+class MockHistory(HistoryDict):
+    """Keep native storage, with a continuation for request-limited raw pages."""
+
+    async def read_node_history(self, node_id, start, end, nb_values):
+        values, continuation = await super().read_node_history(
+            node_id, start, end, nb_values + 1 if nb_values else 0
+        )
+        if nb_values and len(values) > nb_values:
+            continuation = values[nb_values].SourceTimestamp
+            values = values[:nb_values]
+        return values, continuation
+
+
 class Server(NativeServer):
     """Small synchronous facade around the maintained mock server's SDK loop."""
 
@@ -36,6 +50,28 @@ class Server(NativeServer):
         super().__init__()
         # Only this owned mock instance changes; no library class is patched.
         self.aio_obj.iserver.attribute_service = MockAttributeService(self.aio_obj.iserver.aspace)
+        self.aio_obj.iserver.history_manager.set_storage(MockHistory())
+
+    def start(self):
+        super().start()
+        status = self.get_node(ua.ObjectIds.Server_ServerStatus).read_data_value()
+
+        async def install_clock():
+            def current_status(node_id, attribute):
+                now = datetime.now(timezone.utc)
+                value = replace(status.Value.Value, CurrentTime=now)
+                return replace(
+                    status,
+                    Value=ua.Variant(value, ua.VariantType.ExtensionObject),
+                    SourceTimestamp=now,
+                    ServerTimestamp=now,
+                )
+
+            self.aio_obj.iserver.set_attribute_value_callback(
+                ua.NodeId(ua.ObjectIds.Server_ServerStatus), current_status
+            )
+
+        self.tloop.post(install_clock())
 
     def get_objects_node(self):
         return self.nodes.objects

@@ -1,0 +1,467 @@
+{
+  "now": "2026-04-23T12:01:00.000Z",
+  "cases": [
+    {
+      "name": "raw forward page with continuation",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000
+      },
+      "records": [
+        {
+          "timestamp": "2026-04-23T12:00:00.000Z",
+          "value": "café 🙂",
+          "status": "GoodClamped"
+        },
+        {
+          "timestamp": "2026-04-23T12:00:30.000Z",
+          "value": 2,
+          "status": "Good"
+        }
+      ],
+      "continued": true,
+      "calls": [
+        {
+          "name": "raw",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "wanted": 10
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "timestamp": "2026-04-23T12:00:00.000Z",
+            "value": "café 🙂",
+            "status": "GoodClamped"
+          },
+          {
+            "timestamp": "2026-04-23T12:00:30.000Z",
+            "value": 2,
+            "status": "Good"
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "serverLimit"
+          ],
+          "returned": 2,
+          "truncated": true,
+          "limit": null,
+          "dropped": 0,
+          "remaining": true,
+          "continuation": {
+            "start_time": "2026-04-23T12:00:30.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "raw backwards page has no resume start",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": null,
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000
+      },
+      "records": [
+        {
+          "timestamp": "2026-04-23T12:00:00.000Z",
+          "value": "café 🙂",
+          "status": "GoodClamped"
+        },
+        {
+          "timestamp": "2026-04-23T12:00:30.000Z",
+          "value": 2,
+          "status": "Good"
+        }
+      ],
+      "continued": true,
+      "calls": [
+        {
+          "name": "raw",
+          "node_id": "ns=2;i=20",
+          "start": null,
+          "end": "2026-04-23T12:01:00.000Z",
+          "wanted": 10
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "timestamp": "2026-04-23T12:00:00.000Z",
+            "value": "café 🙂",
+            "status": "GoodClamped"
+          },
+          {
+            "timestamp": "2026-04-23T12:00:30.000Z",
+            "value": 2,
+            "status": "Good"
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "serverLimit"
+          ],
+          "returned": 2,
+          "truncated": true,
+          "limit": null,
+          "dropped": 0,
+          "remaining": true,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "empty GoodNoData is a complete range",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000
+      },
+      "records": [],
+      "continued": false,
+      "calls": [
+        {
+          "name": "raw",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "wanted": 10
+        }
+      ],
+      "expected": {
+        "records": [],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 0,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "raw default count uses contract cap",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 0,
+        "processingInterval": 30000
+      },
+      "records": [],
+      "continued": false,
+      "calls": [
+        {
+          "name": "raw",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "wanted": 5000
+        }
+      ],
+      "expected": {
+        "records": [],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 0,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "raw read failure is framed once and not retried",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000
+      },
+      "records": [],
+      "crash": "raw",
+      "error": "historyFailed",
+      "fields": {
+        "node_id": "ns=2;i=20",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "raw",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "wanted": 10
+        }
+      ]
+    },
+    {
+      "name": "aggregate records come from the fully drained port",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [
+        {
+          "timestamp": "2026-04-23T12:00:00.000Z",
+          "value": "café 🙂",
+          "status": "GoodClamped"
+        },
+        {
+          "timestamp": "2026-04-23T12:00:30.000Z",
+          "value": 2,
+          "status": "Good"
+        }
+      ],
+      "offered": [
+        "Average"
+      ],
+      "calls": [
+        {
+          "name": "aggregate",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "function": "Average",
+          "interval": 30000
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "timestamp": "2026-04-23T12:00:00.000Z",
+            "value": "café 🙂",
+            "status": "GoodClamped"
+          },
+          {
+            "timestamp": "2026-04-23T12:00:30.000Z",
+            "value": 2,
+            "status": "Good"
+          }
+        ],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 2,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "aggregate default end uses injected clock",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": null,
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [
+        {
+          "timestamp": "2026-04-23T12:00:00.000Z",
+          "value": "café 🙂",
+          "status": "GoodClamped"
+        },
+        {
+          "timestamp": "2026-04-23T12:00:30.000Z",
+          "value": 2,
+          "status": "Good"
+        }
+      ],
+      "offered": [
+        "Average"
+      ],
+      "calls": [
+        {
+          "name": "aggregate",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "function": "Average",
+          "interval": 30000
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "timestamp": "2026-04-23T12:00:00.000Z",
+            "value": "café 🙂",
+            "status": "GoodClamped"
+          },
+          {
+            "timestamp": "2026-04-23T12:00:30.000Z",
+            "value": 2,
+            "status": "Good"
+          }
+        ],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 2,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "aggregate missing start is refused before the port",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": null,
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [
+        "Average"
+      ],
+      "error": "aggregateNeedsStart",
+      "calls": []
+    },
+    {
+      "name": "unsupported aggregate is refused before parsing dates",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "bad",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [
+        "Count"
+      ],
+      "literal": "Invalid aggregate function. Supported: Count",
+      "calls": []
+    },
+    {
+      "name": "no offered aggregates is a bare refusal",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [],
+      "literal": "Server does not advertise any aggregate functions",
+      "calls": []
+    },
+    {
+      "name": "aggregate interval cap refuses before the port",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 1,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [
+        "Average"
+      ],
+      "error": "tooManyIntervals",
+      "fields": {
+        "tool": "read_opcua_history",
+        "count": 60000,
+        "processing_interval": "1",
+        "limit": 5000
+      },
+      "calls": []
+    },
+    {
+      "name": "aggregate service failure is framed once",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [
+        "Average"
+      ],
+      "crash": "aggregate",
+      "error": "historyFailed",
+      "fields": {
+        "node_id": "ns=2;i=20",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "aggregate",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "function": "Average",
+          "interval": 30000
+        }
+      ]
+    },
+    {
+      "name": "aggregate encoded-limit refusal remains bare",
+      "request": {
+        "nodeId": "ns=2;i=20",
+        "start": "2026-04-23T12:00:00.000Z",
+        "end": "2026-04-23T12:01:00.000Z",
+        "numValues": 10,
+        "processingInterval": 30000,
+        "aggregateFunction": "Average"
+      },
+      "records": [],
+      "offered": [
+        "Average"
+      ],
+      "refuse": "aggregate",
+      "literal": "encoded limit; nothing sent",
+      "calls": [
+        {
+          "name": "aggregate",
+          "node_id": "ns=2;i=20",
+          "start": "2026-04-23T12:00:00.000Z",
+          "end": "2026-04-23T12:01:00.000Z",
+          "function": "Average",
+          "interval": 30000
+        }
+      ]
+    }
+  ]
+}

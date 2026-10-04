@@ -87,7 +87,7 @@ def test_cancellation_releases_held_point():
     assert released == [b"a"]
 
 
-def test_history_tool_reports_completed_server_pages():
+async def test_history_tool_reports_completed_server_pages():
     from opcua_mcp_server.server import read_opcua_history
 
     queries = []
@@ -116,7 +116,7 @@ def test_history_tool_reports_completed_server_pages():
     ctx = SimpleNamespace(
         request_context=SimpleNamespace(lifespan_context={"opcua_client": client, "state": state})
     )
-    answer = read_opcua_history(
+    answer = await read_opcua_history(
         "ns=2;i=7",
         ctx,
         start_time="2026-01-01T00:00:00Z",

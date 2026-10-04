@@ -3,9 +3,11 @@
 // Current-value reads delegate to the application port and native adapter.
 // The remaining feature slices and execution pipeline move incrementally
 // under #141; see docs/feature-modules.md.
-import { AttributeIds, DataValue, AggregateFunction, ClientSession } from "node-opcua-client";
+import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { readHistory } from "./application/history.js";
+import { NodeOpcuaHistoryPort } from "./adapters/opcua-history.js";
 import { writeNodes, type WriteRequest } from "./application/write.js";
 import { NodeOpcuaWritePort } from "./adapters/opcua-write.js";
 import { callMethod } from "./application/methods.js";
@@ -45,29 +47,13 @@ import {
   describeError,
   message,
 } from "./errors.js";
-import {
-  MAX_HISTORY_VALUES,
-  MAX_SUBSCRIPTIONS,
-  aggregateIntervals,
-  checkRequestBounds,
-  chunked,
-  eventBufferSize,
-  historyValues,
-} from "./limits.js";
+import { MAX_SUBSCRIPTIONS, checkRequestBounds, eventBufferSize, historyValues } from "./limits.js";
 import {
   Completeness,
   bufferCompleteness,
   drainCompleteness,
   historyCompleteness,
 } from "./completeness.js";
-import {
-  aggregateDetails,
-  aggregatePages,
-  continues,
-  rawDetails,
-  readContinuation,
-  releaseContinuationPoint,
-} from "./history.js";
 import {
   ServerOperationLimits,
   UNSTATED,
@@ -91,7 +77,6 @@ import {
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { prettyJson } from "./result-text.js";
-import { historyData, toHistoryRecords, toIsoUtc, variantToJson } from "./records.js";
 import { describeSecurity, securityConfig } from "./security.js";
 import {
   SubscribeOptions,
@@ -104,7 +89,6 @@ import {
 import {
   ToolPolicy,
   controlGate,
-  formatNumber,
   pairsAt,
   serverIdentityRecord,
   toolPolicy,
@@ -1150,26 +1134,6 @@ export class OpcuaTools {
     return this.session;
   }
 
-  /** One logical read, sent as consecutive Reads of at most `chunk` items.
-   *
-   * Sequential rather than in parallel: the chunking exists because the server
-   * said how much one request may carry, and firing every chunk at once would
-   * put the same load on it in a different envelope. The results are
-   * concatenated in the order asked, so each node keeps its own status in its own
-   * place (issue #139).
-   */
-  private async readValues(
-    session: ClientSession,
-    items: Array<{ nodeId: string; attributeId: AttributeIds }>,
-    chunk: number
-  ): Promise<DataValue[]> {
-    const values: DataValue[] = [];
-    for (const part of chunked(items, chunk)) {
-      values.push(...(await session.read(part)));
-    }
-    return values;
-  }
-
   // --- reading -------------------------------------------------------------
 
   /** `read_opcua_nodes`: the current value of one or more nodes, fully qualified.
@@ -1203,130 +1167,9 @@ export class OpcuaTools {
     aggregateFunction?: string;
     processingInterval: number;
   }) {
-    const session = this.requireSession();
-    const { nodeId, aggregateFunction } = request;
-
-    // Outside the try, as the Python runtime has it. Inside, this refusal came
-    // back wrapped as "Failed to read history of node ns=2;i=3: ..." on this
-    // runtime and bare on the other — the request never reached the OPC UA
-    // server, so nothing failed to be read.
-    if (aggregateFunction !== undefined && request.start === undefined) {
-      throw new ToolFailure(message("aggregateNeedsStart"));
-    }
-
-    try {
-      if (aggregateFunction === undefined) {
-        // `0` used to mean "every reading in the range", which against a node
-        // historised at 100ms is a request that never returns — and the browse
-        // caps beside it have always been refusals rather than tuning knobs.
-        const wanted = historyValues(request.numValues);
-        const start = toDate(request.start);
-        const end = toDate(request.end);
-        const historyReadings = await session.readHistoryValue([nodeId], start as any, end as any, {
-          numValuesPerNode: wanted,
-          returnBounds: CONTRACT.history.rawReturnBounds,
-        });
-        if (historyReadings.length !== 1) throw new ToolFailure("Read history failed");
-        const reading = historyReadings[0];
-        // Good severity, not plain Good: GoodNoData is an empty range with
-        // completeness complete, not a failed read (#157).
-        const dataValues = historyData<DataValue>(reading, "Read history", "dataValues");
-        const continued = continues(reading.continuationPoint);
-        // The details `readHistoryValue` sent, so the server knows which history
-        // the point belongs to.
-        await releaseContinuationPoint(
-          session,
-          nodeId,
-          reading.continuationPoint,
-          rawDetails(start, end, wanted)
-        );
-        const records = toHistoryRecords(dataValues);
-        return historyResult(
-          records,
-          historyCompleteness({
-            returned: records.length,
-            fetched: records.length,
-            wanted,
-            continuationPoint: continued,
-            nextStart: forwardFrom(start, end, records.at(-1)?.timestamp),
-          }),
-          "historyTruncated"
-        );
-      }
-
-      // `ensureCapabilities` has already refused a server that offers none, on
-      // answers read on this very session; what is left is a name it does not.
-      const offered = this.capabilities.aggregateFunctions;
-      if (!offered.includes(aggregateFunction)) {
-        throw new ContractRefusal(
-          offered.length === 0
-            ? "Server does not advertise any aggregate functions"
-            : `Invalid aggregate function. Supported: ${offered.join(", ")}`
-        );
-      }
-
-      const start = toDate(request.start)!;
-      const end = toDate(request.end) ?? new Date();
-      // The number of results is decided by `processing_interval` over the range,
-      // which is the whole point of asking for one — it is how to see a week
-      // without transferring a week. It is still a number of records, though,
-      // and a millisecond interval over a year is billions of them; so it is
-      // bounded by the same cap as a raw read, and refused before it is sent.
-      const intervals = aggregateIntervals(
-        start.getTime(),
-        end.getTime(),
-        request.processingInterval
-      );
-      if (intervals > MAX_HISTORY_VALUES) {
-        throw new ContractRefusal(
-          message("tooManyIntervals", {
-            tool: "read_opcua_history",
-            count: intervals,
-            processing_interval: formatNumber(request.processingInterval),
-            limit: MAX_HISTORY_VALUES,
-          })
-        );
-      }
-
-      const aggregateType = AggregateFunction[aggregateFunction as keyof typeof AggregateFunction];
-      const details = aggregateDetails(start, end, aggregateType, request.processingInterval);
-      const aggregated = await session.readAggregateValue(
-        { nodeId },
-        start,
-        end,
-        aggregateType,
-        request.processingInterval,
-        details.aggregateConfiguration
-      );
-      const dataValues = await aggregatePages(
-        aggregated,
-        (point) => readContinuation(session, nodeId, point, details),
-        (point) => releaseContinuationPoint(session, nodeId, point, details)
-      );
-      const records = toHistoryRecords(dataValues);
-      // All native pages were consumed; a short server page is not a short range.
-      return historyResult(
-        records,
-        historyCompleteness({
-          returned: records.length,
-          fetched: records.length,
-          wanted: null,
-          continuationPoint: false,
-          nextStart: null,
-        }),
-        "historyTruncated"
-      );
-    } catch (error) {
-      // A refusal of the request never reached the server, so it did not fail
-      // to be read — and wrapping it would say it had.
-      if (error instanceof ContractRefusal) throw error;
-      throw new ToolFailure(
-        message("historyFailed", { node_id: nodeId, reason: describeError(error) }),
-        {
-          cause: error,
-        }
-      );
-    }
+    const port = new NodeOpcuaHistoryPort(this.requireSession());
+    const result = await readHistory(port, request, this.capabilities.aggregateFunctions);
+    return historyResult(result.records, result.completeness, "historyTruncated");
   }
 
   // --- browsing ------------------------------------------------------------

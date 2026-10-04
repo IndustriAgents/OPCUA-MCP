@@ -11,7 +11,6 @@ import secrets
 import signal
 import sys
 import threading
-from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,11 +20,13 @@ from typing import Any
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from opcua import Node, ua
+from opcua import ua
 
 from . import events
+from .adapters.opcua_browse import PythonOpcuaBrowsePort
 from .adapters.opcua_read import PythonOpcuaReadPort
 from .aggregates import validate_aggregate_function
+from .application.browse import browse_nodes
 from .application.read import read_nodes
 from .audit import (
     AuditSink,
@@ -51,7 +52,6 @@ from .completeness import (
     buffer_completeness,
     drain_completeness,
     history_completeness,
-    traversal_completeness,
 )
 from .config import describe_reconnect, reconnect_config
 from .connection import (
@@ -90,7 +90,6 @@ from .node_metadata import AnalogInfo
 from .notices import notice
 from .numeric import json_text
 from .operation_limits import (
-    browse_chunk,
     read_chunk,
     read_operation_limits,
     write_limit,
@@ -1299,256 +1298,7 @@ def _read_status(ctx: Context) -> dict:
 # --- browsing --------------------------------------------------------------------
 
 
-def browse_children(node: Node) -> list[Node]:
-    """Browse a node's references, failing on a bad browse status.
-
-    python-opcua's ``get_children()`` never looks at ``BrowseResult.StatusCode``,
-    so a node the server refuses comes back as an empty child list —
-    indistinguishable from a node that really has none, and a *successful* result
-    besides.
-
-    Otherwise a faithful copy of what ``get_children()`` asks for, which is not
-    what ``get_references()`` defaults to: *hierarchical* references, *forward*
-    only. Browsing ``References``/``Both`` instead — the ``get_references()``
-    defaults — walks back up to the parent and out to the type definition, so
-    ``ns=2;i=1`` answers ``0:Objects`` and ``0:FolderType`` rather than its own
-    ``2:Sensors``.
-    """
-    description = ua.BrowseDescription()
-    description.NodeId = node.nodeid
-    description.BrowseDirection = ua.BrowseDirection.Forward
-    description.ReferenceTypeId = ua.NodeId(ua.ObjectIds.HierarchicalReferences)
-    description.IncludeSubtypes = True
-    description.NodeClassMask = ua.NodeClass.Unspecified
-    description.ResultMask = ua.BrowseResultMask.All
-
-    params = ua.BrowseParameters()
-    params.View.Timestamp = ua.get_win_epoch()
-    params.NodesToBrowse.append(description)
-    params.RequestedMaxReferencesPerNode = 0
-
-    # A server may cap how many references one response carries whatever we ask
-    # for, so drain the continuation point as `get_references()` does — otherwise
-    # a large node silently browses short. Every result is status-checked, the
-    # continued ones included: a server that expires or refuses a continuation
-    # point answers with a bad status and no references, which unchecked would
-    # end the loop and return a *truncated* child list as a success — the same
-    # class of silent wrong answer this function exists to stop.
-    references = []
-    results = node.server.browse(params)
-    while True:
-        result = results[0]
-        if not result.StatusCode.is_good():
-            # `.name`, not the whole StatusCode: node-opcua renders the same
-            # rejection as `BadNodeIdUnknown (0x80340000)` and python-opcua as
-            # `StatusCode(BadNodeIdUnknown)`. Neither server controls the other's
-            # spelling, but both can name the status plainly.
-            raise ValueError(f"Browse failed with status: {result.StatusCode.name}")
-
-        references.extend(result.References)
-        if not result.ContinuationPoint:
-            break
-
-        next_params = ua.BrowseNextParameters()
-        next_params.ContinuationPoints = [result.ContinuationPoint]
-        next_params.ReleaseContinuationPoints = False
-        results = node.server.browse_next(next_params)
-
-    return references
-
-
-def _browse_name_matches(segment: str, namespace_index: int, name: str) -> bool:
-    """Whether a browse-path segment names this BrowseName.
-
-    ``2:Sensors`` matches only namespace 2; a bare ``Sensors`` matches the name
-    in whatever namespace it is in. The bare form is what someone types when
-    they know what a thing is called and not which namespace it was loaded into
-    — which is the entire reason ``browse_path`` exists.
-    """
-    prefix, separator, rest = segment.partition(":")
-    if separator and prefix.isdigit():
-        return int(prefix) == namespace_index and rest == name
-    return segment == name
-
-
-def _resolve_browse_path(client, start_node_id: str, browse_path: str) -> str:
-    """Resolve a slash-separated browse path to a node id (issue #11).
-
-    Matched segment by segment against the browse names of each node's children,
-    rather than through TranslateBrowsePathsToNodeIds. Two reasons, and the first
-    is the deciding one:
-
-    A RelativePath element carries a *qualified* BrowseName, so translating
-    ``/Objects/Plant/Temperature`` asks for those names in namespace 0 — and a
-    plant's own nodes are never in namespace 0, so the server answers BadNoMatch
-    for a path that is plainly right. Someone who knows the namespace index can
-    write ``2:Plant``, but then they already know more than this argument exists
-    to spare them. Matching here accepts either.
-
-    Second, browsing is universal where TranslateBrowsePaths is optional, so both
-    runtimes and every server behave the same way. It costs one browse per
-    segment, which for a path someone typed is a handful of round trips.
-
-    A path that does not resolve is an error naming the segment that failed,
-    never an empty result: "no such path" and "a path to nothing" are different
-    answers, and only one of them is the caller's mistake.
-    """
-    segments = [segment for segment in browse_path.split("/") if segment]
-    if not segments:
-        raise ValueError(f'browse_path "{browse_path}" names no elements')
-
-    # A leading "/" is written from the Root folder, which is how a person says
-    # it ("/Objects/..."); anything else is relative to node_id.
-    current = _ROOT_FOLDER if browse_path.startswith("/") else canonical_node_id(start_node_id)
-
-    for segment in segments:
-        references = browse_children(client.get_node(current))
-        match = next(
-            (
-                reference
-                for reference in references
-                if _browse_name_matches(
-                    segment, reference.BrowseName.NamespaceIndex, reference.BrowseName.Name
-                )
-            ),
-            None,
-        )
-        if match is None:
-            raise ValueError(
-                f'browse_path "{browse_path}" does not resolve: '
-                f'no child "{segment}" under {current}'
-            )
-        current = canonical_node_id(match.NodeId.to_string())
-    return current
-
-
-def _describe_node(client, node_id: str, parent_node_id: str) -> dict:
-    """The record for one node read directly, rather than off a browse reference."""
-    node = client.get_node(node_id)
-    browse_name = node.get_browse_name()
-    node_class = node.get_node_class()
-    return {
-        "node_id": canonical_node_id(node_id),
-        "browse_name": f"{browse_name.NamespaceIndex}:{browse_name.Name}",
-        "node_class": node_class.name,
-        "parent_node_id": canonical_node_id(parent_node_id),
-        "data_type": None,
-        "value": None,
-        "description": None,
-        "type_definition": None,
-    }
-
-
-def type_definition_of(is_good: bool, browse_names: list[str]) -> str | None:
-    """Which of a node's HasTypeDefinition references to report, if any.
-
-    Split out from the browse and driven by ``tests/fixtures/type-definitions.json``
-    because ``type-definitions.test.mjs`` has to answer identically: two clients
-    browsing the same server must not disagree about what its nodes are.
-
-    Exactly one, or nothing. OPC UA Part 3 §4.3 gives an Object or a Variable
-    exactly one HasTypeDefinition, so:
-
-    * none — a Method, a View or a type itself. That is an answer, not a failure.
-    * two — a server no client can read correctly. Taking whichever came first
-      would let the two runtimes report different types for the same node
-      depending on how each library ordered the references, and would report the
-      *base* type for a node that also declared a useful one. Saying nothing is
-      the only answer that is both deterministic and never wrong.
-    """
-    if not is_good or len(browse_names) != 1:
-        return None
-    return browse_names[0] or None
-
-
-def _fill_type_definitions(client, records: list[dict], server_limits: dict) -> None:
-    """Fill in ``type_definition`` for ``records``, in one batched browse.
-
-    ``HasTypeDefinition`` is non-hierarchical, so the traversal's own browse —
-    forward hierarchical references only, deliberately, or every node would
-    answer with its parent and its type instead of its children — never sees it.
-    It takes a second browse, and that is why this is one request for the whole
-    result rather than one per node: a 500-node walk would otherwise cost 500
-    extra round trips to say what one already could.
-
-    Best-effort, like the variable detail: a server that refuses this leaves the
-    field null rather than failing a browse that succeeded.
-    """
-    if not records:
-        return
-    descriptions = []
-    for record in records:
-        description = ua.BrowseDescription()
-        description.NodeId = ua.NodeId.from_string(record["node_id"])
-        description.BrowseDirection = ua.BrowseDirection.Forward
-        description.ReferenceTypeId = ua.NodeId.from_string(_TRAVERSAL["hasTypeDefinitionNodeId"])
-        # No subtypes: HasTypeDefinition has none, and asking for them would let
-        # an unrelated reference through on a server that has invented one.
-        description.IncludeSubtypes = False
-        description.NodeClassMask = ua.NodeClass.Unspecified
-        description.ResultMask = ua.BrowseResultMask.All
-        descriptions.append(description)
-
-    # Chunked for the same reason the property reads are: MaxNodesPerBrowse is
-    # an operational limit a conformant server may enforce, and the default walk
-    # already returns up to 500 nodes. A server that states a lower one gets
-    # smaller chunks.
-    size = browse_chunk(server_limits, _TRAVERSAL["maxTypeDefinitionsPerRequest"])
-    for start in range(0, len(descriptions), size):
-        chunk = descriptions[start : start + size]
-        params = ua.BrowseParameters()
-        params.View.Timestamp = ua.get_win_epoch()
-        params.NodesToBrowse = chunk
-        params.RequestedMaxReferencesPerNode = 0
-        try:
-            results = client.uaclient.browse(params)
-        except Exception:
-            return
-        for record, result in zip(records[start : start + size], results, strict=False):
-            record["type_definition"] = type_definition_of(
-                result.StatusCode.is_good(),
-                [reference.BrowseName.Name for reference in result.References],
-            )
-
-
-def _fill_variable_detail(client, records: list[dict], server_limits: dict) -> None:
-    """Fill in value, data type and description for the Variables among ``records``.
-
-    One batched read of each attribute rather than three reads per node: a
-    500-node inventory is otherwise 1500 round trips, which is the difference
-    between a tool that answers and one that times out on real equipment.
-    """
-    variables = [record for record in records if record["node_class"] == "Variable"]
-    if not variables:
-        return
-    node_ids = [client.get_node(record["node_id"]).nodeid for record in variables]
-    chunk = read_chunk(server_limits)
-    try:
-        values = _read_values(client, node_ids, ua.AttributeIds.Value, chunk)
-        data_types = _read_values(client, node_ids, ua.AttributeIds.DataType, chunk)
-        descriptions = _read_values(client, node_ids, ua.AttributeIds.Description, chunk)
-    except Exception:
-        # Best-effort enrichment: the nodes were found, and reporting them
-        # without their values beats failing a browse that succeeded.
-        return
-
-    for record, data_value, data_type, description in zip(
-        variables, values, data_types, descriptions, strict=True
-    ):
-        if data_value.StatusCode.is_good():
-            record["value"] = variant_to_json(data_value.Value)
-            record["data_type"] = _data_type_name(data_value.Value)
-        if record["data_type"] is None and data_type.StatusCode.is_good():
-            identifier = getattr(getattr(data_type, "Value", None), "Value", None)
-            if isinstance(identifier, ua.NodeId) and identifier.NamespaceIndex == 0:
-                with contextlib.suppress(ValueError):
-                    record["data_type"] = ua.VariantType(identifier.Identifier).name
-        text = getattr(getattr(description, "Value", None), "Value", None)
-        text = getattr(text, "Text", None)
-        record["description"] = text if text else None
-
-
-def browse_opcua_nodes(
+async def browse_opcua_nodes(
     ctx: Context,
     node_id: str = _TRAVERSAL["rootNodeId"],
     browse_path: str | None = None,
@@ -1576,114 +1326,21 @@ def browse_opcua_nodes(
             found, whether the walk was truncated, and how many were inspected.
     """
     client = ctx.request_context.lifespan_context["opcua_client"]
-    depth = _clamp_int(depth, 0, _TRAVERSAL["maxDepth"])
-    max_nodes = _clamp_int(max_nodes, 1, _TRAVERSAL["maxNodes"])
-    wanted_class = node_class.lower() if node_class else None
-    wanted_name = name_filter.lower() if name_filter else None
-
-    def keep(record: dict) -> bool:
-        return (wanted_class is None or record["node_class"].lower() == wanted_class) and (
-            wanted_name is None or wanted_name in record["browse_name"].lower()
-        )
-
+    port = PythonOpcuaBrowsePort(client, _state(ctx).operation_limits)
     try:
-        root = (
-            _resolve_browse_path(client, node_id, browse_path)
-            if browse_path
-            else canonical_node_id(node_id)
+        result = await browse_nodes(
+            port,
+            node_id=node_id,
+            browse_path=browse_path,
+            depth=depth,
+            node_class=node_class,
+            name_filter=name_filter,
+            include_values=include_values,
+            max_nodes=max_nodes,
         )
-    except ValueError as e:
-        raise ToolError(str(e)) from e
-
-    try:
-        found: list[dict] = []
-        inspected = 0
-        truncated = False
-        unbrowsable = False
-
-        # `depth: 0` is "tell me about this node and nothing else" — which is how
-        # a browse_path is turned into a node id without also listing everything
-        # under it.
-        if depth == 0:
-            inspected = 1
-            record = _describe_node(client, root, root)
-            if keep(record):
-                found.append(record)
-        else:
-            queue = deque([(root, 0)])
-            visited = {root}
-            while queue and not truncated:
-                current_id, current_depth = queue.popleft()
-                try:
-                    references = browse_children(client.get_node(current_id))
-                except Exception:
-                    # The root failing is the caller's problem; a node deeper in
-                    # may simply be one this session cannot read, and stopping
-                    # the whole walk for it would make a large browse hostage to
-                    # its worst node. It is still a gap in the answer, and
-                    # `completeness` says so rather than letting "could not list"
-                    # pass for "has no children".
-                    if current_id == root:
-                        raise
-                    unbrowsable = True
-                    continue
-
-                for reference in references:
-                    child_id = canonical_node_id(reference.NodeId.to_string())
-                    if child_id in visited:
-                        continue
-                    visited.add(child_id)
-                    if inspected >= max_nodes:
-                        truncated = True
-                        break
-                    inspected += 1
-
-                    browse_name = reference.BrowseName
-                    # The built-in Server object is several hundred nodes of the
-                    # server describing itself, identical everywhere, and
-                    # get_server_status answers what anyone would browse it for.
-                    if browse_name.Name == _TRAVERSAL["skipBrowseName"]:
-                        continue
-
-                    record = {
-                        "node_id": child_id,
-                        "browse_name": f"{browse_name.NamespaceIndex}:{browse_name.Name}",
-                        "node_class": reference.NodeClass.name,
-                        "parent_node_id": current_id,
-                        "data_type": None,
-                        "value": None,
-                        "description": None,
-                        "type_definition": None,
-                    }
-                    if keep(record):
-                        found.append(record)
-
-                    # Descend through structure regardless of the class filter:
-                    # what is being looked for is usually below an Object, not
-                    # the Object.
-                    if reference.NodeClass == ua.NodeClass.Object and current_depth + 1 < depth:
-                        queue.append((child_id, current_depth + 1))
-
-        # Unconditional, unlike the variable detail: the type is what the record
-        # *is*, not extra reading about its value, and it costs one batched
-        # browse however many nodes were found.
-        server_limits = _state(ctx).operation_limits
-        _fill_type_definitions(client, found, server_limits)
-        if include_values:
-            _fill_variable_detail(client, found, server_limits)
-        return _object_result(
-            {"nodes": found, "truncated": truncated, "inspected": inspected},
-            traversal_completeness(
-                returned=len(found),
-                truncated=truncated,
-                max_nodes=max_nodes,
-                unbrowsable=unbrowsable,
-            ),
-        )
-    except Exception as e:
-        raise ToolError(
-            error_message("browseFailed", node_id=root, reason=describe_error(e))
-        ) from e
+        return _object_result(result["result"], result["completeness"])
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 # --- writing ---------------------------------------------------------------------

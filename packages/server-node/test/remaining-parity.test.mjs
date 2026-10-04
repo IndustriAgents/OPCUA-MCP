@@ -1,3 +1,4 @@
+import { NodeOpcuaBrowsePort } from "../build/adapters/opcua-browse.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -64,7 +65,6 @@ for (const [namespace, identifier, expected] of [
   [0, 9999, null],
 ]) {
   test(`unreadable browse datatype: ${namespace}:${identifier}`, async () => {
-    const tools = Object.create(OpcuaTools.prototype);
     const record = {
       node_id: "ns=2;i=7",
       node_class: "Variable",
@@ -90,7 +90,7 @@ for (const [namespace, identifier, expected] of [
         );
       },
     };
-    await tools.fillVariableDetail(session, [record], {});
+    await new NodeOpcuaBrowsePort(session, async () => ({})).enrich([record], true);
     assert.equal(record.value, null);
     assert.equal(record.data_type, expected);
     assert.equal(record.description, "sensor");

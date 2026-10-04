@@ -20,8 +20,8 @@ import json
 
 import pytest
 from conftest import ROOT
+from opcua_mcp_server.adapters.opcua_browse import type_definition_of
 from opcua_mcp_server.contract import CONTRACT
-from opcua_mcp_server.server import type_definition_of
 
 CASES = json.loads(
     (ROOT / "tests" / "fixtures" / "type-definitions.json").read_text(encoding="utf-8")

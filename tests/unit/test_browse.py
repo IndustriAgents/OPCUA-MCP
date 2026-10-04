@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 from opcua import ua
-from opcua_mcp_server.server import browse_children
+from opcua_mcp_server.adapters.opcua_browse import browse_children
 
 
 class _StubServer:

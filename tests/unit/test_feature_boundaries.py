@@ -22,12 +22,24 @@ def test_application_modules_do_not_import_protocol_or_native_sdks():
                 if isinstance(node, ast.ImportFrom) and node.level == 0
                 else []
             )
+            if isinstance(node, ast.ImportFrom) and node.level:
+                assert node.module not in {
+                    "connection",
+                    "server",
+                    "state",
+                    "node_metadata",
+                    "records",
+                }, file
+                assert not (node.module or "").startswith("adapters"), file
             assert not any(name.split(".")[0] in {"mcp", "opcua", "asyncua"} for name in names), (
                 file
             )
     for file in (NODE / "application").glob("*.ts"):
         text = file.read_text(encoding="utf-8")
         assert not re.search(r'from\s+["\'](?:@modelcontextprotocol/|node-opcua)', text), file
+        assert not re.search(
+            r'from\s+["\'][^"\']*(?:adapters/|(?:connection|tools|node-metadata|records)\.js)', text
+        ), file
 
 
 def test_native_adapters_do_not_import_the_mcp_server():

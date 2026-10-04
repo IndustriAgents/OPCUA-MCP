@@ -55,7 +55,7 @@ from opcua import Client, ua
 
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
 from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID
-from .errors import message
+from .errors import describe_error, message
 from .policy import ToolPolicy, tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
 from .transport_limits import install_receive_guard
@@ -551,12 +551,6 @@ def still_connecting_message(url: str, reason: str | None) -> str:
     one. The Node server's ``stillConnectingMessage`` words it the same.
     """
     return message("stillConnecting", url=url, reason=reason or "not yet known")
-
-
-def describe_error(error: BaseException) -> str:
-    """The message to report for a failed connection, in the library's words."""
-    text = str(error)
-    return text or type(error).__name__
 
 
 __all__ = [

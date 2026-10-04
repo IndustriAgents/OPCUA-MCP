@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 from conftest import ROOT
 from opcua import ua
+from opcua_mcp_server.adapters.opcua_browse import _fill_variable_detail
 from opcua_mcp_server.capabilities import client_aggregate_functions
 from opcua_mcp_server.events import alarm_action
-from opcua_mcp_server.server import _fill_variable_detail
 
 
 def cases(name):
@@ -71,7 +71,7 @@ def test_alarm_decodes_before_any_service_call(case, monkeypatch):
 def test_browse_unreadable_value_keeps_only_known_standard_datatype(
     namespace, identifier, expected, monkeypatch
 ):
-    import opcua_mcp_server.server as server
+    import opcua_mcp_server.adapters.opcua_browse as browse_adapter
 
     def read(_client, _nodes, attribute, _chunk):
         if attribute == ua.AttributeIds.Value:
@@ -82,7 +82,7 @@ def test_browse_unreadable_value_keeps_only_known_standard_datatype(
             ]
         return [ua.DataValue(ua.Variant(ua.LocalizedText("sensor"), ua.VariantType.LocalizedText))]
 
-    monkeypatch.setattr(server, "_read_values", read)
+    monkeypatch.setattr(browse_adapter, "_read_values", read)
     record = {
         "node_id": "ns=2;i=7",
         "node_class": "Variable",

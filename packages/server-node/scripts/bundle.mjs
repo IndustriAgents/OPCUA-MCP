@@ -24,7 +24,7 @@
 import * as esbuild from "esbuild";
 import { existsSync, readFileSync } from "fs";
 import { createRequire } from "module";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/server-node/scripts
@@ -73,7 +73,7 @@ const BANNER = [
 // the same way.
 const EXTERNAL = ["proper-lockfile"];
 
-/** esbuild plugin: replace `./contract.js` with the contract inlined as literals.
+/** esbuild plugin: replace relative imports of the shared `contract.js` with the contract inlined as literals.
  *
  * Reads the canonical `/contract/tools.json`, `/contract/config.json` and
  * `package.json` at build time, so a bundle can no more drift from the contract
@@ -84,10 +84,15 @@ function inlineContract() {
   return {
     name: "inline-contract",
     setup(build) {
-      build.onResolve({ filter: /^\.\/contract\.js$/ }, () => ({
-        path: "contract",
-        namespace: "opcua-inline",
-      }));
+      build.onResolve({ filter: /(?:^|\/)contract\.js$/ }, (args) => {
+        // Feature modules import ../contract.js. Resolve the target so all
+        // paths to this contract share one inlined module, without replacing
+        // unrelated dependencies with an identically named file.
+        if (resolve(args.resolveDir, args.path) !== join(PKG_ROOT, "src", "contract.js")) {
+          return undefined;
+        }
+        return { path: "contract", namespace: "opcua-inline" };
+      });
       build.onLoad({ filter: /.*/, namespace: "opcua-inline" }, () => ({
         // Deliberately does not re-export `BUILD_DIR`: there is no build
         // directory in a bundle, and a missing export is a build error rather

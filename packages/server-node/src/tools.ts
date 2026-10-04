@@ -10,18 +10,19 @@ import {
   VariantArrayType,
   DataValue,
   CallMethodResult,
-  NodeClass,
   AggregateFunction,
   BrowseDirection,
   ClientSession,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { browseNodes, type BrowseRequest } from "./application/browse.js";
+import { NodeOpcuaBrowsePort } from "./adapters/opcua-browse.js";
 import { readNodes } from "./application/read.js";
 import { NodeOpcuaReadPort } from "./adapters/opcua-read.js";
 export { toNodeValueRecord } from "./adapters/opcua-read.js";
 
-import { browseAllReferences, typeDefinitionOf } from "./browse.js";
+import { browseAllReferences } from "./browse.js";
 import {
   type CapabilityAnswers,
   type CapabilityStatusRecord,
@@ -64,7 +65,6 @@ import {
   bufferCompleteness,
   drainCompleteness,
   historyCompleteness,
-  traversalCompleteness,
 } from "./completeness.js";
 import {
   aggregateDetails,
@@ -77,7 +77,6 @@ import {
 import {
   ServerOperationLimits,
   UNSTATED,
-  browseChunk,
   readChunk,
   readOperationLimits,
   writeLimit,
@@ -125,22 +124,9 @@ import { isGood } from "./status.js";
 import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
-const ROOT_FOLDER = "ns=0;i=84";
 
 /** The HasSubtype reference type (ns=0), which links a DataType to its parent. */
 const HAS_SUBTYPE = 45;
-
-/** One node found by a browse (resultShapes.nodeRefs.nodes). */
-interface NodeRefRecord {
-  node_id: string;
-  browse_name: string;
-  node_class: string;
-  parent_node_id: string;
-  data_type: string | null;
-  value: unknown;
-  description: string | null;
-  type_definition: string | null;
-}
 
 /** One attempted write (resultShapes.writeResults). */
 interface WriteResultRecord {
@@ -156,23 +142,11 @@ interface WriteRequest {
   data_type?: string;
 }
 
-function clampInt(value: number, low: number, high: number): number {
-  return Math.max(low, Math.min(Math.trunc(value), high));
-}
-
 /** The OPC UA name of a variant's data type: "Double", "Boolean", "Int32". */
 function dataTypeName(variant: Variant | null | undefined): string | null {
   const dataType = variant?.dataType;
   if (dataType === undefined || dataType === null || dataType === DataType.Null) return null;
   return DataType[dataType] ?? null;
-}
-
-/** The OPC UA name behind a DataType *attribute*, which is a NodeId, not an enum. */
-function dataTypeNameFromNodeId(value: unknown): string | null {
-  const node = value as { value?: unknown; namespace?: number } | null;
-  const identifier = node?.value;
-  if (node?.namespace !== 0 || typeof identifier !== "number") return null;
-  return DataType[identifier] ?? null;
 }
 
 /** A DataType named as the contract names it, or a readable refusal. */
@@ -182,24 +156,6 @@ function namedDataType(name: string): DataType {
     throw new Error(`Unknown data_type "${name}"`);
   }
   return dataType;
-}
-
-/** Whether a browse-path segment names this BrowseName.
- *
- * `2:Sensors` matches only namespace 2; a bare `Sensors` matches the name in
- * whatever namespace it is in. The bare form is what someone types when they
- * know what a thing is called and not which namespace it was loaded into —
- * which is the entire reason `browse_path` exists.
- */
-function browseNameMatches(segment: string, namespaceIndex: number, name: string | null): boolean {
-  const separator = segment.indexOf(":");
-  if (separator > 0) {
-    const index = Number(segment.slice(0, separator));
-    if (Number.isInteger(index)) {
-      return index === namespaceIndex && segment.slice(separator + 1) === name;
-    }
-  }
-  return segment === name;
 }
 
 /** A node's present reading as a number, or null if there is not one to compare. */
@@ -1507,289 +1463,10 @@ export class OpcuaTools {
    * descended into while `depth` allows, because the thing being looked for is
    * usually *below* the structure, not in it.
    */
-  private async browseOpcuaNodes(request: {
-    nodeId?: string;
-    browsePath?: string;
-    depth?: number;
-    nodeClass?: string;
-    nameFilter?: string;
-    includeValues?: boolean;
-    maxNodes?: number;
-  }) {
-    const session = this.requireSession();
-    const limits = CONTRACT.traversal;
-    const depth = clampInt(request.depth ?? limits.defaultDepth, 0, limits.maxDepth);
-    const maxNodes = clampInt(request.maxNodes ?? limits.defaultMaxNodes, 1, limits.maxNodes);
-    const includeValues = request.includeValues ?? false;
-    const wantedClass = request.nodeClass?.toLowerCase();
-    const nameFilter = request.nameFilter?.toLowerCase();
-
-    const root = request.browsePath
-      ? await this.resolveBrowsePath(request.nodeId ?? limits.rootNodeId, request.browsePath)
-      : canonicalNodeId(request.nodeId ?? limits.rootNodeId);
-
-    const keep = (record: NodeRefRecord) =>
-      (wantedClass === undefined || record.node_class.toLowerCase() === wantedClass) &&
-      (nameFilter === undefined || record.browse_name.toLowerCase().includes(nameFilter));
-
-    try {
-      const found: NodeRefRecord[] = [];
-      let inspected = 0;
-      let truncated = false;
-      let unbrowsable = false;
-
-      // `depth: 0` is "tell me about this node and nothing else" — which is how
-      // a browse_path is turned into a node id without also listing everything
-      // under it.
-      const rootRecord = await this.describeNode(session, root, root);
-      if (depth === 0) {
-        inspected = 1;
-        if (keep(rootRecord)) found.push(rootRecord);
-      } else {
-        const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: root, depth: 0 }];
-        const visited = new Set<string>([root]);
-
-        while (queue.length > 0 && !truncated) {
-          const current = queue.shift()!;
-          let references;
-          try {
-            references = await browseAllReferences(session, current.nodeId);
-          } catch (error) {
-            // The root failing is the caller's problem; a node deeper in may
-            // simply be one this session cannot read, and stopping the whole
-            // walk for it would make a large browse hostage to its worst node.
-            // It is still a gap in the answer, and `completeness` says so rather
-            // than letting "could not list" pass for "has no children".
-            if (current.nodeId === root) throw error;
-            unbrowsable = true;
-            continue;
-          }
-
-          for (const reference of references) {
-            const childId = canonicalNodeId(reference.nodeId.toString());
-            if (visited.has(childId)) continue;
-            visited.add(childId);
-            if (inspected >= maxNodes) {
-              truncated = true;
-              break;
-            }
-            inspected += 1;
-
-            const browseName = `${reference.browseName.namespaceIndex}:${reference.browseName.name}`;
-            // The built-in Server object is several hundred nodes of the server
-            // describing itself, identical everywhere, and get_server_status
-            // answers what anyone would browse it for.
-            if (reference.browseName.name === limits.skipBrowseName) continue;
-
-            const record: NodeRefRecord = {
-              node_id: childId,
-              browse_name: browseName,
-              node_class: NodeClass[reference.nodeClass] ?? "Unspecified",
-              parent_node_id: current.nodeId,
-              data_type: null,
-              value: null,
-              description: null,
-              type_definition: null,
-            };
-            if (keep(record)) found.push(record);
-
-            // Descend through structure regardless of the class filter: what is
-            // being looked for is usually below an Object, not the Object.
-            if (reference.nodeClass === NodeClass.Object && current.depth + 1 < depth) {
-              queue.push({ nodeId: childId, depth: current.depth + 1 });
-            }
-          }
-        }
-      }
-
-      // Unconditional, unlike the variable detail: the type is what the record
-      // *is*, not extra reading about its value, and it costs one batched
-      // browse however many nodes were found.
-      const serverLimits = await this.operationLimits();
-      await this.fillTypeDefinitions(session, found, serverLimits);
-      if (includeValues) await this.fillVariableDetail(session, found, serverLimits);
-      return objectResult(
-        { nodes: found, truncated, inspected },
-        traversalCompleteness({ returned: found.length, truncated, maxNodes, unbrowsable })
-      );
-    } catch (error) {
-      throw new ToolFailure(
-        message("browseFailed", { node_id: root, reason: describeError(error) }),
-        {
-          cause: error,
-        }
-      );
-    }
-  }
-
-  /** The record for one node read directly, rather than off a browse reference. */
-  private async describeNode(
-    session: ClientSession,
-    nodeId: string,
-    parentNodeId: string
-  ): Promise<NodeRefRecord> {
-    const [browseName, nodeClass] = await session.read([
-      { nodeId, attributeId: AttributeIds.BrowseName },
-      { nodeId, attributeId: AttributeIds.NodeClass },
-    ]);
-    if (!isGood(browseName.statusCode)) {
-      throw new ToolFailure(`Browse failed with status: ${browseName.statusCode.name}`);
-    }
-    const name = browseName.value?.value;
-    return {
-      node_id: canonicalNodeId(nodeId),
-      browse_name: name ? `${name.namespaceIndex}:${name.name}` : "",
-      node_class: NodeClass[nodeClass.value?.value as number] ?? "Unspecified",
-      parent_node_id: canonicalNodeId(parentNodeId),
-      data_type: null,
-      value: null,
-      description: null,
-      type_definition: null,
-    };
-  }
-
-  /** Fill in `type_definition` for `records`, in one batched browse.
-   *
-   * `HasTypeDefinition` is non-hierarchical, so the traversal's own browse —
-   * forward hierarchical references only, deliberately, or every node would
-   * answer with its parent and its type instead of its children — never sees
-   * it. It takes a second browse, and that is why this is one request for the
-   * whole result rather than one per node: a 500-node walk would otherwise cost
-   * 500 extra round trips to say what one already could.
-   *
-   * Best-effort, like the variable detail: a server that refuses this leaves the
-   * field null rather than failing a browse that succeeded.
-   */
-  private async fillTypeDefinitions(
-    session: ClientSession,
-    records: NodeRefRecord[],
-    serverLimits: ServerOperationLimits
-  ): Promise<void> {
-    if (records.length === 0) return;
-    const traversal = CONTRACT.traversal;
-    const descriptions = records.map((record) => ({
-      nodeId: record.node_id,
-      browseDirection: BrowseDirection.Forward,
-      referenceTypeId: traversal.hasTypeDefinitionNodeId,
-      // No subtypes: HasTypeDefinition has none, and asking for them would let
-      // an unrelated reference through on a server that has invented one.
-      includeSubtypes: false,
-      nodeClassMask: 0,
-      resultMask: 63,
-    }));
-
-    // Chunked for the same reason the property reads are: MaxNodesPerBrowse is
-    // an operational limit a conformant server may enforce, and the default
-    // walk already returns up to 500 nodes. A server that states a lower one
-    // gets smaller chunks.
-    const size = browseChunk(serverLimits, traversal.maxTypeDefinitionsPerRequest);
-    for (let start = 0; start < descriptions.length; start += size) {
-      let results;
-      try {
-        results = await session.browse(descriptions.slice(start, start + size));
-      } catch {
-        return;
-      }
-      results.forEach((result, index) => {
-        records[start + index].type_definition = typeDefinitionOf(
-          isGood(result.statusCode),
-          (result.references ?? []).map((reference) => reference.browseName.name ?? "")
-        );
-      });
-    }
-  }
-
-  /** Fill in value, data type and description for the Variables among `records`.
-   *
-   * One `read` for everything rather than three per node: a 500-node inventory
-   * is otherwise 1500 round trips, which is the difference between a tool that
-   * answers and one that times out on real equipment.
-   */
-  private async fillVariableDetail(
-    session: ClientSession,
-    records: NodeRefRecord[],
-    serverLimits: ServerOperationLimits
-  ): Promise<void> {
-    const variables = records.filter((record) => record.node_class === "Variable");
-    if (variables.length === 0) return;
-
-    const reads = variables.flatMap((record) => [
-      { nodeId: record.node_id, attributeId: AttributeIds.Value },
-      { nodeId: record.node_id, attributeId: AttributeIds.DataType },
-      { nodeId: record.node_id, attributeId: AttributeIds.Description },
-    ]);
-    let values;
-    try {
-      // Three attributes per node, so a 500-node walk is a 1500-item read — the
-      // largest single request this server made, and one it used to send whole.
-      values = await this.readValues(session, reads, readChunk(serverLimits));
-    } catch {
-      // Best-effort enrichment: the nodes were found, and reporting them
-      // without their values beats failing a browse that succeeded.
-      return;
-    }
-
-    variables.forEach((record, index) => {
-      const [value, dataType, description] = values.slice(index * 3, index * 3 + 3);
-      if (value && isGood(value.statusCode)) {
-        record.value = variantToJson(value.value);
-        record.data_type = dataTypeName(value.value);
-      }
-      if (record.data_type === null && dataType && isGood(dataType.statusCode)) {
-        record.data_type = dataTypeNameFromNodeId(dataType.value?.value);
-      }
-      const text = description?.value?.value?.text;
-      record.description = typeof text === "string" && text.length > 0 ? text : null;
-    });
-  }
-
-  /** Resolve a slash-separated browse path to a node id (issue #11).
-   *
-   * Matched segment by segment against the browse names of each node's children,
-   * rather than through TranslateBrowsePathsToNodeIds. Two reasons, and the
-   * first is the deciding one:
-   *
-   * A RelativePath element carries a *qualified* BrowseName, so translating
-   * `/Objects/Plant/Temperature` asks for those names in namespace 0 and a
-   * plant's own nodes are never in namespace 0 — the server answers BadNoMatch
-   * for a path that is plainly right. Someone who knows the namespace index can
-   * write `2:Plant`, but then they already know more than this argument exists
-   * to spare them. Matching here accepts either: a bare `Plant` matches
-   * whatever namespace it is in, and an explicit `2:Plant` is honoured as
-   * written.
-   *
-   * Second, browsing is universal where TranslateBrowsePaths is optional, so
-   * both runtimes and every server behave the same way. It costs one browse per
-   * segment, which for a path someone typed is a handful of round trips.
-   *
-   * A path that does not resolve is an error naming the segment that failed,
-   * never an empty result: "no such path" and "a path to nothing" are different
-   * answers, and only one of them is the caller's mistake.
-   */
-  private async resolveBrowsePath(startNodeId: string, browsePath: string): Promise<string> {
-    const session = this.requireSession();
-    const segments = browsePath.split("/").filter((segment) => segment.length > 0);
-    if (segments.length === 0) {
-      throw new ToolFailure(`browse_path "${browsePath}" names no elements`);
-    }
-
-    // A leading "/" is written from the Root folder, which is how a person says
-    // it ("/Objects/..."); anything else is relative to node_id.
-    let current = browsePath.startsWith("/") ? ROOT_FOLDER : canonicalNodeId(startNodeId);
-
-    for (const segment of segments) {
-      const references = await browseAllReferences(session, current);
-      const match = references.find((reference) =>
-        browseNameMatches(segment, reference.browseName.namespaceIndex, reference.browseName.name)
-      );
-      if (!match) {
-        throw new ToolFailure(
-          `browse_path "${browsePath}" does not resolve: no child "${segment}" under ${current}`
-        );
-      }
-      current = canonicalNodeId(match.nodeId.toString());
-    }
-    return current;
+  private async browseOpcuaNodes(request: BrowseRequest) {
+    const port = new NodeOpcuaBrowsePort(this.requireSession(), () => this.operationLimits());
+    const result = await browseNodes(port, request);
+    return objectResult(result.result, result.completeness);
   }
 
   // --- writing -------------------------------------------------------------

@@ -53,3 +53,9 @@ class AdapterFailure(RuntimeError):
         super().__init__(text)
         self.operation = operation
         self.__cause__ = cause
+
+
+def describe_error(error: BaseException) -> str:
+    """The message to report for a failed connection, in the library's words."""
+    text = str(error)
+    return text or type(error).__name__

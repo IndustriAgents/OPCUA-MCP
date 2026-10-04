@@ -1,13 +1,15 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Only current-value reads have moved so far.**
+extracts one feature at a time. **Current-value reads and address-space browse have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
 |---|---|---|---|
 | MCP adapter | `server.py:read_opcua_nodes` | `tools.ts:readOpcuaNodes` | Context lookup, injected port construction, protocol result/error conversion |
 | Read use case and port | `application/read.py` | `application/read.ts` | Ordered logical reads, sequential service batches, one metadata lookup, JSON records |
+| Browse use case and port | `application/browse.py` | `application/browse.ts` | Path matching, bounded breadth-first traversal, filtering, cycle detection and completeness |
+| Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Native read adapter | `adapters/opcua_read.py` | `adapters/opcua-read.ts` | Native node/attribute/variant access, codec, typed failure with its original cause |
 
 A port is bound to the session selected by the existing execution pipeline for
@@ -30,7 +32,20 @@ to check the adapter. Import and file-size checks in
 `tests/unit/test_feature_boundaries.py` enforce the new application and adapter
 boundaries. As subsequent features move, these checks apply to their modules.
 
-The remaining slices are browse, write, methods, history, events, alarms,
+The remaining slices are write, methods, history, events, alarms,
 subscriptions and diagnostics, followed by extraction of the common execution
 pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
+
+Browse uses normalized references rather than native NodeIds, names or enums.
+The native adapter drains reference continuation points, reads attributes and
+enriches type definitions/values. A failed descendant still marks an incomplete
+walk; a failed root still fails the request. Filtering does not prune descent,
+and skipped Server references still consume the existing traversal budget.
+`tests/fixtures/browse-port.json` covers those boundaries, cycles, breadth-first
+order, absolute/relative paths and Unicode using a fake tree in both runtimes.
+
+Python translates native failures inside its worker before asyncio transfers the
+exception back to the caller; this preserves the original timeout cause even on
+Python 3.10. Error description is a pure shared helper in `errors.py`, so the
+application no longer imports the connection layer to format a failure.

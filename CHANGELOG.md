@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Refactored — browse use cases and native ports (#141)
+- Address-space traversal now runs behind async browse ports in both runtimes.
+  Preserve breadth-first order, path resolution, budgets, filtering, cycles,
+  best-effort enrichment and incomplete results for unreadable descendants.
+- Native browse services and codecs live in adapters; fake-tree fixtures and
+  dependency/size checks enforce the extracted boundary.
+
 ### Changed — extract the read application port (#141, first slice)
 - Current-value reads now use an injected async port, with native adapters that
   retain exception causes and preserve sequential batching, codecs and metadata.

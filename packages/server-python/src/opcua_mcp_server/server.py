@@ -14,7 +14,7 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -23,11 +23,15 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from . import events
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
+from .adapters.opcua_events import PythonOpcuaEventPort
 from .adapters.opcua_history import PythonOpcuaHistoryPort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
 from .adapters.opcua_write import PythonOpcuaWritePort
 from .application.browse import browse_nodes
+from .application.events import read_event_history as read_event_history_use_case
+from .application.events import read_events as read_events_use_case
+from .application.events import subscribe_events as subscribe_events_use_case
 from .application.history import read_history
 from .application.methods import call_method
 from .application.read import read_nodes
@@ -54,8 +58,6 @@ from .capabilities import (
 )
 from .completeness import (
     buffer_completeness,
-    drain_completeness,
-    history_completeness,
 )
 from .config import describe_reconnect, reconnect_config
 from .connection import (
@@ -66,7 +68,6 @@ from .connection import (
     still_connecting_message,
 )
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
-from .datetimes import parse_iso_datetime
 from .diagnostics import disconnected_status, read_server_status
 from .errors import AdapterFailure, ApplicationRefusal
 from .errors import message as error_message
@@ -75,8 +76,6 @@ from .limits import (
     MAX_SUBSCRIPTIONS,
     LimitExceeded,
     check_request_bounds,
-    event_buffer_size,
-    history_values,
 )
 from .node_ids import canonical_node_id
 from .notices import notice
@@ -957,21 +956,6 @@ def _history_result(records: list[dict], completeness: dict, cap_notice: str) ->
     return _records_result(records, completeness, text)
 
 
-def _forward_from(start: datetime | None, end: datetime | None, last: Any) -> str | None:
-    """Where a truncated history read resumes, or None when its arguments cannot say.
-
-    Only a forward read can be continued with ``start_time``: a start was given
-    and the range runs up from it. Without one, an OPC UA server reads backwards
-    from the end, newest first (Part 11 §6.4.3.2), and the rest of the answer is
-    then *older* records — which no start_time asks for. The last record's own
-    timestamp is the resume point, inclusive, so a boundary record repeats
-    rather than being lost. ``forwardFrom`` in tools.ts is the other half.
-    """
-    if start is None or (end is not None and end <= start):
-        return None
-    return last if isinstance(last, str) else None
-
-
 def _object_result(record: Any, completeness: dict | None = None) -> CallToolResult:
     """A result that is one object rather than a list of records.
 
@@ -1064,7 +1048,7 @@ async def read_opcua_history(
 # of the session it rides on (#140). Nothing here touches the network at import.
 
 
-def read_event_history(
+async def read_event_history(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
     start_time: str | None = None,
@@ -1085,38 +1069,23 @@ def read_event_history(
             ``resultShapes.eventRecords`` in ``contract/tools.json``, and
             ``completeness`` beside them.
     """
-    client = ctx.request_context.lifespan_context["opcua_client"]
-    # A refusal the model has to see, as the Node runtime words it: a bare
-    # ValueError here escaped as the SDK's generic "Error executing tool".
-    try:
-        end = parse_iso_datetime(end_time) or datetime.now(timezone.utc)
-        # An hour back, rather than the epoch: a range nobody bounded should be
-        # the recent past, not the whole archive. `read_opcua_history` defaults
-        # the same way and for the same reason.
-        start = parse_iso_datetime(start_time) or end - timedelta(hours=1)
-    except ValueError as e:
-        raise ToolError(str(e)) from e
-    # The same cap as a raw value read, and a refusal rather than a knob: an
-    # alarm burst is tens of thousands of events, and "all of them" is a request
-    # that never returns.
-    wanted = history_values(num_values)
-    try:
-        page = events.read_event_history(client, node_id, start, end, wanted, severity_min)
-    except Exception as e:
-        raise ToolError(
-            error_message("eventHistoryFailed", node_id=node_id, reason=describe_error(e))
-        ) from e
-    return _history_result(
-        page.records,
-        history_completeness(
-            returned=len(page.records),
-            fetched=page.fetched,
-            wanted=wanted,
-            continuation_point=page.continued,
-            next_start=_forward_from(start, end, page.last_time),
-        ),
-        "eventHistoryTruncated",
+    port = PythonOpcuaEventPort(
+        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
     )
+    try:
+        result = await read_event_history_use_case(
+            port,
+            {
+                "node_id": node_id,
+                "start": start_time,
+                "end": end_time,
+                "num_values": num_values,
+                "severity_min": severity_min,
+            },
+        )
+        return _history_result(result["records"], result["completeness"], "eventHistoryTruncated")
+    except (ApplicationRefusal, AdapterFailure, LimitExceeded) as error:
+        raise ToolError(str(error)) from error
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
@@ -1440,76 +1409,38 @@ async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> 
 # --- events and Alarms & Conditions -----------------------------------------------
 
 
-def subscribe_events(
+async def subscribe_events(
     ctx: Context,
     node_id: str = events.DEFAULT_NOTIFIER,
     severity_min: int = events.DEFAULTS["severityMin"],
     buffer_size: int = events.DEFAULTS["bufferSize"],
 ) -> CallToolResult:
-    """
-    Start buffering OPC UA events from a notifier node.
-
-    Returns:
-        CallToolResult: One record of ``resultShapes.eventSubscription``, which
-            reports the clamped values actually in force and whether an existing
-            subscription was replaced.
-    """
-    # 0 means "unset" for a size, as it does everywhere else in both servers,
-    # and a buffer that keeps nothing would be a strange thing to have asked for.
-    # Clamped, and reported as clamped: the buffer is memory this process holds
-    # for as long as the subscription lives, and "as many as you like" was a
-    # request with no ceiling at all (issue #139).
-    buffer_size = event_buffer_size(buffer_size)
-    client = ctx.request_context.lifespan_context["opcua_client"]
+    """Start buffering OPC UA events from a notifier node."""
+    port = PythonOpcuaEventPort(
+        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
+    )
     try:
-        replaced = _state(ctx).events.subscribe(client, node_id, severity_min, buffer_size)
-    except Exception as e:
-        raise ToolError(
-            error_message("eventSubscribeFailed", node_id=node_id, reason=describe_error(e))
-        ) from e
-    return _object_result(
-        {
-            "node_id": canonical_node_id(node_id),
-            "severity_min": severity_min,
-            "buffer_size": buffer_size,
-            "replaced": replaced,
-        }
-    )
+        return _object_result(
+            await subscribe_events_use_case(port, node_id, severity_min, buffer_size)
+        )
+    except AdapterFailure as error:
+        raise ToolError(str(error)) from error
 
 
-def read_events(
-    ctx: Context,
-    node_id: str = events.DEFAULT_NOTIFIER,
-    limit: int = events.DEFAULTS["readLimit"],
+async def read_events(
+    ctx: Context, node_id: str = events.DEFAULT_NOTIFIER, limit: int = events.DEFAULTS["readLimit"]
 ) -> CallToolResult:
-    """
-    Read and drain the events buffered by subscribe_events.
-
-    Returns:
-        CallToolResult: Event records in text and structured form, with
-            ``completeness`` beside them, plus a plain-text compatibility notice
-            when the buffer overflowed.
-    """
-    limit = limit or events.DEFAULTS["readLimit"]
-    drained = _state(ctx).events.drain(node_id, limit)
-    if drained is None:
-        raise ToolError(error_message("notSubscribedToEvents", node_id=node_id))
-    records, remaining, dropped, size, resubscribed = drained
-    # In the response, not only on stderr: an agent that cannot tell a complete
-    # event stream from one that lost alarms reads the gap as quiet. As a field
-    # since issue #137, and as a sentence still for a reader of the text alone.
-    result = _records_result(
-        records,
-        drain_completeness(
-            returned=len(records), limit=limit, remaining=remaining, dropped=dropped
-        ),
-        events.dropped_events_message(dropped, size) if dropped else None,
+    """Drain buffered events and report truncation, overflow and reconnect gaps."""
+    port = PythonOpcuaEventPort(
+        ctx.request_context.lifespan_context["opcua_client"], _state(ctx).events
     )
-    if resubscribed:
-        # The same reasoning for the gap a reconnect leaves: nothing was dropped
-        # from the buffer, the events simply never arrived (#157).
-        result.content.append(TextContent(type="text", text=notice("eventsResubscribed")))
-    return result
+    try:
+        result = await read_events_use_case(port, node_id, limit or events.DEFAULTS["readLimit"])
+    except ApplicationRefusal as error:
+        raise ToolError(str(error)) from error
+    response = _records_result(result["records"], result["completeness"])
+    response.content.extend(TextContent(type="text", text=text) for text in result["notices"])
+    return response
 
 
 def list_active_alarms(

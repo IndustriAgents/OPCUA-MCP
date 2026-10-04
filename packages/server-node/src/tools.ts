@@ -1276,7 +1276,8 @@ export class OpcuaTools {
           "acknowledge",
           (args.comment as string) ?? "",
           null,
-          args.condition_id as string | undefined
+          args.condition_id as string | undefined,
+          true
         );
 
       case "act_on_alarm":
@@ -1285,7 +1286,8 @@ export class OpcuaTools {
           args.action as string,
           (args.comment as string) ?? "",
           (args.shelve_duration_ms as number | undefined) ?? null,
-          args.condition_id as string | undefined
+          args.condition_id as string | undefined,
+          false
         );
 
       default: {
@@ -2374,7 +2376,8 @@ export class OpcuaTools {
     action: string,
     comment: string,
     durationMs: number | null,
-    conditionId?: string
+    conditionId: string | undefined,
+    acknowledgement: boolean
   ) {
     // A relationship between two arguments, which the contract's own schema
     // cannot express: `shelveFor` is `shelve` plus a duration, and accepting one
@@ -2394,7 +2397,7 @@ export class OpcuaTools {
 
     const failed = (reason: string, cause?: unknown) =>
       new ToolFailure(
-        action === "acknowledge"
+        acknowledgement
           ? message("acknowledgeFailed", { condition_id: condition, reason })
           : message("alarmActionFailed", { action, condition_id: condition, reason }),
         { cause }
@@ -2426,9 +2429,9 @@ export class OpcuaTools {
       status: statusCode.name,
     };
     // `acknowledge_alarm` answers with the shape it always has; `act_on_alarm`
-    // adds the action, because 'shelve' and 'shelveFor' are one argument apart
+    // adds the action even when acknowledging, because 'shelve' and 'shelveFor' are one argument apart
     // and the record should say which one happened.
-    if (action !== "acknowledge") {
+    if (!acknowledgement) {
       return objectResult({ ...record, action, status: statusCode.name });
     }
     return objectResult(record);

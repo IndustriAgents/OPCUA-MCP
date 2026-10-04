@@ -43,6 +43,12 @@ method-argument fixtures pin the refusal; invocation-boundary tests prove that
 neither a feature nor a connection attempt runs. JSON result/refusal text escapes
 isolated surrogates safely, and nonnumeric max-change refusals use the same JSON spelling.
 
+The alarm extraction also exposed an alias mismatch outside the original list.
+`act_on_alarm(action="acknowledge")` must retain the action tool’s result shape
+and error frame; the dedicated acknowledgement tool retains its existing shape.
+Shared `alarm-tool-alias.json` cases drive both actual handlers through fake native
+services, including Good subcodes and failures, and assert one call per request.
+
 This evidence covers repository fixtures, mocks and the required runtime matrix.
 It does not replace separately dated real-vendor conformance evidence or the
 remaining security/adapter work in #144 and #167.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Qualify instance-owned maintained OPC UA services through the existing application ports, preserving typed writes, derived method metadata and numeric failure classification (#144).
+
 - Qualify asyncua native value encodings and internal UA request DTOs against the existing contract while keeping the production backend unchanged (#144).
 
 ### Changed — separate runtime, protocol and audit ownership (#141)

@@ -36,7 +36,9 @@ def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]
         # nothing at all, and `method-arguments.ts` does the same for that reason.
         references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
         for reference in references:
-            if reference.ReferenceTypeId == ua.NodeId(ua.ObjectIds.HasSubtype):
+            if canonical_node_id(reference.ReferenceTypeId.to_string()) == canonical_node_id(
+                ua.NodeId(ua.ObjectIds.HasSubtype).to_string()
+            ):
                 return canonical_node_id(reference.NodeId.to_string())
         return None
 

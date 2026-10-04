@@ -43,7 +43,13 @@ import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
-import { ContractRefusal, ToolFailure, UnexpectedToolFailure, describeError, message } from "./errors.js";
+import {
+  ContractRefusal,
+  ToolFailure,
+  UnexpectedToolFailure,
+  describeError,
+  message,
+} from "./errors.js";
 import {
   MAX_HISTORY_VALUES,
   MAX_SUBSCRIPTIONS,

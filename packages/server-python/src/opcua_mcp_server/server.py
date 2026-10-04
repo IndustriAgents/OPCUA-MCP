@@ -40,6 +40,7 @@ from .application.events import subscribe_events as subscribe_events_use_case
 from .application.execution import ExecutionCall as _Call
 from .application.execution import execute_tool
 from .application.history import read_history
+from .application.invocation import invoke_tool
 from .application.methods import call_method
 from .application.read import read_nodes
 from .application.subscriptions import list_subscriptions as list_subscriptions_use_case
@@ -721,118 +722,70 @@ class PolicyMCPServer(MCPServer):
             raise ToolError(str(error)) from error
 
     async def _run_tool(self, call: _Call, context):
-        name, arguments = call.name, call.arguments
-        # The one tool that must answer while the connection is down: it exists
-        # to say so, and reaches for the connection itself.
+        """Supply native and protocol callbacks to the shared recovery policy."""
+        owner = self
         connection = self.state.connection
-        if name == "get_server_status" or connection is None:
-            await self.state.await_warm_up()
-            return await super().call_tool(name, arguments, context)
+        dispatch = super().call_tool
 
-        # Connect *before* the capability gate, not after. A process that started
-        # while the plant was unreachable has asked no session anything, and
-        # checking first refused `read_opcua_history` as unsupported without ever
-        # asking the server. Unknown is not absent (issue #108) — and an
-        # unreachable server is `endpoint_offline`, not a capability answer (#140).
-        try:
-            await asyncio.to_thread(connection.ensure_connected)
-        except Exception as error:
-            raise ToolError(not_connected_message(connection.url, describe_error(error))) from error
-        # Which session this call is about to ride on, so recovery can tell "my
-        # session died" from "someone else already replaced it".
-        call.session = connection.session_id
+        class Port:
+            is_connection_error = staticmethod(is_connection_error)
+            wait_for_warm_up = owner.state.await_warm_up
 
-        await self._ensure_capabilities(call.spec, arguments, connection)
+            def endpoint(self):
+                return connection.url
 
-        try:
-            return await super().call_tool(name, arguments, context)
-        except Exception as error:
-            if not is_connection_error(error):
-                raise
-            return await self._recover(call, context, connection, error)
+            def session(self):
+                return connection.session_id
 
-    async def _recover(self, call: _Call, context, connection: OpcuaConnection, error: Exception):
-        """Rebuild the session a call died on, and decide what may follow it.
+            def has_connection(self):
+                return connection is not None
 
-        A connection can die between the check and the call: being connected a
-        moment ago is all anything can ever know. What happens next is settled by
-        the contract's own `retryPolicy` — *not* by `annotations.idempotentHint`,
-        which both runtimes used to read for this. That annotation tells the model
-        whether calling a tool twice is meaningful; this decides whether this
-        server may put a second request on the wire after an outcome it does not
-        know. `write_opcua_nodes` carries `idempotentHint: true` and must not be
-        re-sent: Part 4 §5.11.4 lets a Write partially succeed and defines no
-        operation order, so a lost response never proved the write had not landed
-        (issue #106).
+            async def connect(self):
+                await asyncio.to_thread(connection.ensure_connected)
 
-        The connection is rebuilt whatever the policy, so the next call finds a
-        live session.
-        """
-        name, arguments = call.name, call.arguments
-        policy = call.spec["retryPolicy"]
-        suffix = " and retrying once" if policy == "resend" else ""
-        print(
-            f"OPC UA call failed on a dead session; reconnecting{suffix}",
-            file=sys.stderr,
-        )
-        try:
-            await asyncio.to_thread(connection.reconnect, call.session)
-        except Exception as rebuild_failed:
-            # The same failure the pre-dispatch path reports, worded the same way.
-            # Left bare, this reached the model as "[Errno 61] Connection refused"
-            # — the same outage the call before it had described as "Not connected
-            # to the OPC UA server at …: … Call get_server_status for details", so
-            # one server said two things about one event depending on where in the
-            # request it happened to notice.
-            raise ToolError(
-                not_connected_message(connection.url, describe_error(rebuild_failed))
-            ) from rebuild_failed
+            async def capabilities(self, call):
+                await owner._ensure_capabilities(call.spec, call.arguments, connection)
 
-        if policy == "uncertainOutcome":
-            raise ToolError(
-                error_message(
-                    "uncertainOutcome",
-                    tool=name,
-                    reason=describe_error(error),
-                    targets=describe_targets(call.spec, arguments),
+            async def dispatch(self, call):
+                return await dispatch(call.name, call.arguments, context)
+
+            async def reconnect(self, session):
+                await asyncio.to_thread(connection.reconnect, session)
+
+            def log_recovery(self, resend):
+                suffix = " and retrying once" if resend else ""
+                print(
+                    f"OPC UA call failed on a dead session; reconnecting{suffix}",
+                    file=sys.stderr,
                 )
-            ) from error
-        if policy != "resend":
-            raise error
 
-        # Re-authorize before the second attempt, and audit it as its own.
-        #
-        # `reconnect` has just re-read the server's NamespaceArray and re-bound it
-        # into the policy, because a server that restarted may have loaded its
-        # namespaces in a different order — which is the whole reason the `nsu=`
-        # allowlist form exists. So the mapping this call was authorized against
-        # is not necessarily the mapping the second attempt will resolve against,
-        # and re-running the check is what stops a request reaching a node nobody
-        # allowed (issue #105). It touches no network.
-        call.attempt = 2
-        try:
-            self.state.policy.authorize(name, arguments)
-        except (PermissionError, ValueError) as exc:
-            call.denied = True
-            _audit_after(
-                self.state, name, arguments, "denied", str(exc), call_id=call.call_id, attempt=2
-            )
-            raise ToolError(str(exc)) from exc
-        try:
-            _audit_permission(self.state, name, arguments, call_id=call.call_id, attempt=2)
-        except ToolError:
-            # Refused before the second attempt went out, and recorded as nothing
-            # more: a `failed` line would read as though the plant had answered.
-            call.denied = True
-            raise
+            def targets(self, call):
+                return describe_targets(call.spec, call.arguments)
 
-        # And re-check what the server can do, for the same reason: the session
-        # the first attempt was checked against is gone, and the one this attempt
-        # rides on may be a restarted server that no longer keeps history. Only a
-        # `resend` tool gets here, and every capability-gated tool is one (#140).
-        await self._ensure_capabilities(call.spec, arguments, connection)
+            def authorize(self, call):
+                owner.state.policy.authorize(call.name, call.arguments)
 
-        return await super().call_tool(name, arguments, context)
+            def allowed(self, call):
+                _audit_permission(
+                    owner.state,
+                    call.name,
+                    call.arguments,
+                    call_id=call.call_id,
+                    attempt=call.attempt,
+                )
+
+            def denied(self, call, reason):
+                _audit_after(
+                    owner.state,
+                    call.name,
+                    call.arguments,
+                    "denied",
+                    reason,
+                    call_id=call.call_id,
+                    attempt=call.attempt,
+                )
+
+        return await invoke_tool(Port(), call)
 
 
 # --- helpers shared by the tool bodies ------------------------------------------

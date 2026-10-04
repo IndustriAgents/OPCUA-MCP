@@ -682,8 +682,9 @@ async def test_ca_chain_refuses_peer_application_uri_mismatch(
     assert "OPCUA_SERVER_TRUST_STORE" in reason, reason
 
 
+@pytest.mark.parametrize("revoked", [False, True], ids=["trusted", "revoked"])
 async def test_ca_reconnect_reloads_revocation_before_restoring_access(
-    impl, ca_server, secure_env, tmp_path, errlog
+    impl, ca_server, secure_env, tmp_path, errlog, revoked
 ):
     env = ca_environment(tmp_path, secure_env)
     env.update(
@@ -696,13 +697,22 @@ async def test_ca_reconnect_reloads_revocation_before_restoring_access(
     async with connect(_server_params(impl, ca_server.url, env), errlog) as session:
         first = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
         assert not first.is_error, text_of(first)
-        shutil.copyfile(
-            TRUST_FIXTURES / "issuer-revoked-leaf.crl", tmp_path / "issuers/crl/issuer-current.crl"
-        )
+        if revoked:
+            shutil.copyfile(
+                TRUST_FIXTURES / "issuer-revoked-leaf.crl",
+                tmp_path / "issuers/crl/issuer-current.crl",
+            )
         ca_server.restart()
-        await asyncio.sleep(0.3)
+        # Let native background repair finish before a tool can force a fresh client.
+        await asyncio.sleep(2.0)
         for _ in range(4):
             result = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
-            assert result.is_error, text_of(result)
+            if revoked:
+                assert result.is_error, text_of(result)
+            elif not result.is_error:
+                break
             await asyncio.sleep(0.2)
-        assert "BadCertificateRevoked" in text_of(result) + stderr_of(errlog)
+        if revoked:
+            assert "BadCertificateRevoked" in text_of(result) + stderr_of(errlog)
+        else:
+            assert not result.is_error, text_of(result) + stderr_of(errlog)

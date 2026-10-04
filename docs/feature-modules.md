@@ -1,7 +1,7 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Reads, browse, writes, methods, value history, events, alarms and subscriptions have moved so far.**
+extracts one feature at a time. **Reads, browse, writes, methods, value history, events, alarms, subscriptions and diagnostics have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
@@ -12,6 +12,8 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Diagnostics use case and port | `application/diagnostics.py` | `application/diagnostics.ts` | Fast connecting status, disconnected error records and capabilities sampled after the read |
+| Native diagnostics adapter | `adapters/opcua_diagnostics.py` | `adapters/opcua-diagnostics.ts` | Native status/namespace/summary decoding and connection recovery with original causes |
 | Subscription use cases and port | `application/subscriptions.py` | `application/subscriptions.ts` | Filter relationships, active caps, whole-batch range/ID checks, ordered creation/cancellation and loss completeness |
 | Native subscription adapter | `adapters/opcua_subscriptions.py` | `adapters/opcua-subscriptions.ts` | Existing per-instance manager, engineering metadata and lazy native session/client access |
 | Alarm use cases and port | `application/alarms.py` | `application/alarms.ts` | Duration relationships, cached condition selection, caller-specific results, status/error framing and one action |
@@ -45,8 +47,7 @@ to check the adapter. Import and file-size checks in
 boundaries. As subsequent features move, these checks apply to their modules.
 
 The remaining slices are
-diagnostics, followed by extraction of the common execution
-pipeline and protocol-independent typed errors. This document does not claim
+extraction of the common execution pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
 
 Browse uses normalized references rather than native NodeIds, names or enums.
@@ -117,3 +118,12 @@ without selecting a native session. Filter descriptions are native-free; SDK
 enums and monitoring parameters remain in the native manager. Shared
 `subscriptions-port.json` cases pin caps, options, call order, refusal frames and
 buffer loss; native timeout tests retain the cause with one creation attempt.
+
+Diagnostics use an async port even for Python’s blocking library. A running
+connection round is reported without joining it. The capability snapshot is
+read after the liveness operation, because recovery may replace the session.
+Connection failures remain disconnected status records. Native status/namespace
+and diagnostics-summary codecs retain their existing exports and service
+footprints; the native adapter translates errors before retry classification
+and before crossing Python’s worker-thread boundary. Shared
+`diagnostics-port.json` cases pin these report and call-order rules.

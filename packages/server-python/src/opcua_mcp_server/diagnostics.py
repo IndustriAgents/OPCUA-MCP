@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .application.diagnostics import disconnected_status as disconnected_status
 from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID, SERVER_STATUS_NODE_ID
 from .datetimes import format_iso_utc
 
@@ -27,30 +28,6 @@ DIAGNOSTICS_FIELDS: tuple[str, ...] = tuple(_DIAGNOSTICS["diagnosticsFields"])
 _SUMMARY_ATTRIBUTES = {
     field: "".join(part.capitalize() for part in field.split("_")) for field in DIAGNOSTICS_FIELDS
 }
-
-
-def disconnected_status(
-    endpoint_url: str, security: str, server_identity: dict, error: str | None
-) -> dict:
-    """The report for a connection that is not up: configuration, and why.
-
-    ``server_identity`` is reported here too: it comes from configuration, and
-    "why are the control tools missing?" is as likely a question while the
-    connection is down as while it is up.
-    """
-    return {
-        "connected": False,
-        "endpoint_url": endpoint_url,
-        "security": security,
-        "server_identity": server_identity,
-        "server_state": None,
-        "current_time": None,
-        "start_time": None,
-        "build_info": None,
-        "diagnostics": None,
-        "namespaces": [],
-        "error": error,
-    }
 
 
 def _text(value: Any) -> str:

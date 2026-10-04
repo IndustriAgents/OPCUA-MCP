@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract diagnostic application ports (#141)
+- Separate fast offline status and capability snapshots from native status reads
+  and connection recovery. Preserve public records, native failure causes and
+  capability generations after reconnect.
+
 ### Changed — extract subscription application ports (#141)
 - Separate filter relationships, capacity, batch preflight and completeness from
   native monitored-item operations. Preserve offline lists, cancellation order,

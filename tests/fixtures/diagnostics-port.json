@@ -1,0 +1,267 @@
+{
+  "cases": [
+    {
+      "name": "already connecting first attempt",
+      "snapshot": {
+        "endpoint": "opc.tcp://test:4840",
+        "connecting": true,
+        "lastError": null
+      },
+      "security": "None",
+      "identity": {
+        "authenticated": false,
+        "method": "none",
+        "control_permitted": false,
+        "reason": "test peer"
+      },
+      "status": {
+        "connected": true,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": "Running",
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [
+          {
+            "index": 0,
+            "uri": "http://opcfoundation.org/UA/"
+          }
+        ],
+        "error": null
+      },
+      "crash": false,
+      "expected": {
+        "connected": false,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": null,
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [],
+        "error": "Still connecting to the OPC UA server at opc.tcp://test:4840; a connection attempt is in progress (last failure: not yet known)",
+        "capabilities": {
+          "session_generation": 1
+        }
+      },
+      "calls": [
+        "snapshot",
+        "capabilities"
+      ]
+    },
+    {
+      "name": "already connecting recorded failure",
+      "snapshot": {
+        "endpoint": "opc.tcp://test:4840",
+        "connecting": true,
+        "lastError": "native timeout"
+      },
+      "security": "None",
+      "identity": {
+        "authenticated": false,
+        "method": "none",
+        "control_permitted": false,
+        "reason": "test peer"
+      },
+      "status": {
+        "connected": true,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": "Running",
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [
+          {
+            "index": 0,
+            "uri": "http://opcfoundation.org/UA/"
+          }
+        ],
+        "error": null
+      },
+      "crash": false,
+      "expected": {
+        "connected": false,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": null,
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [],
+        "error": "Still connecting to the OPC UA server at opc.tcp://test:4840; a connection attempt is in progress (last failure: native timeout)",
+        "capabilities": {
+          "session_generation": 1
+        }
+      },
+      "calls": [
+        "snapshot",
+        "capabilities"
+      ]
+    },
+    {
+      "name": "read replaces capability generation",
+      "snapshot": {
+        "endpoint": "opc.tcp://test:4840",
+        "connecting": false,
+        "lastError": null
+      },
+      "security": "None",
+      "identity": {
+        "authenticated": false,
+        "method": "none",
+        "control_permitted": false,
+        "reason": "test peer"
+      },
+      "status": {
+        "connected": true,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": "Running",
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [
+          {
+            "index": 0,
+            "uri": "http://opcfoundation.org/UA/"
+          }
+        ],
+        "error": null
+      },
+      "crash": false,
+      "expected": {
+        "connected": true,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": "Running",
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [
+          {
+            "index": 0,
+            "uri": "http://opcfoundation.org/UA/"
+          }
+        ],
+        "error": null,
+        "capabilities": {
+          "session_generation": 2
+        }
+      },
+      "calls": [
+        "snapshot",
+        "read",
+        "capabilities"
+      ]
+    },
+    {
+      "name": "native failure is disconnected status",
+      "snapshot": {
+        "endpoint": "opc.tcp://test:4840",
+        "connecting": false,
+        "lastError": null
+      },
+      "security": "None",
+      "identity": {
+        "authenticated": false,
+        "method": "none",
+        "control_permitted": false,
+        "reason": "test peer"
+      },
+      "status": {
+        "connected": true,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": "Running",
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [
+          {
+            "index": 0,
+            "uri": "http://opcfoundation.org/UA/"
+          }
+        ],
+        "error": null
+      },
+      "crash": true,
+      "expected": {
+        "connected": false,
+        "endpoint_url": "opc.tcp://test:4840",
+        "security": "None",
+        "server_identity": {
+          "authenticated": false,
+          "method": "none",
+          "control_permitted": false,
+          "reason": "test peer"
+        },
+        "server_state": null,
+        "current_time": null,
+        "start_time": null,
+        "build_info": null,
+        "diagnostics": null,
+        "namespaces": [],
+        "error": "native timeout",
+        "capabilities": {
+          "session_generation": 1
+        }
+      },
+      "calls": [
+        "snapshot",
+        "read",
+        "capabilities"
+      ]
+    }
+  ]
+}

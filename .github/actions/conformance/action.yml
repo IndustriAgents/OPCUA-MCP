@@ -62,9 +62,11 @@ runs:
       shell: bash
       run: |
         uv run --no-sync ruff check .
+        uv run --no-sync ruff check --select C901 packages/server-python/src/opcua_mcp_server/server.py packages/server-python/src/opcua_mcp_server/application packages/server-python/src/opcua_mcp_server/adapters packages/server-python/src/opcua_mcp_server/protocol packages/server-python/src/opcua_mcp_server/infrastructure
         uv run --no-sync ruff format --check .
         npm run format:check --prefix packages/server-node
         npm run typecheck --prefix packages/server-node
+        npm run lint:complexity --prefix packages/server-node
         npm run config:check --prefix packages/server-node
 
     - name: Node unit evidence

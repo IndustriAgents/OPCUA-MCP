@@ -21,7 +21,8 @@
     "build:mcpb": "node scripts/build-mcpb.mjs",
     "build:sea": "node scripts/build-sea.mjs",
     "config:generate": "node scripts/config-artifacts.mjs",
-    "config:check": "node scripts/config-artifacts.mjs --check"
+    "config:check": "node scripts/config-artifacts.mjs --check",
+    "lint:complexity": "oxlint -c .oxlintrc.json src/tools.ts src/application src/adapters src/protocol src/infrastructure"
   },
   "keywords": [
     "mcp",
@@ -56,6 +57,7 @@
     "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",
+    "oxlint": "1.86.0",
     "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.8",
     "typescript": "^7.0.2"

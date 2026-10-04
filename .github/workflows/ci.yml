@@ -59,6 +59,11 @@ jobs:
         working-directory: packages/server-node
         run: npm run format:check
 
+      - name: Extracted-module complexity limits
+        run: |
+          uv run --no-sync ruff check --select C901 packages/server-python/src/opcua_mcp_server/server.py packages/server-python/src/opcua_mcp_server/application packages/server-python/src/opcua_mcp_server/adapters packages/server-python/src/opcua_mcp_server/protocol packages/server-python/src/opcua_mcp_server/infrastructure
+          npm run lint:complexity --prefix packages/server-node
+
       - name: Typecheck (TypeScript)
         working-directory: packages/server-node
         run: npm run typecheck

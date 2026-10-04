@@ -27,6 +27,7 @@ server had died for an unrelated reason.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -34,6 +35,7 @@ import shutil
 import subprocess
 import tempfile
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from conftest import (
@@ -566,31 +568,38 @@ def ca_server(request):
     certificate = getattr(request, "param", "server.pem")
     port = _free_port()
     url = f"opc.tcp://127.0.0.1:{port}/trust/"
-    proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "--no-sync",
-            "python",
-            str(ROOT / "tests/fixtures/secure_opcua_server.py"),
-            "--endpoint",
-            url,
-            "--cert",
-            str(TRUST_FIXTURES / certificate),
-            "--key",
-            str(TRUST_FIXTURES / "server-test-only.key.pem"),
-            "--uri",
-            TRUST_URI,
-        ],
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
+    command = [
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        str(ROOT / "tests/fixtures/secure_opcua_server.py"),
+        "--endpoint",
+        url,
+        "--cert",
+        str(TRUST_FIXTURES / certificate),
+        "--key",
+        str(TRUST_FIXTURES / "server-test-only.key.pem"),
+        "--uri",
+        TRUST_URI,
+    ]
+    proc = None
+
+    def restart():
+        nonlocal proc
+        if proc is not None:
+            _terminate(proc)
+        proc = subprocess.Popen(
+            command, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         _await_listening(proc, port, "CA-chain secure mock")
-        yield url
+
+    try:
+        restart()
+        yield SimpleNamespace(url=url, restart=restart)
     finally:
-        _terminate(proc)
+        if proc is not None:
+            _terminate(proc)
 
 
 def ca_environment(
@@ -619,7 +628,9 @@ async def test_ca_chain_authorizes_control_and_certificate_renewal(
     impl, ca_server, secure_env, tmp_path, errlog
 ):
     env = ca_environment(tmp_path, secure_env)
-    async with connect(_server_params(impl, ca_server, env), errlog) as session:
+    audit_file = tmp_path / "control.jsonl"
+    env["OPCUA_AUDIT_FILE"] = str(audit_file)
+    async with connect(_server_params(impl, ca_server.url, env), errlog) as session:
         assert (await session.list_tools()).tools
         written = await session.call_tool(
             "write_opcua_nodes", {"nodes": [{"node_id": TEMPERATURE, "value": "37.5"}]}
@@ -632,6 +643,12 @@ async def test_ca_chain_authorizes_control_and_certificate_renewal(
             "authentication_method": "trust-store",
             "control": "secured",
         }
+
+    records = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines()]
+    assert records and all(
+        record["server_authentication_method"] == "trust-store" for record in records
+    )
+    assert all(record["control"] == "secured" for record in records)
 
 
 @pytest.mark.parametrize(
@@ -647,7 +664,7 @@ async def test_ca_chain_refuses_invalid_revocation_material_before_session(
     impl, ca_server, secure_env, tmp_path, errlog, issuer_crl, root_crl, expected
 ):
     env = ca_environment(tmp_path, secure_env, issuer_crl, root_crl)
-    reason = await _read_or_reason(impl, ca_server, env, errlog)
+    reason = await _read_or_reason(impl, ca_server.url, env, errlog)
     assert expected in reason, reason
     assert "OPCUA_SERVER_TRUST_STORE" in reason, reason
     assert SECURE_PASSWORD not in reason
@@ -660,6 +677,32 @@ async def test_ca_chain_refuses_peer_application_uri_mismatch(
     impl, ca_server, secure_env, tmp_path, errlog
 ):
     env = ca_environment(tmp_path, secure_env)
-    reason = await _read_or_reason(impl, ca_server, env, errlog)
+    reason = await _read_or_reason(impl, ca_server.url, env, errlog)
     assert "BadCertificateUriInvalid" in reason, reason
     assert "OPCUA_SERVER_TRUST_STORE" in reason, reason
+
+
+async def test_ca_reconnect_reloads_revocation_before_restoring_access(
+    impl, ca_server, secure_env, tmp_path, errlog
+):
+    env = ca_environment(tmp_path, secure_env)
+    env.update(
+        {
+            "OPCUA_RECONNECT_INITIAL_DELAY_MS": "100",
+            "OPCUA_RECONNECT_MAX_DELAY_MS": "200",
+            "OPCUA_RECONNECT_MAX_RETRY": "1",
+        }
+    )
+    async with connect(_server_params(impl, ca_server.url, env), errlog) as session:
+        first = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
+        assert not first.is_error, text_of(first)
+        shutil.copyfile(
+            TRUST_FIXTURES / "issuer-revoked-leaf.crl", tmp_path / "issuers/crl/issuer-current.crl"
+        )
+        ca_server.restart()
+        await asyncio.sleep(0.3)
+        for _ in range(4):
+            result = await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
+            assert result.is_error, text_of(result)
+            await asyncio.sleep(0.2)
+        assert "BadCertificateRevoked" in text_of(result) + stderr_of(errlog)

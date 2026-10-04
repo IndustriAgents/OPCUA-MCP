@@ -380,6 +380,10 @@ export class OpcuaConnection {
       this.opening = client;
       await client.connect(this.endpoint);
       if (security.serverTrustStore) {
+        // Native repair can reuse a cached certificate without rechecking CRLs.
+        // Preserve configured initial backoff, then require application-owned
+        // rebuilds (fresh discovery, trust and URI binding) after a channel loss.
+        client.connectionStrategy.maxRetry = 0;
         const endpoint = client.findEndpointForSecurity(
           MessageSecurityMode[security.mode],
           SecurityPolicy[security.policy]
@@ -479,9 +483,13 @@ export class OpcuaConnection {
 
     client.on("connection_lost", () => {
       if (!isCurrent()) return;
-      this.state = "reconnecting";
+      this.state = client.reconnectOnFailure !== false ? "reconnecting" : "disconnected";
       this.lastError = "connection lost";
-      console.error("OPC UA connection lost — node-opcua is trying to repair it");
+      console.error(
+        client.reconnectOnFailure
+          ? "OPC UA connection lost — node-opcua is trying to repair it"
+          : "OPC UA connection lost — waiting for application reconnect"
+      );
     });
 
     client.on("backoff", (retry: number, delay: number) => {

@@ -74,6 +74,9 @@ export function auditDecision(
       // server, or which lab override was in force. An override that shows up
       // only in a startup line nobody kept is an override nobody can audit.
       control: controlGate(policy.config),
+      ...(policy.config.serverIdentity?.authenticationMethod === "trust-store"
+        ? { server_authentication_method: "trust-store" as const }
+        : {}),
       tool: name,
       decision,
       targets: auditTargets(tool, args),

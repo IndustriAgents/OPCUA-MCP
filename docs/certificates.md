@@ -221,7 +221,10 @@ Material is bounded to 100 files across all folders, 1 MiB per file, 16 MiB tota
 and a verified chain of at most eight certificates. The Node native issuer
 search is additionally bounded to 64 expansions, refusing cyclic or overly
 ambiguous issuer graphs rather than continuing indefinitely. The store is reloaded on
-connection validation, including reconnection. Updating a CRL does not terminate
+connection validation, including reconnection. In CA-trust mode Node disables
+automatic channel repair after the initial connection; application-owned
+reconnect creates a fresh client and rechecks discovery, CRLs and server URI
+before session activation. Initial connection backoff retains its configuration. Updating a CRL does not terminate
 an already established session; force reconnection to apply a new revocation
 immediately. Keep current signed CRLs available before restarting clients.
 
@@ -229,5 +232,6 @@ Errors identify `OPCUA_SERVER_TRUST_STORE` and a certificate status such as
 `BadCertificateRevoked`, `BadCertificateTimeInvalid`, `BadCertificateUriInvalid`
 or `BadCertificateRevocationUnknown`, followed by remediation. A successful
 connection reports `authentication_method: "trust-store"` in `server_identity`
-and control audit records, and satisfies the authenticated-peer control gate.
+and satisfies the authenticated-peer control gate. CA control audit records
+retain `control: "secured"` and add `server_authentication_method: "trust-store"`.
 Renewal under the same trusted chain, server URI and endpoint needs no new pin.

@@ -716,3 +716,23 @@ async def test_ca_reconnect_reloads_revocation_before_restoring_access(
             assert "BadCertificateRevoked" in text_of(result) + stderr_of(errlog)
         else:
             assert not result.is_error, text_of(result) + stderr_of(errlog)
+
+
+@pytest.mark.parametrize("broken", [False, True], ids=["valid", "broken"])
+async def test_ca_chain_handles_symlinked_material_identically(
+    impl, ca_server, secure_env, tmp_path, errlog, broken
+):
+    env = ca_environment(tmp_path, secure_env)
+    targets = tmp_path / "material-targets"
+    targets.mkdir()
+    for folder in ("trusted/certs", "issuers/certs", "trusted/crl", "issuers/crl"):
+        for path in (tmp_path / folder).iterdir():
+            target = targets / path.name
+            path.rename(target)
+            path.symlink_to(target.with_name("missing-" + target.name) if broken else target)
+    reason = await _read_or_reason(impl, ca_server.url, env, errlog)
+    if broken:
+        assert "BadCertificateUntrusted" in reason, reason
+        assert '"status": "Good"' not in reason, reason
+    else:
+        assert '"status": "Good"' in reason, reason

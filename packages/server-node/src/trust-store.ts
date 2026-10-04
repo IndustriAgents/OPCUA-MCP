@@ -1,6 +1,6 @@
 // Validate administrator CA chains and signed offline CRLs before a peer session.
 import { webcrypto, X509Certificate } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { InMemoryCertificateStore } from "node-opcua-common";
@@ -23,6 +23,14 @@ const REMEDIATION =
 export const trustRefusal = (status: string) =>
   `OPCUA_SERVER_TRUST_STORE: ${status}. ${REMEDIATION}`;
 
+function regularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function material(root: string): Record<string, Buffer[]> {
   const result: Record<string, Buffer[]> = {};
   let count = 0;
@@ -32,9 +40,10 @@ function material(root: string): Record<string, Buffer[]> {
     result[folder] = [];
     if (!existsSync(directory)) continue;
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
+      const file = join(directory, entry.name);
+      if (!entry.isFile() && !(entry.isSymbolicLink() && regularFile(file))) continue;
       if (++count > 100) throw new Error("invalid bounded trust material");
-      const handle = openSync(join(directory, entry.name), "r");
+      const handle = openSync(file, "r");
       const buffer = Buffer.alloc(1024 * 1024 + 1);
       let size = 0;
       try {

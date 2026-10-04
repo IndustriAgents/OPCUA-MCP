@@ -62,7 +62,7 @@ openssl x509 -in client.pem -noout -text | sed -n '/X509v3 extensions/,/Signatur
 
 Two file-naming rules worth following even where only one of them applies:
 
-- **Name both files `*.pem`.** The Python runtime (python-opcua) decides PEM
+- **Name both files `*.pem`.** The Python runtime decides PEM
   versus DER by extension alone, so a PEM key called `client.key` fails to load.
   The Node runtime sniffs the contents and accepts either name.
 - **Leave the key unencrypted** (`-nodes` above) and protect it with file
@@ -83,8 +83,8 @@ unset it or set it to the certificate’s own URI.
 
 `OPCUA_APPLICATION_URI` is not needed: both runtimes take the URI out of
 `OPCUA_CLIENT_CERT`. Set it only for a certificate with no URI in its
-`subjectAltName`, and expect a warning if it contradicts one that has it — the
-certificate is what the server checks against.
+`subjectAltName`; a conflicting value is refused before connecting. The server
+may still reject a certificate whose SAN lacks the intended application URI.
 
 Absolute paths. The MCP server is started by a desktop client, in whatever
 working directory that client happens to have.
@@ -216,6 +216,11 @@ basic constraints, key usage, SAN, name constraints and extended key usage;
 other critical certificate extensions and critical CRL extensions refuse
 connection. No issuer/CRL downloads, online OCSP, automatic trust acceptance or
 writes to the administrator store occur.
+
+Symbolic links to regular files are supported, including mounted certificate
+and CRL material. Broken links and non-files are ignored; a store with no usable
+anchors refuses connection. Limits apply to the target bytes and each selected
+file entry, so links cannot bypass the material bounds.
 
 Material is bounded to 100 files across all folders, 1 MiB per file, 16 MiB total
 and a verified chain of at most eight certificates. The Node native issuer

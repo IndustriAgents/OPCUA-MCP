@@ -9,8 +9,8 @@ The first implemented slice is `adapters/asyncua_transport.py`, qualified agains
 | Required feature | Maintained adapter evidence / remaining work |
 |---|---|
 | Browse and continuation release | Application fake-port characterization exists; wire/client integration pending |
-| Batch read/write and Variant typing | Application characterization exists; native codecs and whole-batch control gate pending |
-| Method InputArguments | Application characterization exists; native metadata/type resolution pending |
+| Batch read/write and Variant typing | Application characterization exists; native shared-value/request codec tests pass; live whole-batch control integration pending |
+| Method InputArguments | Application characterization exists; native Argument value encoding passes; live metadata/type resolution pending |
 | Raw and aggregate history | Application characterization exists; bounded paging/release integration pending |
 | Event history | Application characterization exists; native paged event history pending |
 | Data-change subscription and deadband | Application characterization exists; native monitored-item/filter integration pending |
@@ -20,8 +20,8 @@ The first implemented slice is `adapters/asyncua_transport.py`, qualified agains
 | Message/chunk bounds | Native framing tests cover hostile split headers, local receive caps, count/byte reassembly caps, exact boundaries and memory release |
 | Negotiated receive/send limits | Native Ack tests prove correct buffer direction; zero or enlarged peer limits never widen local caps |
 | Keepalive, renewal and subscription reconnect | The qualification client disables autonomous reconnect/subscription watchdogs and renews a native secure channel without replacing its session; subscription reattachment and longer/vendor sessions remain pending |
-| Timestamps, status names and structured values | Existing shared fixtures must pass with maintained native types |
-| Python 3.10/current | Foundation tests run on current Python; floor qualification follows before merging |
+| Timestamps, status names and structured values | All 32 shared native value cases pass, including timestamps, StatusCodes, standard ExtensionObjects, opaque values and bounded cycles |
+| Python 3.10/current | Foundation native/live tests pass on Python 3.10 and current Python; full adapter matrix remains pending |
 | Dual backend CI and rollback | Temporary comparison matrix and one-release rollback selection pending |
 | Packaged wheel and executable | Both maintained and rollback distribution paths require smoke qualification |
 
@@ -32,3 +32,7 @@ The protocol retains at most one bounded chunk while collecting split network ca
 This boundary is necessary because [asyncua 2.0.1's transport](https://github.com/FreeOpcUa/opcua-asyncio/blob/v2.0.1/asyncua/common/connection.py) overwrites local limits from the peer Ack and checks chunk count without a cumulative wire-byte cap; its [socket protocol](https://github.com/FreeOpcUa/opcua-asyncio/blob/v2.0.1/asyncua/client/ua_client.py) waits for the advertised body before checking the chunk size. The repository's earlier [compatibility spike PR #174](https://github.com/IndustriAgents/OPCUA-MCP/pull/174) contains additional observations that still require qualification against the completed #141/#157 code.
 
 Run `uv run pytest -q tests/unit/test_asyncua_transport.py` to exercise native frames, including byte-at-a-time Acks, headers with no body, multiple chunks in one callback, repeated complete messages and Hello timeout cleanup. These tests do not establish full client or vendor compatibility.
+
+## Native value boundary
+
+`adapters/asyncua_values.py` converts locally constructed request DTOs into maintained native types using their UA binary representation. The legacy library only serializes these local objects; it never parses a maintained-client network response. Nonempty request checks retain node IDs, typed method/write values, aggregate parameters and opaque continuation points. Standard native structures use library-known class identities and bounded field traversal without evaluating annotations. Unknown/custom structures remain explicitly undecodable. Live service integration and dual-backend qualification are still required.

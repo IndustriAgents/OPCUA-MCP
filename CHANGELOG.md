@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Qualify asyncua native value encodings and internal UA request DTOs against the existing contract while keeping the production backend unchanged (#144).
+
 ### Changed — separate runtime, protocol and audit ownership (#141)
 - Move connection/cache/subscription lifecycle, protocol startup/shutdown and
   audit construction into instance-owned modules. Cap central and extracted

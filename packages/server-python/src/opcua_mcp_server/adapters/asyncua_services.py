@@ -113,6 +113,9 @@ class MaintainedNode(sync.SyncNode):
     def get_parent(self):
         return self._call("get_parent")
 
+    def get_referenced_nodes(self, **kwargs):
+        return self._call("get_referenced_nodes", **kwargs)
+
     def get_references(self, **kwargs):
         return self._call("get_references", **kwargs)
 

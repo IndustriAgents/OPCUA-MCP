@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 # is the security boundary for an OPC UA control system. Widening a ceiling is a
 # deliberate PR that runs the full suite — see docs/dependency-policy.md.
 dependencies = [
+    # Qualified in the migration adapter; legacy remains the runtime until its parity gate.
+    "asyncua>=2.0.1,<2.1",
     # Parses the client certificate to derive the session's ApplicationUri, and
     # is what python-opcua signs and encrypts the channel with. cryptography
     # bumps its major on every feature release, so the ceiling moves often; the

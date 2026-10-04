@@ -58,6 +58,7 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 | `jsonschema` | `>=4.23,<5` | Draft 2020-12 input and result validation | Schema validation |
 | `typing-extensions` | `>=4.12,<5` | Generated TypedDict types on Python 3.10 | Static contract types |
 | `mcp[cli]` | `>=2.2.0,<3` | MCP protocol, stdio transport, tool input-schema validation | MCP protocol, schema validation |
+| `asyncua` | `>=2.0.1,<2.1` | Maintained adapter migration and bounded transport qualification | OPC UA transport, certificates |
 | `opcua` | `>=0.98.13,<0.99` | OPC UA client stack (python-opcua) | OPC UA transport, certificates |
 
 ### `opcua-mcp-server` on npm — `packages/server-node/package.json`

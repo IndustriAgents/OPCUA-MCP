@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Refactored — method calls through normalized async ports (#141)
+- Method orchestration now consumes JSON-facing argument metadata; native
+  adapters resolve datatype ancestry, encode variants and make one call.
+- Keep nullable optional arguments, scalar fallbacks, output array boundaries,
+  encoded-size refusals and original causes for control recovery.
+
 ### Refactored — browse use cases and native ports (#141)
 - Address-space traversal now runs behind async browse ports in both runtimes.
   Preserve breadth-first order, path resolution, budgets, filtering, cycles,

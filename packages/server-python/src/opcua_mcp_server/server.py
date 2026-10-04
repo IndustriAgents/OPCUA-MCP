@@ -24,9 +24,11 @@ from opcua import ua
 
 from . import events
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
+from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
 from .aggregates import validate_aggregate_function
 from .application.browse import browse_nodes
+from .application.methods import call_method
 from .application.read import read_nodes
 from .audit import (
     AuditSink,
@@ -84,7 +86,6 @@ from .limits import (
     event_buffer_size,
     history_values,
 )
-from .method_arguments import built_in_type, guess_variant
 from .node_ids import canonical_node_id
 from .node_metadata import AnalogInfo
 from .notices import notice
@@ -1589,61 +1590,7 @@ def check_write_bounds(
             check_max_change(node_id, value, bound, current.get(index))
 
 
-def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:
-    """The declared type of each input argument, or [] when the method publishes none.
-
-    A declared DataType that is not itself built in (``Duration``, ``UtcTime``,
-    an enumeration) is resolved to the built-in type it is encoded as, and one
-    that resolves to none raises: that is a method whose argument cannot be
-    encoded, not one that declares nothing, and guessing would send it anyway.
-    """
-    try:
-        arguments = client.get_node(method_node_id).get_child(["0:InputArguments"]).get_value()
-    except Exception:
-        # Not every method publishes InputArguments, and a method with no
-        # arguments has nothing to publish. Fall back rather than refuse.
-        return []
-
-    def supertype_of(data_type: str) -> str | None:
-        # Every inverse reference, filtered here rather than by the server:
-        # python-opcua's own server answers a browse filtered to HasSubtype with
-        # nothing at all, and `method-arguments.ts` does the same for that reason.
-        references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
-        for reference in references:
-            if reference.ReferenceTypeId == ua.NodeId(ua.ObjectIds.HasSubtype):
-                return canonical_node_id(reference.NodeId.to_string())
-        return None
-
-    return [
-        (
-            built_in_type(canonical_node_id(argument.DataType.to_string()), supertype_of),
-            argument.ValueRank >= 1,
-        )
-        for argument in arguments or []
-    ]
-
-
-def _call(node: Any, method_node: Any, arguments: list[Any]) -> Any:
-    """Call a method and return its whole CallMethodResult.
-
-    Not python-opcua's ``call_method``, which returns only the outputs — so the
-    tool reported ``"Good"`` whatever the server said — and flattens a single
-    array output into what look like several outputs.
-    """
-    request = ua.CallMethodRequest()
-    request.ObjectId = node.nodeid
-    request.MethodId = method_node.nodeid
-    request.InputArguments = arguments
-    result = node.server.call([request])[0]
-    # Good *severity*, not plain Good: GoodClamped or GoodLocalOverride is a call
-    # that happened, and refusing it would report as failed an action the plant
-    # carried out. The subcode is reported in `status` instead.
-    if not result.StatusCode.is_good():
-        raise ValueError(f"Method call failed with status: {result.StatusCode.name}")
-    return result
-
-
-def call_opcua_method(
+async def call_opcua_method(
     object_node_id: str,
     method_node_id: str,
     ctx: Context,
@@ -1661,44 +1608,11 @@ def call_opcua_method(
     Returns:
         CallToolResult: One record of ``resultShapes.methodResult``.
     """
-    client = ctx.request_context.lifespan_context["opcua_client"]
+    port = PythonOpcuaMethodPort(ctx.request_context.lifespan_context["opcua_client"])
     try:
-        object_node = client.get_node(object_node_id)
-        method_node = client.get_node(method_node_id)
-
-        declared = _input_argument_types(client, method_node_id)
-        method_args = []
-        for index, argument in enumerate(arguments or []):
-            if index < len(declared):
-                variant_type, is_array = declared[index]
-                method_args.append(
-                    ua.Variant(convert_for_variant(argument, variant_type, is_array), variant_type)
-                )
-            else:
-                method_args.append(guess_variant(argument, index))
-
-        result = _call(object_node, method_node, method_args)
-        return _object_result(
-            {
-                "object_node_id": canonical_node_id(object_node_id),
-                "method_node_id": canonical_node_id(method_node_id),
-                "status": str(result.StatusCode.name),
-                "outputs": [variant_to_json(output) for output in result.OutputArguments],
-            }
-        )
-    except LimitExceeded as e:
-        # Refused before the call was sent, so it did not fail: wrapping it in
-        # "Failed to call method" would say the plant had turned it down.
-        raise ToolError(str(e)) from e
-    except Exception as e:
-        raise ToolError(
-            error_message(
-                "methodFailed",
-                method_node_id=method_node_id,
-                object_node_id=object_node_id,
-                reason=describe_error(e),
-            )
-        ) from e
+        return _object_result(await call_method(port, object_node_id, method_node_id, arguments))
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 # --- data-change subscriptions ---------------------------------------------------

@@ -92,6 +92,7 @@ REQUIRED_GROUPS: dict[str, Group] = {
         "e2e/",
         lambda item: (
             _uses("secure_opcua_server")(item)
+            or _uses("ca_server")(item)
             or _in("test_security_startup.py", "test_policy_e2e.py")(item)
         ),
     ),

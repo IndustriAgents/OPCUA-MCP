@@ -1,17 +1,19 @@
 // Validate administrator CA chains and signed offline CRLs before a peer session.
 import { webcrypto, X509Certificate } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { InMemoryCertificateStore } from "node-opcua-common";
 import { exploreCertificate, split_der } from "node-opcua-crypto";
 import { StatusCodes } from "node-opcua-status-code";
 import {
+  BasicConstraints,
   Certificate,
   CertificateChainValidationEngine,
   CertificateRevocationList,
   ChainValidationCode,
   CryptoEngine,
+  ExtKeyUsage,
 } from "pkijs";
 
 const cryptoEngine = new CryptoEngine({ name: "node", crypto: webcrypto as unknown as Crypto });
@@ -21,16 +23,37 @@ const REMEDIATION =
 export const trustRefusal = (status: string) =>
   `OPCUA_SERVER_TRUST_STORE: ${status}. ${REMEDIATION}`;
 
-function files(root: string, folder: string): Buffer[] {
-  const directory = join(root, folder);
-  if (!existsSync(directory)) return [];
-  const paths = readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(directory, entry.name));
-  if (paths.length > 100 || paths.some((path) => statSync(path).size > 1024 * 1024)) {
-    throw new Error("invalid bounded trust material");
+function material(root: string): Record<string, Buffer[]> {
+  const result: Record<string, Buffer[]> = {};
+  let count = 0;
+  let total = 0;
+  for (const folder of ["trusted/certs", "issuers/certs", "trusted/crl", "issuers/crl"]) {
+    const directory = join(root, folder);
+    result[folder] = [];
+    if (!existsSync(directory)) continue;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (++count > 100) throw new Error("invalid bounded trust material");
+      const handle = openSync(join(directory, entry.name), "r");
+      const buffer = Buffer.alloc(1024 * 1024 + 1);
+      let size = 0;
+      try {
+        while (size < buffer.length) {
+          const read = readSync(handle, buffer, size, buffer.length - size, null);
+          if (!read) break;
+          size += read;
+        }
+      } finally {
+        closeSync(handle);
+      }
+      total += size;
+      if (size > 1024 * 1024 || total > 16 * 1024 * 1024) {
+        throw new Error("invalid bounded trust material");
+      }
+      result[folder].push(buffer.subarray(0, size));
+    }
   }
-  return paths.map((path) => readFileSync(path));
+  return result;
 }
 
 function crl(data: Buffer): CertificateRevocationList {
@@ -41,6 +64,35 @@ function crl(data: Buffer): CertificateRevocationList {
       )
     : data;
   return CertificateRevocationList.fromBER(Uint8Array.from(raw).buffer);
+}
+
+// Critical extensions outside this supported profile must never be silently ignored.
+const criticalExtensions = new Set([
+  "2.5.29.19",
+  "2.5.29.15",
+  "2.5.29.17",
+  "2.5.29.30",
+  "2.5.29.37",
+]);
+function unsupportedCritical(certificate: Certificate): boolean {
+  return (certificate.extensions ?? []).some(
+    (extension) => extension.critical && !criticalExtensions.has(extension.extnID)
+  );
+}
+
+function pathLengthProblem(path: Certificate[]): boolean {
+  // PKIJS returns the leaf first. Count non-self-issued intermediate CAs below each issuer.
+  for (let index = 1; index < path.length; index++) {
+    const constraints = path[index].extensions?.find(
+      (extension) => extension.extnID === "2.5.29.19"
+    )?.parsedValue as BasicConstraints | undefined;
+    if (constraints?.pathLenConstraint === undefined) continue;
+    const limit = constraints.pathLenConstraint;
+    if (typeof limit !== "number" || limit < 0) return true;
+    const intermediates = path.slice(1, index).filter((cert) => !cert.subject.isEqual(cert.issuer));
+    if (intermediates.length > limit) return true;
+  }
+  return false;
 }
 
 export interface TrustIdentity {
@@ -72,9 +124,17 @@ export async function certificateProblem(
   now = new Date()
 ): Promise<string | null> {
   try {
-    const anchors = files(path, "trusted/certs").map((data) => new X509Certificate(data).raw);
-    const issuers = files(path, "issuers/certs").map((data) => new X509Certificate(data).raw);
+    const loaded = material(path);
+    const anchors = loaded["trusted/certs"].map((data) => new X509Certificate(data).raw);
+    const issuers = loaded["issuers/certs"].map((data) => new X509Certificate(data).raw);
     if (!anchors.length) return "BadCertificateUntrusted";
+    if (
+      anchors.some((data) => {
+        const anchor = new X509Certificate(data);
+        return anchor.subject !== anchor.issuer || !anchor.verify(anchor.publicKey);
+      })
+    )
+      return "BadCertificateInvalid";
     const authorities = [...anchors, ...issuers];
     if (authorities.some((data) => !new X509Certificate(data).ca)) {
       return "BadCertificateInvalid";
@@ -82,8 +142,18 @@ export async function certificateProblem(
     const peer = Array.isArray(certificate) ? certificate[0] : split_der(certificate)[0];
     if (!peer || peer.length > 1024 * 1024) return "BadCertificateInvalid";
     const leaf = Certificate.fromBER(Uint8Array.from(peer).buffer);
+    const usage = leaf.extensions?.find((ext) => ext.extnID === "2.5.29.37")?.parsedValue as
+      ExtKeyUsage | undefined;
+    if (
+      usage &&
+      !usage.keyPurposes.includes("1.3.6.1.5.5.7.3.1") &&
+      !usage.keyPurposes.includes("2.5.29.37.0")
+    ) {
+      return "BadCertificateInvalid";
+    }
     const cas = authorities.map((data) => Certificate.fromBER(data));
-    const crls = [...files(path, "trusted/crl"), ...files(path, "issuers/crl")].map(crl);
+    if ([leaf, ...cas].some(unsupportedCritical)) return "BadCertificateInvalid";
+    const crls = [...loaded["trusted/crl"], ...loaded["issuers/crl"]].map(crl);
     if (
       !crls.length ||
       crls.some(
@@ -91,6 +161,11 @@ export async function certificateProblem(
       )
     ) {
       return "BadCertificateRevocationUnknown";
+    }
+    if (
+      crls.some((list) => list.crlExtensions?.extensions.some((extension) => extension.critical))
+    ) {
+      return "BadCertificateInvalid";
     }
     for (const list of crls) {
       let valid = false;
@@ -126,7 +201,9 @@ export async function certificateProblem(
         return "BadCertificateRevocationUnknown";
       }
       if (
-        [ChainValidationCode.noPath, ChainValidationCode.noValidPath].includes(result.resultCode)
+        [ChainValidationCode.noPath, ChainValidationCode.noValidPath].includes(result.resultCode) ||
+        (result.resultCode === ChainValidationCode.unknown &&
+          result.resultMessage === "No valid certificate paths found")
       ) {
         return "BadCertificateUntrusted";
       }
@@ -135,6 +212,7 @@ export async function certificateProblem(
     if (!result.certificatePath || result.certificatePath.length > 8) {
       return "BadCertificateChainIncomplete";
     }
+    if (pathLengthProblem(result.certificatePath)) return "BadCertificateInvalid";
     return identity ? identityProblem(peer, identity) : null;
   } catch {
     return "BadCertificateInvalid";

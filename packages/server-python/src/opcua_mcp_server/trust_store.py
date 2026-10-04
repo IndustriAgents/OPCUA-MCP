@@ -12,6 +12,8 @@ from OpenSSL import crypto
 
 MAX_FILES = 100
 MAX_FILE_BYTES = 1024 * 1024
+MAX_TOTAL_BYTES = 16 * MAX_FILE_BYTES
+CRITICAL_EXTENSIONS = {"2.5.29.19", "2.5.29.15", "2.5.29.17", "2.5.29.30", "2.5.29.37"}
 REMEDIATION = (
     "Check the configured CA chain, current signed CRLs, endpoint hostname and "
     "OPCUA_SERVER_APPLICATION_URI; update the trust store before reconnecting."
@@ -22,14 +24,27 @@ def refusal(status: str) -> str:
     return f"OPCUA_SERVER_TRUST_STORE: {status}. {REMEDIATION}"
 
 
-def _files(root: Path, folder: str):
-    directory = root / folder
-    if not directory.exists():
-        return []
-    paths = sorted(path for path in directory.iterdir() if path.is_file())
-    if len(paths) > MAX_FILES or any(path.stat().st_size > MAX_FILE_BYTES for path in paths):
-        raise ValueError(refusal("BadCertificateInvalid"))
-    return [path.read_bytes() for path in paths]
+def _material(root: Path):
+    material = {}
+    count = total = 0
+    for folder in ("trusted/certs", "issuers/certs", "trusted/crl", "issuers/crl"):
+        data = []
+        directory = root / folder
+        if directory.exists():
+            for path in directory.iterdir():
+                if not path.is_file():
+                    continue
+                count += 1
+                if count > MAX_FILES:
+                    raise ValueError("invalid bounded trust material")
+                with path.open("rb") as handle:
+                    raw = handle.read(MAX_FILE_BYTES + 1)
+                total += len(raw)
+                if len(raw) > MAX_FILE_BYTES or total > MAX_TOTAL_BYTES:
+                    raise ValueError("invalid bounded trust material")
+                data.append(raw)
+        material[folder] = data
+    return material
 
 
 def _certificate(data: bytes):
@@ -93,24 +108,44 @@ def certificate_problem(
     """Reload administrator material for each validation; never download missing issuers/CRLs."""
     moment = now or datetime.now(timezone.utc)
     try:
-        root = Path(path)
-        anchors = [_certificate(data) for data in _files(root, "trusted/certs")]
-        issuers = [_certificate(data) for data in _files(root, "issuers/certs")]
+        material = _material(Path(path))
+        anchors = [_certificate(data) for data in material["trusted/certs"]]
+        issuers = [_certificate(data) for data in material["issuers/certs"]]
         if not anchors:
             return "BadCertificateUntrusted"
+        for anchor in anchors:
+            anchor.verify_directly_issued_by(anchor)
+        try:
+            usage = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        except x509.ExtensionNotFound:
+            pass
+        else:
+            if (
+                x509.ExtendedKeyUsageOID.SERVER_AUTH not in usage
+                and x509.ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE not in usage
+            ):
+                return "BadCertificateInvalid"
         if any(
             not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
             for cert in anchors + issuers
         ):
             return "BadCertificateInvalid"
+        if any(
+            extension.critical and extension.oid.dotted_string not in CRITICAL_EXTENSIONS
+            for cert in [certificate, *anchors, *issuers]
+            for extension in cert.extensions
+        ):
+            return "BadCertificateInvalid"
         crls = [
-            _crl(data) for folder in ("trusted/crl", "issuers/crl") for data in _files(root, folder)
+            _crl(data) for folder in ("trusted/crl", "issuers/crl") for data in material[folder]
         ]
         if not crls or any(
             crl.next_update_utc is None or not crl.last_update_utc <= moment < crl.next_update_utc
             for crl in crls
         ):
             return "BadCertificateRevocationUnknown"
+        if any(extension.critical for crl in crls for extension in crl.extensions):
+            return "BadCertificateInvalid"
         if any(
             not any(
                 crl.issuer == issuer.subject

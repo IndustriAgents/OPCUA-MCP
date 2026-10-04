@@ -114,9 +114,9 @@ means a fresh thumbprint, so renewal repeats these steps.
 ## The other direction
 
 Everything above gets *your* certificate trusted by the server. The reverse —
-this client knowing it reached the right server — is `OPCUA_SERVER_CERT`, and
-**control tools need it**: `operator` and `full` offer writes, method calls and
-alarm actions only once the server's certificate is pinned.
+this client knowing it reached the right server — uses an exact pin or the CA
+trust store below. **Control tools require one of them**: `operator` and `full` offer writes, method calls and
+alarm actions only once the server's certificate is authenticated.
 
 Encrypted and authenticated are different properties. Without a pin, both
 runtimes take the server's certificate from its endpoint description and encrypt
@@ -151,11 +151,9 @@ What a pin does and does not check:
 | The pinned certificate has expired, or is not valid yet | Refused before connecting, naming the file and the date. Renew it on the server and pin the new one |
 | No pin | Connects and reads; control tools are hidden, and a call to one is refused with `Set OPCUA_SERVER_CERT … or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` |
 
-There is no CA trust store or revocation list: python-opcua has no server
-certificate validation to build one on, and both runtimes keep one behaviour.
-A pin is an exact match, so a revoked certificate is dealt with by replacing the
-pin — and a server that renews its certificate has to be re-pinned, which is the
-cost of the strongest check there is.
+A pin is an exact match: revocation requires replacing the pin, and renewal
+requires re-pinning. The CA trust store below instead verifies a renewed
+certificate against the configured chain, identity and current signed CRLs.
 
 `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` offers control over an encrypted but
 unverified channel, for a lab. It is not implied by
@@ -179,3 +177,55 @@ all, and whichever is in force is named in the startup line, in
 Both runtimes report on stderr, which is where an MCP client shows server logs.
 A working connection says so:
 `Connected to OPC UA server (policy=Basic256Sha256 mode=SignAndEncrypt user="mcp-operator")`.
+
+
+## Authenticating a server through a CA trust store
+
+Use a read-only administrator trust directory instead of an exact certificate pin
+when the site rotates server certificates under a known CA:
+
+```bash
+OPCUA_SECURITY_POLICY=Basic256Sha256
+OPCUA_CLIENT_CERT=/etc/opcua/client.pem
+OPCUA_CLIENT_KEY=/etc/opcua/client_key.pem
+OPCUA_SERVER_TRUST_STORE=/etc/opcua/server-trust
+OPCUA_SERVER_APPLICATION_URI=urn:plant:line-a:server
+OPCUA_PYTHON_BACKEND=asyncua
+```
+
+The Python legacy rollback backend refuses this configuration. Do not combine it
+with `OPCUA_SERVER_CERT`. The expected server URI is required and must match both
+the certificate's SAN URI and the endpoint's advertised ApplicationUri. The SAN
+must also match the configured endpoint hostname or IP; DNS wildcards and common
+name fallback are refused.
+
+Place PEM or DER material in these four folders:
+
+| Folder | Administrator material |
+|---|---|
+| `trusted/certs` | Trusted self-signed root CA certificates |
+| `issuers/certs` | Intermediate CA certificates, never promoted to anchors |
+| `trusted/crl` | Signed current CRLs for root-issued certificates |
+| `issuers/crl` | Signed current CRLs for intermediate-issued certificates |
+
+Both runtimes verify signatures, validity, CA/key-usage constraints, path lengths
+and revocation throughout the chain. CRLs must be signed by a configured CA with
+CRL-signing permission and have a current `thisUpdate`/`nextUpdate` window. Missing,
+expired, future or forged CRLs refuse connection. This profile accepts critical
+basic constraints, key usage, SAN, name constraints and extended key usage;
+other critical certificate extensions and critical CRL extensions refuse
+connection. No issuer/CRL downloads, online OCSP, automatic trust acceptance or
+writes to the administrator store occur.
+
+Material is bounded to 100 files across all folders, 1 MiB per file, 16 MiB total
+and a verified chain of at most eight certificates. The store is reloaded on
+connection validation, including reconnection. Updating a CRL does not terminate
+an already established session; force reconnection to apply a new revocation
+immediately. Keep current signed CRLs available before restarting clients.
+
+Errors identify `OPCUA_SERVER_TRUST_STORE` and a certificate status such as
+`BadCertificateRevoked`, `BadCertificateTimeInvalid`, `BadCertificateUriInvalid`
+or `BadCertificateRevocationUnknown`, followed by remediation. A successful
+connection reports `authentication_method: "trust-store"` in `server_identity`
+and control audit records, and satisfies the authenticated-peer control gate.
+Renewal under the same trusted chain, server URI and endpoint needs no new pin.

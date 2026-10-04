@@ -1,0 +1,12 @@
+  unit                   10 failed, 1593 passed, 37 skipped
+FAILED unit/test_control_gate.py::test_a_current_pin_has_no_problem - Attribu...
+FAILED unit/test_control_gate.py::test_an_expired_pin_is_refused_with_its_expiry
+FAILED unit/test_control_gate.py::test_a_pin_that_is_not_valid_yet_is_refused
+FAILED unit/test_control_gate.py::test_an_unreadable_pin_is_left_to_the_library
+FAILED unit/test_install_parity.py::test_install_writes_a_launchable_entry[python]
+FAILED unit/test_security_config.py::test_reads_the_application_uri_out_of_a_certificate
+FAILED unit/test_security_config.py::test_the_application_uri_defaults_to_the_certificates_own
+FAILED unit/test_security_config.py::test_an_explicit_application_uri_that_contradicts_the_certificate_warns
+FAILED unit/test_transport_limits.py::test_a_normal_multi_chunk_message_still_reassembles
+FAILED unit/test_transport_limits.py::test_a_server_that_never_terminates_the_message_is_cut_off
+10 failed, 1593 passed, 37 skipped in 6.65s

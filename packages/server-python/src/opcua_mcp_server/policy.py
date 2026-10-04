@@ -282,8 +282,8 @@ class ServerIdentity:
     #: A SecurityPolicy other than None: mode Sign or SignAndEncrypt.
     channel_secured: bool
     server_authenticated: bool
-    #: ``pin`` or ``none``. A trust-store method would be a third value; neither
-    #: client library offers one both runtimes can use, so there is none yet.
+    #: ``pin``, ``trust-store`` or ``none``. Connections enforce configured
+    #: authentication before a live session can carry control.
     authentication_method: str
 
 
@@ -294,10 +294,11 @@ def server_identity(env: Mapping[str, str]) -> ServerIdentity:
     # security.py, but this must not read it as authentication if it ever gets
     # here — with no channel security the server presents no certificate at all.
     pinned = secured and _value(env, "OPCUA_SERVER_CERT") is not None
+    trusted = secured and _value(env, "OPCUA_SERVER_TRUST_STORE") is not None
     return ServerIdentity(
         channel_secured=secured,
-        server_authenticated=pinned,
-        authentication_method="pin" if pinned else "none",
+        server_authenticated=pinned or trusted,
+        authentication_method="pin" if pinned else "trust-store" if trusted else "none",
     )
 
 

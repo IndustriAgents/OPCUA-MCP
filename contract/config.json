@@ -15,7 +15,7 @@
     "maximum": "number only, optional: the largest accepted value. Absent means no ceiling.",
     "integer": "number only, optional: true when only a whole number written in decimal digits is accepted (no fraction, exponent or hex).",
     "mustExist": "path only: whether the runtime refuses to start when the path does not exist. false for a file the server creates.",
-    "contents": "path only: what the file holds \u2014 certificate, private-key, policy-json, audit-log or key (a symmetric secret such as an HMAC key).",
+    "contents": "path only: what the path holds \u2014 certificate, private-key, policy-json, audit-log key (a symmetric secret such as an HMAC key), or trust-store (a CA/CRL directory).",
     "itemFormat": "list only: what each comma-separated item is \u2014 tool-name, node-id or object-method-pair.",
     "default": "The value the runtimes use when unset or blank, as the type's JSON value; null when there is none or it is derived (then see defaultDescription).",
     "defaultDescription": "Optional: prose for a default that depends on other settings.",
@@ -73,7 +73,7 @@
       "secret": false,
       "sensitive": false,
       "securityRelevant": true,
-      "securityNote": "Nothing verifies who answers at this address unless the server certificate is pinned.",
+      "securityNote": "Verify who answers with an exact server certificate pin or a configured CA trust store.",
       "runtimes": ["node", "python"],
       "surfaces": ["mcpb", "registry", "installer", "docs"]
     },
@@ -212,6 +212,57 @@
       "securityNote": "Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect.",
       "runtimes": ["node", "python"],
       "surfaces": ["mcpb", "registry", "installer", "docs"]
+    },
+    {
+      "env": "OPCUA_SERVER_TRUST_STORE",
+      "key": "server_trust_store",
+      "category": "security",
+      "title": "Server CA trust store",
+      "description": "Directory with trusted/certs root CAs, issuers/certs intermediate CAs, and trusted/crl plus issuers/crl signed current revocation lists. Authenticate the OPC UA peer by its validated chain and expected server URI. Requires secured channel and OPCUA_SERVER_APPLICATION_URI; Python requires the maintained asyncua backend.",
+      "type": "path",
+      "mustExist": true,
+      "contents": "trust-store",
+      "default": null,
+      "example": "/etc/opcua/trust",
+      "required": false,
+      "secret": false,
+      "sensitive": false,
+      "securityRelevant": true,
+      "securityNote": "Missing, stale, forged or revoked trust material refuses connection. Cannot be combined with an exact server certificate pin.",
+      "runtimes": [
+        "node",
+        "python"
+      ],
+      "surfaces": [
+        "mcpb",
+        "registry",
+        "installer",
+        "docs"
+      ]
+    },
+    {
+      "env": "OPCUA_SERVER_APPLICATION_URI",
+      "key": "server_application_uri",
+      "category": "security",
+      "title": "Expected server application URI",
+      "description": "ApplicationUri of the intended OPC UA server. Must match the peer certificate URI SAN and advertised application identity. Required with OPCUA_SERVER_TRUST_STORE.",
+      "type": "string",
+      "default": null,
+      "example": "urn:factory:line1:server",
+      "required": false,
+      "secret": false,
+      "sensitive": false,
+      "securityRelevant": true,
+      "runtimes": [
+        "node",
+        "python"
+      ],
+      "surfaces": [
+        "mcpb",
+        "registry",
+        "installer",
+        "docs"
+      ]
     },
     {
       "env": "OPCUA_USERNAME",

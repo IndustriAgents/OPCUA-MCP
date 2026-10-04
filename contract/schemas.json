@@ -486,15 +486,16 @@
             },
             "server_authenticated": {
               "type": "boolean",
-              "description": "True when the OPC UA server's certificate is verified — pinned with OPCUA_SERVER_CERT, so a connection to anything else cannot complete. False on a secured channel means encrypted to whichever server answered."
+              "description": "True when the OPC UA server's certificate is verified with OPCUA_SERVER_CERT or a CA trust store bound to the configured server URI and endpoint. False on a secured channel means encrypted to whichever server answered."
             },
             "authentication_method": {
               "type": "string",
               "enum": [
                 "pin",
+                "trust-store",
                 "none"
               ],
-              "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT) or 'none'."
+              "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT), 'trust-store' (validated CA chain, CRLs and server URI), or 'none'."
             },
             "control": {
               "type": "string",

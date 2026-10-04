@@ -32,6 +32,8 @@
         "OPCUA_CLIENT_KEY": "${user_config.opcua_client_key}",
         "OPCUA_APPLICATION_URI": "${user_config.opcua_application_uri}",
         "OPCUA_SERVER_CERT": "${user_config.opcua_server_cert}",
+        "OPCUA_SERVER_TRUST_STORE": "${user_config.opcua_server_trust_store}",
+        "OPCUA_SERVER_APPLICATION_URI": "${user_config.opcua_server_application_uri}",
         "OPCUA_USERNAME": "${user_config.opcua_username}",
         "OPCUA_PASSWORD": "${user_config.opcua_password}",
         "OPCUA_USER_CERT": "${user_config.opcua_user_cert}",
@@ -61,7 +63,7 @@
     "opcua_server_url": {
       "type": "string",
       "title": "OPC UA endpoint",
-      "description": "URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned.",
+      "description": "URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Verify who answers with an exact server certificate pin or a configured CA trust store.",
       "default": "opc.tcp://localhost:4840",
       "required": true
     },
@@ -100,6 +102,18 @@
       "type": "file",
       "title": "Pinned server certificate",
       "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect.",
+      "required": false
+    },
+    "opcua_server_trust_store": {
+      "type": "directory",
+      "title": "Server CA trust store",
+      "description": "Directory with trusted/certs root CAs, issuers/certs intermediate CAs, and trusted/crl plus issuers/crl signed current revocation lists. Authenticate the OPC UA peer by its validated chain and expected server URI. Requires secured channel and OPCUA_SERVER_APPLICATION_URI; Python requires the maintained asyncua backend. Missing, stale, forged or revoked trust material refuses connection. Cannot be combined with an exact server certificate pin.",
+      "required": false
+    },
+    "opcua_server_application_uri": {
+      "type": "string",
+      "title": "Expected server application URI",
+      "description": "ApplicationUri of the intended OPC UA server. Must match the peer certificate URI SAN and advertised application identity. Required with OPCUA_SERVER_TRUST_STORE.",
       "required": false
     },
     "opcua_username": {

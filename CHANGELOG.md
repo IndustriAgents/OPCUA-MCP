@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add administrator CA trust stores with signed offline CRLs, URI/endpoint binding,
+  bounded read-only material and matching authenticated-control diagnostics on
+  both runtimes. Recheck CA revocation before application-owned reconnect, and
+  identify the CA method in control audit records. Python requires the maintained
+  backend (#167).
+
 - Move the bundled Python mock to asyncua, preserving node IDs, histories and
   control callbacks with instance-owned mock attribute handling. Correct the
   shared event-history capability node to the standard `ns=0;i=11242`; the old

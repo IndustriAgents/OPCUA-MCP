@@ -51,7 +51,8 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "ajv": "^8.20.0",
     "node-opcua-client": "^2.184.8",
-    "node-opcua-crypto": "^6.0.0"
+    "node-opcua-crypto": "^6.0.0",
+    "pkijs": "~3.4.1"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",

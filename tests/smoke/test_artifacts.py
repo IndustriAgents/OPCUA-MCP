@@ -439,6 +439,7 @@ def test_mcpb_exposes_every_applicable_setting(packed_mcpb):
             assert user_config[field]["default"] is setting["default"], field
 
     assert user_config["opcua_profile"]["default"] == "observe"
+    assert user_config["opcua_server_trust_store"]["type"] == "directory"
 
 
 async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):

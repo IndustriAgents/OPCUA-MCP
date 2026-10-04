@@ -97,6 +97,14 @@ def _audit_decision(
         # server, or which lab override was in force. An override that shows
         # up only in a startup line nobody kept is an override nobody can audit.
         control=control_gate(state.policy.config),
+        server_authentication_method=(
+            "trust-store"
+            if getattr(
+                getattr(state.policy.config, "server_identity", None), "authentication_method", None
+            )
+            == "trust-store"
+            else None
+        ),
         tool=name,
         decision=decision,
         targets=_audit_targets(spec, arguments),

@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit construction into instance-owned modules. Cap central and extracted
   modules at 400 lines and functions at complexity 25 in CI and release gates.
 
+### Added — maintained adapter transport foundation (#144)
+- Add an instance-scoped asyncua receive adapter with fixed local chunk, count
+  and cumulative message caps. Peer acknowledgements can narrow these caps;
+  hostile split headers fail before body buffering. The production client
+  remains python-opcua until feature, security and reconnect parity qualify.
+
 ### Changed — extract protocol handlers and presenters (#141)
 - Move MCP tool signatures, contract dispatch and result/schema framing into
   small protocol modules. Preserve external names, default arguments, result

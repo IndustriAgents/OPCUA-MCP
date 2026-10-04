@@ -602,6 +602,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "mcp", extra = ["cli"] },
     { name = "opcua" },
+    { name = "pyopenssl" },
     { name = "typing-extensions" },
 ]
 
@@ -612,6 +613,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.2.0,<3" },
     { name = "opcua", specifier = ">=0.98.13,<0.99" },
+    { name = "pyopenssl", specifier = ">=26.4.0,<27" },
     { name = "typing-extensions", specifier = ">=4.12,<5" },
 ]
 

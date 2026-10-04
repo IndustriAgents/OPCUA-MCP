@@ -79,6 +79,8 @@ class SecurityConfig:
     user_cert: str | None = None
     #: Private key for ``user_cert``. Signs the server's challenge; never sent.
     user_key: str | None = None
+    server_trust_store: str | None = None
+    server_application_uri: str | None = None
 
 
 def _read(env: Mapping[str, str], name: str) -> str | None:
@@ -173,6 +175,20 @@ def parse_security_config(
             "than None; with no channel security the server presents no certificate to verify"
         )
 
+    server_trust_store = _read(env, "OPCUA_SERVER_TRUST_STORE")
+    server_application_uri = _read(env, "OPCUA_SERVER_APPLICATION_URI")
+    if server_trust_store:
+        if policy == "None":
+            raise ValueError("OPCUA_SERVER_TRUST_STORE requires a security policy other than None")
+        if server_cert:
+            raise ValueError("OPCUA_SERVER_TRUST_STORE cannot be combined with OPCUA_SERVER_CERT")
+        if not server_application_uri:
+            raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI")
+        if not exists(server_trust_store):
+            raise ValueError(f"OPCUA_SERVER_TRUST_STORE does not exist: {server_trust_store}")
+    elif server_application_uri:
+        raise ValueError("OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE")
+
     # --- X.509 user authentication ----------------------------------------------
     user_cert = _read(env, "OPCUA_USER_CERT")
     user_key = _read(env, "OPCUA_USER_KEY")
@@ -230,6 +246,8 @@ def parse_security_config(
         server_cert=server_cert,
         user_cert=user_cert,
         user_key=user_key,
+        server_trust_store=server_trust_store,
+        server_application_uri=server_application_uri,
     )
 
 
@@ -252,6 +270,8 @@ def describe_security(config: SecurityConfig) -> str:
     # is the one word that distinguishes "encrypted" from "encrypted to whoever
     # answered".
     pinned = "" if config.server_cert is None else " server-cert=pinned"
+    if config.server_trust_store:
+        pinned = " server-cert=trust-store"
     return f"policy={config.policy} mode={config.mode} user={user}{pinned}"
 
 
@@ -271,7 +291,7 @@ def security_warnings(config: SecurityConfig) -> list[str]:
         # endpoint all reach it. Said once, on a secured connection, because
         # this is the gap a reader of ``policy=Basic256Sha256`` is least likely
         # to suspect.
-        if config.server_cert is None:
+        if config.server_cert is None and config.server_trust_store is None:
             return [
                 "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT "
                 "to pin it. Encryption without it protects against passive eavesdropping, not "
@@ -387,6 +407,9 @@ def create_client(url: str) -> Client:
     talk to the server. Call it off the event loop.
     """
     backend = python_backend()
+    config = security_config()
+    if config.server_trust_store and backend != "asyncua":
+        raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua")
     if backend == "asyncua":
         from .adapters.asyncua_services import MaintainedClient
 
@@ -400,7 +423,6 @@ def create_client(url: str) -> Client:
     # any size in any number of chunks.
     if backend == "legacy":
         advertise_limits(client)
-    config = security_config()
 
     certificate_uri = (
         certificate_application_uri(config.client_cert) if config.client_cert else None
@@ -419,6 +441,12 @@ def create_client(url: str) -> Client:
         if problem is not None:
             raise ValueError(problem)
 
+    if config.server_trust_store:
+        from .trust_store import validator
+
+        client.aio_obj.certificate_validator = validator(
+            config.server_trust_store, config.server_application_uri, url
+        )
     try:
         _configure_client_security(client, config)
     except Exception:

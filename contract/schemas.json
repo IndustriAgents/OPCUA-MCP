@@ -492,9 +492,10 @@
               "type": "string",
               "enum": [
                 "pin",
+                "trust-store",
                 "none"
               ],
-              "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT) or 'none'."
+              "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT), 'trust-store' (validated CA chain, CRLs and server URI), or 'none'."
             },
             "control": {
               "type": "string",

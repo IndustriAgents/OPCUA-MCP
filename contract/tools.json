@@ -376,7 +376,7 @@
           "properties": {
             "channel_secured": { "type": "boolean", "description": "True when a SecurityPolicy other than None is configured (mode Sign or SignAndEncrypt). Protects the traffic; says nothing about who is on the other end." },
             "server_authenticated": { "type": "boolean", "description": "True when the OPC UA server's certificate is verified — pinned with OPCUA_SERVER_CERT, so a connection to anything else cannot complete. False on a secured channel means encrypted to whichever server answered." },
-            "authentication_method": { "type": "string", "enum": ["pin", "none"], "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT) or 'none'." },
+            "authentication_method": { "type": "string", "enum": ["pin", "trust-store", "none"], "description": "How the server's identity is verified: 'pin' (OPCUA_SERVER_CERT), 'trust-store' (validated CA chain, CRLs and server URI), or 'none'." },
             "control": { "type": "string", "enum": ["secured", "INSECURE-OVERRIDE", "UNVERIFIED-OVERRIDE", "blocked"], "description": "Whether control tools (writes, method calls, alarm actions) may be offered over this connection, and which condition allows it: 'secured' (verified server), 'INSECURE-OVERRIDE' (OPCUA_ALLOW_INSECURE_CONTROL on an unsecured channel), 'UNVERIFIED-OVERRIDE' (OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL on an unverified one) or 'blocked'. The profile and allowlists still apply on top." }
           },
           "required": ["channel_secured", "server_authenticated", "authentication_method", "control"],

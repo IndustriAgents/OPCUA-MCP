@@ -27,8 +27,16 @@
 // relative to their own `__dirname` at *import* time to find their package.json,
 // which no longer exists once bundled, so the `.mcpb` died on connect. Importing
 // the client package keeps the compiler honest about what this server may use.
-import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua-client";
+import {
+  OPCUAClient,
+  ClientSession,
+  StatusCodes,
+  AggregateFunction,
+  MessageSecurityMode,
+  SecurityPolicy,
+} from "node-opcua-client";
 
+import { TrustStore, trustRefusal } from "./trust-store.js";
 import { CLIENT_APPLICATION_NAME } from "./client-identity.js";
 
 import { randomBytes } from "crypto";
@@ -354,6 +362,15 @@ export class OpcuaConnection {
         // safe against the same thing. See transport-limits.ts.
         transportSettings: transportSettings(),
         ...clientSecurityOptions(security),
+        ...(security.serverTrustStore
+          ? {
+              clientCertificateManager: new TrustStore(security.serverTrustStore, {
+                applicationUri: security.serverApplicationUri!,
+                advertisedUri: security.serverApplicationUri!,
+                endpoint: this.endpoint,
+              }),
+            }
+          : {}),
         // The spelling node-opcua reads now; `endpoint_must_exist` still worked
         // but logged a deprecation warning on every connect.
         endpointMustExist: false,
@@ -362,6 +379,15 @@ export class OpcuaConnection {
 
       this.opening = client;
       await client.connect(this.endpoint);
+      if (security.serverTrustStore) {
+        const endpoint = client.findEndpointForSecurity(
+          MessageSecurityMode[security.mode],
+          SecurityPolicy[security.policy]
+        );
+        if (endpoint?.server.applicationUri !== security.serverApplicationUri) {
+          throw new Error(trustRefusal("BadCertificateUriInvalid"));
+        }
+      }
       if (this.closed) throw new Error(CLOSED_MESSAGE);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 

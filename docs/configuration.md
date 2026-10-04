@@ -36,13 +36,13 @@ declare.
 
 <!-- BEGIN GENERATED: config-reference from contract/config.json by packages/server-node/scripts/config-artifacts.mjs. Do not edit by hand: edit the source, then run `npm run config:generate` in packages/server-node. -->
 
-30 settings in six groups. A blank value means the default, whatever the type; a boolean accepts `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off`.
+32 settings in six groups. A blank value means the default, whatever the type; a boolean accepts `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off`.
 
 **Connection** — Which OPC UA server to talk to.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned. |
+| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Verify who answers with an exact server certificate pin or a configured CA trust store. |
 | `OPCUA_PYTHON_BACKEND` | `asyncua` | **Python runtime only.** Select the Python client implementation. The maintained asyncua client is the default; legacy provides the one-release rollback path for uncovered vendor incompatibilities. This setting affects the Python server only. One of `asyncua`, `legacy`. |
 
 **Channel security** — How the OPC UA secure channel is signed, encrypted and verified.
@@ -55,6 +55,8 @@ declare.
 | `OPCUA_CLIENT_KEY` | — | Path to the private key matching the client certificate. A path, never key material. Whoever can read the file can impersonate this client: keep it readable only by the account running the server. A path that does not exist stops the server at startup. |
 | `OPCUA_APPLICATION_URI` | the subjectAltName URI of the client certificate | Application URI announced to the server. Set it only for a certificate that carries no URI of its own. A configured URI that conflicts with the certificate is refused before connecting. |
 | `OPCUA_SERVER_CERT` | — | Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect. |
+| `OPCUA_SERVER_TRUST_STORE` | — | Directory with trusted/certs root CAs, issuers/certs intermediate CAs, and trusted/crl plus issuers/crl signed current revocation lists. Authenticate the OPC UA peer by its validated chain and expected server URI. Requires secured channel and OPCUA_SERVER_APPLICATION_URI; Python requires the maintained asyncua backend. Missing, stale, forged or revoked trust material refuses connection. Cannot be combined with an exact server certificate pin. |
+| `OPCUA_SERVER_APPLICATION_URI` | — | ApplicationUri of the intended OPC UA server. Must match the peer certificate URI SAN and advertised application identity. Required with OPCUA_SERVER_TRUST_STORE. |
 
 **User identity** — Who the OPC UA session logs in as.
 

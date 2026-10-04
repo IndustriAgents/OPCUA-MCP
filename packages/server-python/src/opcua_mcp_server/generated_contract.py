@@ -114,7 +114,7 @@ AlarmAction = TypedDict('AlarmAction', {
 ServerStatusServerIdentity = TypedDict('ServerStatusServerIdentity', {
     'channel_secured': Required[bool],
     'server_authenticated': Required[bool],
-    'authentication_method': Required[Literal['pin', 'none']],
+    'authentication_method': Required[Literal['pin', 'trust-store', 'none']],
     'control': Required[Literal['secured', 'INSECURE-OVERRIDE', 'UNVERIFIED-OVERRIDE', 'blocked']],
 }, total=False)
 

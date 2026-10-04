@@ -42,4 +42,6 @@ Run `uv run pytest -q tests/unit/test_asyncua_transport.py` to exercise native f
 
 The bundled Python mock uses the bounded asyncua dependency range and its own SDK loop. Its node IDs, control callbacks, operation limits, value histories and event archive remain the test boundary. An instance-owned attribute service preserves per-item unknown-node responses and assigns source timestamps when a client omits one, without patching library classes. Capabilities are published before the listener starts.
 
+Full-suite qualification also exposed two maintained-mock differences. The mock now reads the structured server clock dynamically, and its instance-owned native history storage provides a continuation timestamp when the requested page leaves records. These preserve the existing diagnostic/completeness contract rather than relaxing assertions.
+
 Migration exposed a pre-existing event-history probe error: the standard `HistoryServerCapabilities_AccessHistoryEventsCapability` is `ns=0;i=11242`, as recorded in the [SDK node identifier table](https://node-opcua.github.io/api_doc/latest/enums/node-opcua-constants.VariableIds.html#HistoryServerCapabilities_AccessHistoryEventsCapability). The shared contract now uses this ID; `i=11194` was a mock-only invention that hid independent servers' archives.

@@ -24,6 +24,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from . import events
 from .adapters.opcua_alarms import PythonOpcuaAlarmPort
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
+from .adapters.opcua_diagnostics import PythonOpcuaDiagnosticsPort
 from .adapters.opcua_events import PythonOpcuaEventPort
 from .adapters.opcua_history import PythonOpcuaHistoryPort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
@@ -33,6 +34,7 @@ from .adapters.opcua_write import PythonOpcuaWritePort
 from .application.alarms import act_on_alarm as act_on_alarm_use_case
 from .application.alarms import list_alarms
 from .application.browse import browse_nodes
+from .application.diagnostics import get_server_status as get_server_status_use_case
 from .application.events import read_event_history as read_event_history_use_case
 from .application.events import read_events as read_events_use_case
 from .application.events import subscribe_events as subscribe_events_use_case
@@ -68,10 +70,8 @@ from .connection import (
     describe_error,
     is_connection_error,
     not_connected_message,
-    still_connecting_message,
 )
 from .contract import CONTRACT, DESC, SUBSCRIPTIONS_RESOURCE
-from .diagnostics import disconnected_status, read_server_status
 from .errors import AdapterFailure, ApplicationRefusal
 from .errors import message as error_message
 from .generated_contract import TOOL_NAMES
@@ -1088,58 +1088,21 @@ async def read_event_history(
 
 
 # Tool: Report the connection and what the OPC UA server says about itself.
-def get_server_status(ctx: Context) -> CallToolResult:
-    """
-    Report connection state, server status and the namespace array.
+async def get_server_status(ctx: Context) -> CallToolResult:
+    """Report status without joining an existing connection round.
 
-    Connecting is attempted rather than assumed, so asking for the status is also
-    the cheapest way to bring a dropped connection back. A failure to connect is
-    the answer, not an error — "not connected, and here is why" is exactly what
-    the caller asked for, which is why this is the one tool that never raises a
-    `ToolError` for a down server.
-
-    ``capabilities`` is appended after the read, because the read may have
-    re-established the session and re-read them. It is the cache as it stands,
-    never a probe of its own: it says which session generation it was read on
-    and when, which is what makes a stale answer recognisable as one (#140).
-
-    Returns:
-        CallToolResult: One record of the shared ``resultShapes.serverStatus``
-            shape from ``contract/tools.json``, in text and structured form.
+    Capabilities are sampled after the liveness read, which may replace the
+    native session and update its generation. Connection failure is a status
+    record rather than a tool error.
     """
     state = _state(ctx)
-    status = _read_status(ctx)
-    return _object_result({**status, "capabilities": capability_status(state.capabilities)})
-
-
-def _read_status(ctx: Context) -> dict:
-    """The status record's connection and server fields; see :func:`get_server_status`."""
     connection = ctx.request_context.lifespan_context["opcua_connection"]
-    security = describe_security(security_config())
-    identity = server_identity_record(_state(ctx).policy.config)
-    # A round someone else started is not joined. Against a plant that is down it
-    # runs the whole configured backoff, and this is the report of why nothing is
-    # connected — the one answer that must not wait for it (#136). The round
-    # carries on; asking again reports how it ended.
-    if connection.connecting:
-        return disconnected_status(
-            connection.url,
-            security,
-            identity,
-            still_connecting_message(connection.url, connection.last_error),
+    port = PythonOpcuaDiagnosticsPort(connection, lambda: capability_status(state.capabilities))
+    return _object_result(
+        await get_server_status_use_case(
+            port, describe_security(security_config()), server_identity_record(state.policy.config)
         )
-    try:
-        # Through the same retry as every other read, so that asking for the
-        # status also re-establishes a session that has silently died — which is
-        # exactly the moment someone asks. python-opcua has no way to tell a
-        # live socket from a dead one short of using it, so this read *is* the
-        # liveness check.
-        status = connection.run(
-            lambda: read_server_status(connection.client, connection.url, security, identity)
-        )
-    except Exception as error:
-        status = disconnected_status(connection.url, security, identity, describe_error(error))
-    return status
+    )
 
 
 # --- browsing --------------------------------------------------------------------

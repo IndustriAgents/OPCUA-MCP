@@ -41,12 +41,7 @@ import {
   verdict,
 } from "./capabilities.js";
 import { WARM_UP_WAIT_MS } from "./config.js";
-import {
-  OpcuaConnection,
-  isConnectionError,
-  notConnectedMessage,
-  stillConnectingMessage,
-} from "./connection.js";
+import { OpcuaConnection, isConnectionError, notConnectedMessage } from "./connection.js";
 import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata } from "./node-metadata.js";
@@ -69,7 +64,9 @@ import {
 } from "./operation-limits.js";
 import { notice } from "./notices.js";
 import { validateArguments } from "./validation.js";
-import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
+import type { ServerStatusRecord } from "./application/diagnostics.js";
+import { getServerStatus } from "./application/diagnostics.js";
+import { NodeOpcuaDiagnosticsPort } from "./adapters/opcua-diagnostics.js";
 import { DEFAULT_NOTIFIER, EVENT_DEFAULTS, EventSubscriptions } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { prettyJson } from "./result-text.js";
@@ -1071,36 +1068,16 @@ export class OpcuaTools {
    * and when, which is what makes a stale answer recognisable as one (#140).
    */
   private async getServerStatus(): Promise<ServerStatusReport> {
-    const status = await this.readStatus();
-    return { ...status, capabilities: capabilityStatus(this.capabilities) };
-  }
-
-  private async readStatus(): Promise<ServerStatusRecord> {
-    const endpoint = this.conn.endpointUrl;
-    const security = describeSecurity(securityConfig());
-    const identity = serverIdentityRecord(this.policy.config);
-    // A round someone else started is not joined. Against a plant that is down
-    // it runs the whole configured backoff, and this is the report of why
-    // nothing is connected — the one answer that must not wait for it (#136).
-    // The round carries on; asking again reports how it ended.
-    if (this.conn.connecting) {
-      return disconnectedStatus(
-        endpoint,
-        security,
-        identity,
-        stillConnectingMessage(endpoint, this.conn.lastErrorMessage)
-      );
-    }
-    try {
-      // Through the same retry as every other read, so that asking for the
-      // status also re-establishes a session that has silently died — which is
-      // exactly the moment someone asks.
-      return await this.conn.withRetry(() =>
-        readServerStatus(this.requireSession(), endpoint, security, identity)
-      );
-    } catch (error) {
-      return disconnectedStatus(endpoint, security, identity, describeError(error));
-    }
+    const port = new NodeOpcuaDiagnosticsPort(
+      this.conn,
+      () => this.requireSession(),
+      () => capabilityStatus(this.capabilities)
+    );
+    return await getServerStatus(
+      port,
+      describeSecurity(securityConfig()),
+      serverIdentityRecord(this.policy.config)
+    );
   }
 
   private requireSession(): ClientSession {

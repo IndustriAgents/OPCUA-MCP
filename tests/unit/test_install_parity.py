@@ -399,3 +399,14 @@ def test_cli_output_is_byte_identical(case, tmp_path):
     assert python.stderr == node.stderr
     assert not list(tmp_path.rglob("claude_desktop_config.json"))
     assert not list(tmp_path.rglob("config.toml"))
+
+
+def test_cli_utf8_help_survives_an_ascii_pipe_locale(tmp_path):
+    env = {"PYTHONIOENCODING": "ascii", "PYTHONUTF8": "0"}
+    python = _run("python", ["--help"], tmp_path, env, binary=True)
+    node = _run("node", ["--help"], tmp_path, env, binary=True)
+    assert python.returncode == node.returncode == 0
+    assert python.stdout == node.stdout
+    assert python.stderr == node.stderr == b""
+    assert "—".encode() in python.stdout
+    assert b"\r\n" not in python.stdout

@@ -96,7 +96,7 @@ class PythonOpcuaWritePort:
                                 "give data_type to write without reading it first"
                             ),
                         }
-                    variant_type = value.Value.VariantType
+                    variant_type = ua.VariantType(value.Value.VariantType.value)
                     is_array = value.Value.is_array
                 converted = convert_for_variant(node.get("value"), variant_type, is_array)
                 self.write_ids.append(self.client.get_node(node["node_id"]).nodeid)

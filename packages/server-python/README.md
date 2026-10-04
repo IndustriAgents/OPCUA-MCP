@@ -194,7 +194,7 @@ which both runtimes are tested against and which ships inside this package:
 | Variable | Default | Description |
 |---|---|---|
 | `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned. |
-| `OPCUA_PYTHON_BACKEND` | `legacy` | Select the Python client implementation. During migration asyncua is opt-in; legacy retains the existing backend and provides the one-release rollback path. This setting affects the Python server only. One of `asyncua`, `legacy`. |
+| `OPCUA_PYTHON_BACKEND` | `asyncua` | Select the Python client implementation. The maintained asyncua client is the default; legacy provides the one-release rollback path for uncovered vendor incompatibilities. This setting affects the Python server only. One of `asyncua`, `legacy`. |
 
 **Channel security** — How the OPC UA secure channel is signed, encrypted and verified.
 
@@ -261,7 +261,7 @@ Making a client certificate and getting it trusted:
 [docs/certificates.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/certificates.md).
 
 On the **Python runtime**, certificate and key files are parsed as PEM only when
-they are named `*.pem` and as DER otherwise (a `python-opcua` rule), so a PEM key
+they are named `*.pem` and as DER otherwise (the Python SDKs' rule), so a PEM key
 called `client.key` fails to load — name it `client_key.pem`. The Node runtime
 sniffs the contents and accepts either name.
 

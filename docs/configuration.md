@@ -43,7 +43,7 @@ declare.
 | Variable | Default | Description |
 |---|---|---|
 | `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned. |
-| `OPCUA_PYTHON_BACKEND` | `legacy` | **Python runtime only.** Select the Python client implementation. During migration asyncua is opt-in; legacy retains the existing backend and provides the one-release rollback path. This setting affects the Python server only. One of `asyncua`, `legacy`. |
+| `OPCUA_PYTHON_BACKEND` | `asyncua` | **Python runtime only.** Select the Python client implementation. The maintained asyncua client is the default; legacy provides the one-release rollback path for uncovered vendor incompatibilities. This setting affects the Python server only. One of `asyncua`, `legacy`. |
 
 **Channel security** — How the OPC UA secure channel is signed, encrypted and verified.
 

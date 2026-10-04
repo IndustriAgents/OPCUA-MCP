@@ -124,12 +124,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           node-version: ${{ matrix.node-version }}
 
-  maintained-backend:
-    name: Maintained backend — Python ${{ matrix.python-version }} / Node 22
+  legacy-backend:
+    name: Legacy rollback — Python ${{ matrix.python-version }} / Node 22
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      OPCUA_PYTHON_BACKEND: asyncua
+      OPCUA_PYTHON_BACKEND: legacy
     strategy:
       fail-fast: false
       matrix:
@@ -139,12 +139,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Maintained backend conformance
+      - name: Legacy rollback conformance
         uses: ./.github/actions/conformance
         with:
           python-version: ${{ matrix.python-version }}
           node-version: "22"
-          evidence-suffix: -asyncua
+          evidence-suffix: -legacy
 
   # Builds every artifact a user can actually download — npm tarball, Python
   # wheel, the `.mcpb` bundle and both single-file executables — installs them

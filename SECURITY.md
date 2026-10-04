@@ -470,7 +470,7 @@ anywhere in the audit path.
 
 ### CVE-2022-25304 — unbounded chunk reassembly in `python-opcua`
 
-**Status: mitigated in this project; no upstream fix exists or is expected.**
+**Status: the default client is maintained asyncua; the explicit one-release legacy rollback remains locally mitigated. No upstream python-opcua fix exists or is expected.**
 
 An OPC UA message may be split across chunks, and `python-opcua` reassembles them
 by appending each one to a list with nothing counting it
@@ -480,6 +480,12 @@ client is out of memory.
 
 Dependabot reports no patched version, and there will not be one: `python-opcua`
 is unmaintained, and the advisory names its successor `asyncua` as well.
+
+The maintained Python adapter validates split headers and cumulative message/chunk
+bounds before forwarding frames to the native parser, without global patches.
+`tests/unit/test_asyncua_transport.py` drives hostile native frames and Ack limit
+negotiation through this path. Legacy DTOs are retained internally; the legacy
+wire parser is used only when `OPCUA_PYTHON_BACKEND=legacy` is explicitly selected.
 
 What this project does about it, in both runtimes and from the same numbers
 (`contract/tools.json` → `transport`):
@@ -505,8 +511,8 @@ fails a test rather than silently disabling the guard.
 OPC UA stack safe against everything, and the honest mitigation for a hostile
 network remains the one in [Connection security](#connection-security-important):
 authenticate the server, encrypt the channel, and do not point either runtime at
-an endpoint you do not trust. The Node runtime is on a maintained client library
-and is the better choice where that matters.
+an endpoint you do not trust. Both default runtimes use maintained clients. The legacy Python rollback remains
+an explicit compatibility fallback, with its guard and residual dependency risk.
 
 ## Release integrity
 

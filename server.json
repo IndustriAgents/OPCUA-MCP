@@ -29,9 +29,9 @@
         },
         {
           "name": "OPCUA_PYTHON_BACKEND",
-          "description": "Select the Python client implementation. During migration asyncua is opt-in; legacy retains the existing backend and provides the one-release rollback path. This setting affects the Python server only.",
+          "description": "Select the Python client implementation. The maintained asyncua client is the default; legacy provides the one-release rollback path for uncovered vendor incompatibilities. This setting affects the Python server only.",
           "format": "string",
-          "default": "legacy",
+          "default": "asyncua",
           "choices": ["asyncua", "legacy"]
         },
         {

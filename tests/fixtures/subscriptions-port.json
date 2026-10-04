@@ -1,0 +1,1284 @@
+{
+  "cases": [
+    {
+      "name": "offline list 0",
+      "operation": "list",
+      "active": [],
+      "ids": [],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "calls": [
+        {
+          "name": "list"
+        }
+      ],
+      "expected": {
+        "records": [],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 0,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "offline list 2",
+      "operation": "list",
+      "active": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 2
+        },
+        {
+          "subscription_id": "sub-2",
+          "dropped": 3
+        }
+      ],
+      "ids": [],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "calls": [
+        {
+          "name": "list"
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "subscription_id": "sub-1",
+            "dropped": 2
+          },
+          {
+            "subscription_id": "sub-2",
+            "dropped": 3
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "bufferOverflow"
+          ],
+          "returned": 2,
+          "truncated": false,
+          "limit": null,
+          "dropped": 5,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "empty subscribe",
+      "operation": "subscribe",
+      "active": [],
+      "ids": [],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "error": "emptyArray",
+      "fields": {
+        "tool": "subscribe_opcua_nodes",
+        "argument": "node_ids"
+      },
+      "calls": []
+    },
+    {
+      "name": "empty unsubscribe",
+      "operation": "unsubscribe",
+      "active": [],
+      "ids": [],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "error": "emptyArray",
+      "fields": {
+        "tool": "unsubscribe_opcua_nodes",
+        "argument": "subscription_ids"
+      },
+      "calls": []
+    },
+    {
+      "name": "ordered subscribe keeps options and loss",
+      "operation": "subscribe",
+      "active": [],
+      "ids": [
+        "ns=2;i=1",
+        "ns=2;i=2"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "results": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "sub-2",
+          "dropped": 1
+        }
+      ],
+      "calls": [
+        {
+          "name": "list"
+        },
+        {
+          "name": "subscribe",
+          "node_id": "ns=2;i=1"
+        },
+        {
+          "name": "subscribe",
+          "node_id": "ns=2;i=2"
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "subscription_id": "sub-1",
+            "dropped": 0
+          },
+          {
+            "subscription_id": "sub-2",
+            "dropped": 1
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "bufferOverflow"
+          ],
+          "returned": 2,
+          "truncated": false,
+          "limit": null,
+          "dropped": 1,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "active cap refuses before services",
+      "operation": "subscribe",
+      "active": [
+        {
+          "subscription_id": "0",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "1",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "2",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "3",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "4",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "5",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "6",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "7",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "8",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "9",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "10",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "11",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "12",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "13",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "14",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "15",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "16",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "17",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "18",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "19",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "20",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "21",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "22",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "23",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "24",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "25",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "26",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "27",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "28",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "29",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "30",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "31",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "32",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "33",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "34",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "35",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "36",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "37",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "38",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "39",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "40",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "41",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "42",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "43",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "44",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "45",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "46",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "47",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "48",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "49",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "50",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "51",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "52",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "53",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "54",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "55",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "56",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "57",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "58",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "59",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "60",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "61",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "62",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "63",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "64",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "65",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "66",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "67",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "68",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "69",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "70",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "71",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "72",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "73",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "74",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "75",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "76",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "77",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "78",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "79",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "80",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "81",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "82",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "83",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "84",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "85",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "86",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "87",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "88",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "89",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "90",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "91",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "92",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "93",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "94",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "95",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "96",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "97",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "98",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "99",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "100",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "101",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "102",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "103",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "104",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "105",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "106",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "107",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "108",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "109",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "110",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "111",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "112",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "113",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "114",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "115",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "116",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "117",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "118",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "119",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "120",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "121",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "122",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "123",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "124",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "125",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "126",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "127",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "128",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "129",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "130",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "131",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "132",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "133",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "134",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "135",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "136",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "137",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "138",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "139",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "140",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "141",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "142",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "143",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "144",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "145",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "146",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "147",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "148",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "149",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "150",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "151",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "152",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "153",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "154",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "155",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "156",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "157",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "158",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "159",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "160",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "161",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "162",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "163",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "164",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "165",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "166",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "167",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "168",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "169",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "170",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "171",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "172",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "173",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "174",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "175",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "176",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "177",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "178",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "179",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "180",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "181",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "182",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "183",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "184",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "185",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "186",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "187",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "188",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "189",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "190",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "191",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "192",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "193",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "194",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "195",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "196",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "197",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "198",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "199",
+          "dropped": 0
+        }
+      ],
+      "ids": [
+        "ns=2;i=1"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "error": "tooManySubscriptions",
+      "fields": {
+        "active": 200,
+        "limit": 200,
+        "wanted": 1
+      },
+      "calls": [
+        {
+          "name": "list"
+        }
+      ]
+    },
+    {
+      "name": "percent batch validates every range before create",
+      "operation": "subscribe",
+      "active": [],
+      "ids": [
+        "ns=2;i=1",
+        "ns=2;i=2"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "percent",
+        "deadbandValue": 1,
+        "trigger": "statusValue"
+      },
+      "ranges": {
+        "ns=2;i=1": true,
+        "ns=2;i=2": false
+      },
+      "error": "percentDeadbandNeedsRange",
+      "fields": {
+        "node_id": "ns=2;i=2"
+      },
+      "calls": [
+        {
+          "name": "list"
+        },
+        {
+          "name": "ranges",
+          "node_ids": [
+            "ns=2;i=1",
+            "ns=2;i=2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "percent batch with ranges creates in order",
+      "operation": "subscribe",
+      "active": [],
+      "ids": [
+        "ns=2;i=1"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "percent",
+        "deadbandValue": 1,
+        "trigger": "statusValue"
+      },
+      "ranges": {
+        "ns=2;i=1": true
+      },
+      "results": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 0
+        }
+      ],
+      "calls": [
+        {
+          "name": "list"
+        },
+        {
+          "name": "ranges",
+          "node_ids": [
+            "ns=2;i=1"
+          ]
+        },
+        {
+          "name": "subscribe",
+          "node_id": "ns=2;i=1"
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "subscription_id": "sub-1",
+            "dropped": 0
+          }
+        ],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 1,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "name": "native create failure stops subsequent attempts",
+      "operation": "subscribe",
+      "active": [],
+      "ids": [
+        "ns=2;i=1",
+        "ns=2;i=2"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "crash": "subscribe",
+      "error": "subscribeFailed",
+      "fields": {
+        "node_id": "ns=2;i=1",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "list"
+        },
+        {
+          "name": "subscribe",
+          "node_id": "ns=2;i=1"
+        }
+      ]
+    },
+    {
+      "name": "unknown ID batch 1",
+      "operation": "unsubscribe",
+      "active": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 0
+        }
+      ],
+      "ids": [
+        "sub-1",
+        "missing"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "error": "unknownSubscription",
+      "fields": {
+        "subscription_id": "missing"
+      },
+      "calls": [
+        {
+          "name": "list"
+        }
+      ]
+    },
+    {
+      "name": "unknown ID batch 2",
+      "operation": "unsubscribe",
+      "active": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 0
+        }
+      ],
+      "ids": [
+        "missing",
+        "also-missing"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "error": "unknownSubscriptions",
+      "fields": {
+        "subscription_ids": "missing, also-missing"
+      },
+      "calls": [
+        {
+          "name": "list"
+        }
+      ]
+    },
+    {
+      "name": "cancellation follows requested order",
+      "operation": "unsubscribe",
+      "active": [
+        {
+          "subscription_id": "sub-1",
+          "dropped": 0
+        },
+        {
+          "subscription_id": "sub-2",
+          "dropped": 1
+        }
+      ],
+      "ids": [
+        "sub-2",
+        "sub-1"
+      ],
+      "options": {
+        "publishingInterval": 1500,
+        "bufferSize": 12
+      },
+      "filter": {
+        "deadbandType": "none",
+        "deadbandValue": 0,
+        "trigger": "statusValue"
+      },
+      "calls": [
+        {
+          "name": "list"
+        },
+        {
+          "name": "unsubscribe",
+          "id": "sub-2"
+        },
+        {
+          "name": "unsubscribe",
+          "id": "sub-1"
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "subscription_id": "sub-2",
+            "dropped": 1
+          },
+          {
+            "subscription_id": "sub-1",
+            "dropped": 0
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "bufferOverflow"
+          ],
+          "returned": 2,
+          "truncated": false,
+          "limit": null,
+          "dropped": 1,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    }
+  ]
+}

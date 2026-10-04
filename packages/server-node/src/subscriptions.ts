@@ -189,49 +189,7 @@ export function resolveOptions(options: SubscribeOptions): {
  * caller would read a buffer full of jitter and conclude the tag was noisier
  * than their threshold, which it may not be.
  */
-export function resolveFilter(options: {
-  deadbandType?: string | null;
-  deadbandValue?: number | null;
-  dataChangeTrigger?: string | null;
-}): SubscriptionFilter {
-  const deadbandType = options.deadbandType ?? "none";
-  if (!Object.hasOwn(DEADBAND_TYPES, deadbandType)) {
-    throw new ToolFailure(
-      message("notAllowedValue", {
-        tool: "subscribe_opcua_nodes",
-        argument: "deadband_type",
-        allowed: Object.keys(DEADBAND_TYPES)
-          .map((name) => JSON.stringify(name))
-          .join(", "),
-        value: JSON.stringify(deadbandType),
-      })
-    );
-  }
-  const trigger = options.dataChangeTrigger ?? DEFAULT_DATA_CHANGE_TRIGGER;
-  if (!Object.hasOwn(DATA_CHANGE_TRIGGERS, trigger)) {
-    throw new ToolFailure(
-      message("notAllowedValue", {
-        tool: "subscribe_opcua_nodes",
-        argument: "data_change_trigger",
-        allowed: Object.keys(DATA_CHANGE_TRIGGERS)
-          .map((name) => JSON.stringify(name))
-          .join(", "),
-        value: JSON.stringify(trigger),
-      })
-    );
-  }
-  if (deadbandType === "none") {
-    return { deadbandType: "none", deadbandValue: 0, trigger };
-  }
-  if (options.deadbandValue === undefined || options.deadbandValue === null) {
-    throw new ToolFailure(message("deadbandNeedsValue", { deadband_type: deadbandType }));
-  }
-  return {
-    deadbandType,
-    deadbandValue: orDefault(options.deadbandValue, 0),
-    trigger,
-  };
-}
+export { resolveFilter } from "./application/subscriptions.js";
 
 /** One `DataChangeFilter`, or null when the defaults are what is wanted.
  *

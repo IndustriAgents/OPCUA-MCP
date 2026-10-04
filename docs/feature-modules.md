@@ -1,7 +1,7 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Reads, browse, writes, methods, value history, events and alarms have moved so far.**
+extracts one feature at a time. **Reads, browse, writes, methods, value history, events, alarms and subscriptions have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
@@ -12,6 +12,8 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Subscription use cases and port | `application/subscriptions.py` | `application/subscriptions.ts` | Filter relationships, active caps, whole-batch range/ID checks, ordered creation/cancellation and loss completeness |
+| Native subscription adapter | `adapters/opcua_subscriptions.py` | `adapters/opcua-subscriptions.ts` | Existing per-instance manager, engineering metadata and lazy native session/client access |
 | Alarm use cases and port | `application/alarms.py` | `application/alarms.ts` | Duration relationships, cached condition selection, caller-specific results, status/error framing and one action |
 | Native alarm adapter | `adapters/opcua_alarms.py` | `adapters/opcua-alarms.ts` | Condition refresh, native action methods, status normalization and lazy client/session selection |
 | Event use cases and port | `application/events.py` | `application/events.ts` | Applied subscription settings, ordered loss notices, history windows and filtered-page completeness |
@@ -43,7 +45,7 @@ to check the adapter. Import and file-size checks in
 boundaries. As subsequent features move, these checks apply to their modules.
 
 The remaining slices are
-subscriptions and diagnostics, followed by extraction of the common execution
+diagnostics, followed by extraction of the common execution
 pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
 
@@ -107,3 +109,11 @@ native action. Shared `alarms-port.json` cases characterize those rules and
 failure framing; native timeout tests retain the original cause across the
 Python worker boundary. The separate #157 alias fix is applied when this stack
 rebases onto main; the extraction itself preserves the current calling shims.
+
+Subscription application services validate the complete percent-deadband range
+batch before creating any monitored item and validate every cancellation ID
+before cancelling any. Offline lists and cancellation use the existing manager
+without selecting a native session. Filter descriptions are native-free; SDK
+enums and monitoring parameters remain in the native manager. Shared
+`subscriptions-port.json` cases pin caps, options, call order, refusal frames and
+buffer loss; native timeout tests retain the cause with one creation attempt.

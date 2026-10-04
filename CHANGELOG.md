@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract subscription application ports (#141)
+- Separate filter relationships, capacity, batch preflight and completeness from
+  native monitored-item operations. Preserve offline lists, cancellation order,
+  per-instance buffers and original native failure causes.
+
 ### Changed — extract alarm application ports (#141)
 - Separate alarm duration checks, cached-condition lookup and result framing
   from native refresh/action methods. Preserve caller-specific shapes, Good

@@ -6,6 +6,8 @@
 import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { subscribeEvents, readEvents, readEventHistory } from "./application/events.js";
+import { NodeOpcuaEventPort } from "./adapters/opcua-events.js";
 import { readHistory } from "./application/history.js";
 import { NodeOpcuaHistoryPort } from "./adapters/opcua-history.js";
 import { writeNodes, type WriteRequest } from "./application/write.js";
@@ -48,12 +50,7 @@ import {
   message,
 } from "./errors.js";
 import { MAX_SUBSCRIPTIONS, checkRequestBounds, eventBufferSize, historyValues } from "./limits.js";
-import {
-  Completeness,
-  bufferCompleteness,
-  drainCompleteness,
-  historyCompleteness,
-} from "./completeness.js";
+import { Completeness, bufferCompleteness } from "./completeness.js";
 import {
   ServerOperationLimits,
   UNSTATED,
@@ -64,16 +61,13 @@ import {
 import { notice } from "./notices.js";
 import { validateArguments } from "./validation.js";
 import { ServerStatusRecord, disconnectedStatus, readServerStatus } from "./diagnostics.js";
-import { toDate } from "./dates.js";
 import {
   DEFAULT_NOTIFIER,
   EVENT_DEFAULTS,
   EventRecord,
   EventSubscriptions,
   alarmAction,
-  droppedEventsMessage,
   listActiveAlarms,
-  readEventHistory,
 } from "./events.js";
 import { canonicalNodeId } from "./node-ids.js";
 import { prettyJson } from "./result-text.js";
@@ -101,24 +95,6 @@ import { randomBytes } from "crypto";
 
 export { checkEuRange } from "./application/write.js";
 export { checkMaxChange } from "./adapters/opcua-write.js";
-
-/** Where a truncated history read resumes, or null when its arguments cannot say.
- *
- * Only a forward read can be continued with `start_time`: a start was given and
- * the range runs up from it. Without one, an OPC UA server reads backwards from
- * the end, newest first (Part 11 §6.4.3.2), and the rest of the answer is then
- * *older* records — which no start_time asks for. The last record's own
- * timestamp is the resume point, inclusive, so a boundary record repeats rather
- * than being lost. `_forward_from` in server.py is the other half.
- */
-function forwardFrom(
-  start: Date | undefined,
-  end: Date | undefined,
-  last: string | null | undefined
-): string | null {
-  if (!start || (end && end.getTime() <= start.getTime())) return null;
-  return typeof last === "string" ? last : null;
-}
 
 /** A text block for a reader that only has the text, repeating `completeness`.
  *
@@ -169,7 +145,7 @@ function subscriptionResult(records: SubscriptionRecord[]) {
  * `list_active_alarms` passes no completeness: a refresh that does not finish is
  * an error, never a shorter list, so its answer is whole or it is not given.
  */
-function eventResult(records: EventRecord[], completeness?: Completeness) {
+function eventResult(records: unknown[], completeness?: Completeness) {
   return recordBlocks(records, completeness);
 }
 
@@ -1344,66 +1320,18 @@ export class OpcuaTools {
   // `events` tools, so a model that has learned one runtime's replies reads the
   // other's the same way. See packages/server-python/.../server.py.
 
+  private eventPort() {
+    return new NodeOpcuaEventPort(this.requireSession(), this.events);
+  }
   private async subscribeEvents(nodeId: string, severityMin: number, requested: number) {
-    // Clamped, and reported as clamped: the buffer is memory this process holds
-    // for as long as the subscription lives, and "as many as you like" was a
-    // request with no ceiling at all (issue #139).
-    const bufferSize = eventBufferSize(requested);
-    let replaced: boolean;
-    try {
-      ({ replaced } = await this.events.subscribe(
-        this.requireSession(),
-        nodeId,
-        severityMin,
-        bufferSize
-      ));
-    } catch (error) {
-      throw new ToolFailure(
-        message("eventSubscribeFailed", { node_id: nodeId, reason: describeError(error) }),
-        { cause: error }
-      );
-    }
-
-    return objectResult({
-      node_id: canonicalNodeId(nodeId),
-      severity_min: severityMin,
-      buffer_size: bufferSize,
-      replaced,
-    });
+    return objectResult(await subscribeEvents(this.eventPort(), nodeId, severityMin, requested));
   }
-
-  private readEvents(nodeId: string, limit: number) {
-    const drained = this.events.drain(this.requireSession(), nodeId, limit);
-    if (drained === null) {
-      throw new ToolFailure(message("notSubscribedToEvents", { node_id: nodeId }));
-    }
-    // In the response, not only on stderr: an agent that cannot tell a complete
-    // event stream from one that lost alarms reads the gap as quiet. As a field
-    // since issue #137, and as a sentence still for a reader of the text alone.
-    const result = withNotice(
-      eventResult(
-        drained.records,
-        drainCompleteness({
-          returned: drained.records.length,
-          limit,
-          remaining: drained.remaining,
-          dropped: drained.dropped,
-        })
-      ),
-      drained.dropped > 0 ? droppedEventsMessage(drained.dropped, drained.size) : null
-    );
-    // The same reasoning for the gap a reconnect leaves: nothing was dropped
-    // from the buffer, the events simply never arrived (#157).
-    return withNotice(result, drained.resubscribed ? notice("eventsResubscribed") : null);
+  private async readEvents(nodeId: string, limit: number) {
+    const result = await readEvents(this.eventPort(), nodeId, limit);
+    let response = eventResult(result.records, result.completeness);
+    for (const text of result.notices) response = withNotice(response, text);
+    return response;
   }
-
-  /** `read_event_history`: the events the server kept, for a range already past.
-   *
-   * `subscribe_events` only sees what arrives after it subscribes, so it cannot
-   * answer what fired before anyone was watching. This reads the server's own
-   * event archive instead, and returns the same records, so an alarm looks
-   * identical whether it was seen live or recovered afterwards.
-   */
   private async readEventHistory(request: {
     nodeId: string;
     start?: string;
@@ -1411,43 +1339,8 @@ export class OpcuaTools {
     numValues: number;
     severityMin: number;
   }) {
-    const { nodeId } = request;
-    const end = toDate(request.end) ?? new Date();
-    // An hour back, rather than the epoch: a range nobody bounded should be the
-    // recent past, not the whole archive. `read_opcua_history` defaults the same
-    // way and for the same reason.
-    const start = toDate(request.start) ?? new Date(end.getTime() - 60 * 60 * 1000);
-    // The same cap as a raw value read, and a refusal rather than a knob: an
-    // alarm burst is tens of thousands of events, and "all of them" is a request
-    // that never returns.
-    const wanted = historyValues(request.numValues);
-
-    try {
-      const page = await readEventHistory(
-        this.requireSession(),
-        nodeId,
-        start,
-        end,
-        wanted,
-        request.severityMin
-      );
-      return historyResult(
-        page.records,
-        historyCompleteness({
-          returned: page.records.length,
-          fetched: page.fetched,
-          wanted,
-          continuationPoint: page.continued,
-          nextStart: forwardFrom(start, end, page.lastTime),
-        }),
-        "eventHistoryTruncated"
-      );
-    } catch (error) {
-      throw new ToolFailure(
-        message("eventHistoryFailed", { node_id: nodeId, reason: describeError(error) }),
-        { cause: error }
-      );
-    }
+    const result = await readEventHistory(this.eventPort(), request);
+    return historyResult(result.records, result.completeness, "eventHistoryTruncated");
   }
 
   private async listActiveAlarms(nodeId: string, timeoutSeconds: number) {

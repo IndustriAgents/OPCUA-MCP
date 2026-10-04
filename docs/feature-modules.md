@@ -1,7 +1,7 @@
 # Feature module boundaries
 
 The migration in [#141](https://github.com/IndustriAgents/OPCUA-MCP/issues/141)
-extracts one feature at a time. **Current-value reads, browse, writes, method calls and value history have moved so far.**
+extracts one feature at a time. **Current-value reads, browse, writes, methods, value history and events have moved so far.**
 Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
@@ -12,6 +12,8 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Event use cases and port | `application/events.py` | `application/events.ts` | Applied subscription settings, ordered loss notices, history windows and filtered-page completeness |
+| Native event adapter | `adapters/opcua_events.py` | `adapters/opcua-events.ts` | Native event subscription/history calls and normalized per-instance buffer drains |
 | History use case and port | `application/history.py` | `application/history.ts` | Date windows, aggregate names, interval bounds and structured completeness |
 | Native history adapter | `adapters/opcua_history.py` | `adapters/opcua-history.ts` | Native history requests, page drain/release, status and value codecs |
 | Method use case and port | `application/methods.py` | `application/methods.ts` | Match raw arguments to normalized declarations, canonical result identifiers, one call and error framing |
@@ -38,7 +40,7 @@ to check the adapter. Import and file-size checks in
 `tests/unit/test_feature_boundaries.py` enforce the new application and adapter
 boundaries. As subsequent features move, these checks apply to their modules.
 
-The remaining slices are events, alarms,
+The remaining slices are alarms,
 subscriptions and diagnostics, followed by extraction of the common execution
 pipeline and protocol-independent typed errors. This document does not claim
 that the central modules already meet #141's final size or dependency limits.
@@ -84,3 +86,12 @@ including whether a forward read has a resumable timestamp. The clock is
 injectable for omitted aggregate end times. `history-port.json` characterizes
 those query rules and typed failures; existing native request/page tests retain
 the continuation protocol checks. Event history moves with the events slice.
+
+Event application services report applied buffer settings, drain loss notices in
+the existing order and count fetched history records before severity filtering.
+The events port binds the selected session to the existing instance-owned event
+manager; it creates no additional global buffer or subscription state. Native
+subscription/history exceptions retain their original causes. Shared cases in
+`events-port.json` cover buffer clamping, missing subscriptions, overflow plus a
+reconnect gap, empty drains and the omitted one-hour history window with an
+injected clock. Alarm actions remain in the next slice.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract event application ports (#141)
+- Separate event subscription settings, buffer drains, notices and history
+  completeness from native services in both runtimes. Per-instance buffers,
+  native failure causes and public records retain their behavior.
+
 ### Changed — extract the value-history application port (#141)
 - Separate date windows, aggregate validation and completeness from native
   history requests and continuation handling in both runtimes. Native points

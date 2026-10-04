@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { OPCUAClient } from "node-opcua-client";
 import { CLIENT_APPLICATION_NAME, applicationUriProblem } from "../build/client-identity.js";
 import {
@@ -16,7 +17,7 @@ const fixture = JSON.parse(
 for (const c of fixture.cases)
   it(c.name, () => assert.equal(applicationUriProblem(c.configured, c.certificateUri), c.problem));
 it("reads a real certificate and refuses conflicting identities before connecting", () => {
-  const cert = new URL("../../../" + fixture.certificate, import.meta.url).pathname;
+  const cert = fileURLToPath(new URL("../../../" + fixture.certificate, import.meta.url));
   assert.equal(certificateApplicationUri(cert), fixture.certificateUri);
   const config = parseSecurityConfig({
     OPCUA_CLIENT_CERT: cert,

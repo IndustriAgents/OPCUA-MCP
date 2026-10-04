@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — preserve the calling alarm tool’s contract (#157)
+- `act_on_alarm(action="acknowledge")` now includes `action` and uses the alarm
+  action failure frame on Node, matching Python and its advertised result schema.
+  The dedicated acknowledgement tool retains its own shape and failure frame;
+  both still issue one native call.
+
 ### Fixed — refuse malformed Unicode before control encoding (#157)
 - Both runtimes refuse unpaired Unicode surrogates in String, LocalizedText,
   QualifiedName and NodeId values, including arrays and inferred method arguments.

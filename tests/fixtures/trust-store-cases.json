@@ -404,6 +404,24 @@
       "advertisedUri": "urn:opcua-mcp:trust-fixture",
       "expected": "BadCertificateUntrusted",
       "id": "forged-chain"
+    },
+    {
+      "certificate": "constrained-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "constrained-issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "constrained-issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateInvalid",
+      "id": "name-constraints"
     }
   ],
   "configuration": [

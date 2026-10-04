@@ -50,6 +50,7 @@ def certificate(
     host="localhost",
     path_length=None,
     critical_unknown=False,
+    name_constraints=None,
 ):
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
     authority = issuer.subject if issuer else subject
@@ -98,6 +99,8 @@ def certificate(
             ),
             critical=False,
         )
+    if name_constraints is not None:
+        builder = builder.add_extension(name_constraints, critical=True)
     if critical_unknown:
         builder = builder.add_extension(
             x509.UnrecognizedExtension(x509.ObjectIdentifier("1.2.3.4.56789"), b"\x05\x00"),
@@ -164,3 +167,16 @@ crl("root-limited-current", limited_root, root_key)
 crl("limited-issuer-current", limited_issuer, issuer_key)
 certificate("critical-server", 33, leaf_key, issuer, issuer_key, critical_unknown=True)
 certificate("forged-server", 34, leaf_key, issuer, rogue_key)
+
+
+constrained_issuer = certificate(
+    "constrained-issuer",
+    50,
+    issuer_key,
+    root,
+    root_key,
+    ca=True,
+    name_constraints=x509.NameConstraints([x509.DNSName("example.invalid")], None),
+)
+certificate("constrained-server", 51, leaf_key, constrained_issuer, issuer_key)
+crl("constrained-issuer-current", constrained_issuer, issuer_key)

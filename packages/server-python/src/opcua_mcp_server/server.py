@@ -90,7 +90,6 @@ from .limits import (
 )
 from .node_ids import canonical_node_id
 from .notices import notice
-from .numeric import json_text
 from .operation_limits import (
     read_chunk,
     read_operation_limits,

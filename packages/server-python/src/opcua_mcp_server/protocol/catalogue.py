@@ -7,7 +7,8 @@ import copy
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import ToolAnnotations
 
-from ..contract import CONTRACT, error_message
+from ..contract import CONTRACT
+from ..errors import message as error_message
 
 
 def _advertised_tool(tool, spec: dict):

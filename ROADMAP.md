@@ -91,7 +91,7 @@ condition below is met.
 
 | Work | Set aside because | Reopen when |
 |---|---|---|
-| Streamable-HTTP transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)) | The tool policy is enforced per process and has no notion of *who* is calling; an HTTP listener would make it a remote endpoint that can write to a PLC | Per-client authorisation has a design |
+| Streamable-HTTP transport ([#14](https://github.com/IndustriAgents/OPCUA-MCP/issues/14)) | The tool policy is enforced per process and has no notion of *who* is calling; an HTTP listener would make it a remote endpoint that can write to a PLC | [RFC 0001](docs/rfc/0001-remote-identity-isolation.md) is accepted and its security gates have implementation evidence (#148) |
 | Multiple or file-configured endpoints ([#15](https://github.com/IndustriAgents/OPCUA-MCP/issues/15)) | **Its condition has been met — see below.** | Superseded |
 | Docker images ([#16](https://github.com/IndustriAgents/OPCUA-MCP/issues/16)) | Four distribution channels already ship, and a container adds little for a stdio server that runs beside its client | A remote transport lands, or a deployment requires an image |
 
@@ -129,9 +129,10 @@ worth the tool-surface break. Until then, one process per endpoint is not a
 workaround, it is the design, and [the configuration guide](docs/configuration.md#one-process-one-endpoint) now says so
 where someone would meet it.
 
-**Reopen when** a compatibility report or a user says they are running this
-against more than one endpoint at once, or per-client authorisation gets a design
-(which is #14's condition and this one's too).
+**Reopen when** the [identity and isolation RFC](docs/rfc/0001-remote-identity-isolation.md)
+is accepted and the implementation plan addresses its security gates (#148).
+A multi-endpoint use case motivates that review; URI-based NodeIds alone do not
+establish authenticated caller or credential isolation.
 
 ### The control audit trail, as it actually stands
 

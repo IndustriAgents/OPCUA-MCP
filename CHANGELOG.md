@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed on Node and retain their wording; native connection causes still drive
   retry and uncertain-outcome decisions.
 
+### Fixed — identical CLI help and usage errors (#157 E34)
+- Both runtimes use the same exact-flag grammar and schema-derived help. Unknown
+  flags, missing operands and invalid clients produce identical usage errors.
+- Reject values attached to `--help` and `--version`; malformed CLI arguments
+  cannot start the server or write a client configuration.
+
 ### Fixed — aggregate, alarm and browse parity (#157 B12/B19/B20/B21)
 - Aggregate discovery requires the standard node ID and name, excludes prototype
   names and duplicates, and reports unsupported aggregate functions consistently.

@@ -41,7 +41,7 @@ COMMANDS = {
 
 
 def _run(
-    impl: str, args: list[str], home, extra_env: dict | None = None, cwd=None
+    impl: str, args: list[str], home, extra_env: dict | None = None, cwd=None, binary=False
 ) -> subprocess.CompletedProcess:
     """Run one runtime's CLI with HOME redirected at a scratch directory.
 
@@ -65,7 +65,7 @@ def _run(
         env.pop(name, None)
     env.update(extra_env or {})
     return subprocess.run(
-        COMMANDS[impl] + args, capture_output=True, text=True, timeout=120, env=env, cwd=cwd
+        COMMANDS[impl] + args, capture_output=True, text=not binary, timeout=120, env=env, cwd=cwd
     )
 
 
@@ -379,3 +379,34 @@ def test_every_installer_setting_has_a_flag_and_no_secret_does(impl, tmp_path):
             assert flag not in helped, f"{impl} offers {flag}"
         elif "installer" in setting["surfaces"]:
             assert flag in helped, f"{impl} has no {flag}"
+
+
+CLI_CASES = json.loads((ROOT / "tests/fixtures/cli-cases.json").read_text(encoding="utf-8"))[
+    "cases"
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in CLI_CASES if c["kind"] in {"error", "help", "version"}],
+    ids=lambda c: c["name"],
+)
+def test_cli_output_is_byte_identical(case, tmp_path):
+    python = _run("python", case["argv"], tmp_path, binary=True)
+    node = _run("node", case["argv"], tmp_path, binary=True)
+    assert python.returncode == node.returncode == (2 if case["kind"] == "error" else 0)
+    assert python.stdout == node.stdout
+    assert python.stderr == node.stderr
+    assert not list(tmp_path.rglob("claude_desktop_config.json"))
+    assert not list(tmp_path.rglob("config.toml"))
+
+
+def test_cli_utf8_help_survives_an_ascii_pipe_locale(tmp_path):
+    env = {"PYTHONIOENCODING": "ascii", "PYTHONUTF8": "0"}
+    python = _run("python", ["--help"], tmp_path, env, binary=True)
+    node = _run("node", ["--help"], tmp_path, env, binary=True)
+    assert python.returncode == node.returncode == 0
+    assert python.stdout == node.stdout
+    assert python.stderr == node.stderr == b""
+    assert "—".encode() in python.stdout
+    assert b"\r\n" not in python.stdout

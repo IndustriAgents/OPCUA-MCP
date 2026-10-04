@@ -18,7 +18,6 @@ warnings; ``tests/fixtures/install-cases.json`` is the table both are held to.
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 import os
@@ -827,126 +826,163 @@ def _refused_flag_message(flag: str, setting: dict[str, Any]) -> str:
     )
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    # `allow_abbrev=False`: argparse would otherwise take `--allow-insecure` for
-    # `--allow-insecure-control`, which the Node parser (rightly) does not.
-    parser = argparse.ArgumentParser(
-        prog="opcua-mcp-server",
-        description=(
-            "MCP server for OPC UA. With no arguments it runs the server on stdio, "
-            "which is how MCP clients invoke it."
-        ),
-        epilog=(
-            "Passwords are never accepted as flags. See docs/install.md for how to supply one. "
-            "opcua-mcp-server --verify-audit FILE [FILE ...] [--key-file KEY] checks the "
-            "hash chain of an OPCUA_AUDIT_FILE (rotated files oldest first)."
-        ),
-        allow_abbrev=False,
-    )
-    parser.add_argument(
-        "-v",
-        "--version",
-        action="version",
-        version=package_version(),
-        help="print the version and exit",
-    )
-    install = parser.add_argument_group("install options")
-    install.add_argument(
-        "--install",
-        metavar="CLIENT",
-        choices=CLIENTS,
-        help="register this server with an MCP client (choices: %(choices)s)",
-    )
-    install.add_argument(
-        "--url", dest="setting_server_url", metavar="ENDPOINT", help="same as --server-url"
-    )
-    install.add_argument(
-        "--force", action="store_true", help=f'replace an existing "{SERVER_KEY}" entry'
-    )
-    install.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="validate, print a redacted preview, write nothing",
-    )
-    install.add_argument(
-        "--store-password-in-config",
-        action="store_true",
-        help="copy $OPCUA_PASSWORD into the config file (plain text)",
-    )
-    install.add_argument(
-        "--allow-unverified-remote-control",
-        action="store_true",
-        help="write operator/full for a remote endpoint with no pinned --server-cert (lab only)",
-    )
-
+def usage() -> str:
+    """The same schema-derived help as the Node CLI, independent of terminal width."""
+    lines = [
+        "opcua-mcp-server — MCP server for OPC UA",
+        "",
+        "Usage:",
+        "  opcua-mcp-server                      Run the MCP server on stdio (default)",
+        "  opcua-mcp-server --install <client>   Register this server with an MCP client",
+        "  opcua-mcp-server --version            Print the version",
+        "  opcua-mcp-server --verify-audit <file>... [--key-file <key>]",
+        "                                        Check an OPCUA_AUDIT_FILE hash chain",
+        "                                        (rotated files oldest first)",
+        "  opcua-mcp-server --help               Show this help",
+        "",
+        "Install options:",
+    ]
+    for flag, description in [
+        ("--install <client>", f"One of: {', '.join(CLIENTS)}"),
+        ("--url <endpoint>", "Same as --server-url"),
+        ("--force", f'Replace an existing "{SERVER_KEY}" entry'),
+        ("--dry-run", "Validate, print a redacted preview, write nothing"),
+        ("--store-password-in-config", "Copy $OPCUA_PASSWORD into the file (plain text)"),
+        ("--allow-unverified-remote-control", "Write operator/full for a remote endpoint"),
+        ("", "with no pinned --server-cert (lab only)"),
+    ]:
+        lines.append(f"  {flag:<38}{description}")
     schema = load_config_schema()
-    groups: dict[str, argparse._ArgumentGroup] = {}
+    category = ""
     for setting in installer_settings():
-        category = setting["category"]
-        if category not in groups:
+        if setting["category"] != category:
+            category = setting["category"]
             title = schema["categories"].get(category, {}).get("title", category)
-            groups[category] = parser.add_argument_group(title)
-        dest = f"setting_{setting['key']}"
-        if setting["type"] == "boolean":
-            groups[category].add_argument(
-                flag_for(setting),
-                dest=dest,
-                action="store_const",
-                const="true",
-                help=setting["env"],
-            )
-        else:
-            groups[category].add_argument(
-                flag_for(setting), dest=dest, metavar=setting["type"].upper(), help=setting["env"]
-            )
+            lines.extend(["", f"{title}:"])
+        operand = "" if setting["type"] == "boolean" else f" <{setting['type']}>"
+        lines.append(f"  {flag_for(setting) + operand:<38}{setting['env']}")
+    lines.extend(
+        ["", "Passwords are never accepted as flags. See docs/install.md for how to supply one."]
+    )
+    return "\n".join(lines) + "\n"
 
-    for setting in schema["settings"]:
-        if not setting["secret"] and "installer" in setting["surfaces"]:
+
+@dataclass
+class CliAction:
+    """Parsing does not connect or write configuration."""
+
+    kind: str
+    message: str = ""
+    options: InstallOptions | None = None
+    argv: list[str] = field(default_factory=list)
+
+
+_NEGATIVE_NUMBER = re.compile(r"(?:-\d+|-\d*\.\d+)\Z", re.ASCII)
+
+
+def parse_args(argv: list[str], default_url: str = SERVER_URL) -> CliAction:
+    """Exact flags, inline operands and negative numbers use one grammar on both runtimes."""
+    if not argv:
+        return CliAction("serve")
+    if argv[0] == "--verify-audit":
+        return CliAction("verify-audit", argv=argv[1:])
+    client = None
+    settings: dict[str, str] = {}
+    switches = {
+        "--force": False,
+        "--dry-run": False,
+        "--store-password-in-config": False,
+        "--allow-unverified-remote-control": False,
+    }
+    by_flag = {flag_for(s): s for s in installer_settings()}
+    refused = {
+        flag_for(s): s
+        for s in load_config_schema()["settings"]
+        if s["secret"] or "installer" not in s["surfaces"]
+    }
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        arg, separator, inline = token.partition("=") if token.startswith("--") else (token, "", "")
+        if arg in {"-h", "--help", "-v", "--version"}:
+            if separator:
+                return CliAction("error", f"{arg} takes no value")
+            return CliAction("help" if arg in {"-h", "--help"} else "version")
+        if arg in switches:
+            if separator:
+                return CliAction("error", f"{arg} takes no value")
+            switches[arg] = True
+            i += 1
             continue
-        message = _refused_flag_message(flag_for(setting), setting)
-
-        class _Refuse(argparse.Action):
-            def __call__(self, parser, namespace, values, option_string=None, _msg=message):
-                parser.error(_msg)
-
-        parser.add_argument(flag_for(setting), nargs="?", action=_Refuse, help=argparse.SUPPRESS)
-    return parser
+        if arg in refused:
+            return CliAction("error", _refused_flag_message(arg, refused[arg]))
+        setting = by_flag.get(arg)
+        if arg not in {"--install", "--url"} and setting is None:
+            return CliAction("error", f"unknown argument: {arg}")
+        if setting and setting["type"] == "boolean":
+            if separator:
+                return CliAction("error", f"{arg} takes no value")
+            settings[setting["key"]] = "true"
+            i += 1
+            continue
+        value = inline if separator else None
+        if not separator and i + 1 < len(argv):
+            following = argv[i + 1]
+            if not following.startswith("-") or _NEGATIVE_NUMBER.fullmatch(following):
+                value = following
+                i += 1
+        if value is None:
+            requirement = (
+                "a client name"
+                if arg == "--install"
+                else "an endpoint"
+                if arg == "--url"
+                else "a value"
+            )
+            return CliAction("error", f"{arg} needs {requirement}")
+        if arg == "--install":
+            client = value
+        else:
+            settings["server_url" if arg == "--url" else setting["key"]] = value
+        i += 1
+    if client is None:
+        return CliAction("error", "nothing to do — pass --install <client> or --help")
+    if client not in CLIENTS:
+        return CliAction(
+            "error", f"unknown client: {client} (expected one of: {', '.join(CLIENTS)})"
+        )
+    settings.setdefault("server_url", default_url)
+    return CliAction(
+        "install",
+        options=InstallOptions(
+            client=client,
+            settings=settings,
+            force=switches["--force"],
+            dry_run=switches["--dry-run"],
+            store_password_in_config=switches["--store-password-in-config"],
+            allow_unverified_remote_control=switches["--allow-unverified-remote-control"],
+        ),
+    )
 
 
 def dispatch(argv: list[str] | None = None) -> int | None:
-    """Handle CLI arguments.
-
-    Returns an exit code when the arguments asked for something other than
-    serving, and None when the caller should start the MCP server — which is the
-    no-argument case, and how every MCP client invokes us.
-    """
-    argv = sys.argv[1:] if argv is None else argv
-    if not argv:
+    """Print CLI output, or return None to start the stdio server."""
+    action = parse_args(sys.argv[1:] if argv is None else argv)
+    if action.kind == "serve":
         return None
-    if argv[0] == "--verify-audit":
-        # Its own grammar (files, then an optional key), so it is routed before
-        # argparse rather than taught to it. Needs no OPC UA server.
+    if action.kind == "verify-audit":
         from .audit import run_verify
 
-        return run_verify(argv[1:])
-
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    if args.install is None:
-        parser.error("nothing to do — pass --install CLIENT or --help")
-    settings = {
-        name.removeprefix("setting_"): value
-        for name, value in vars(args).items()
-        if name.startswith("setting_") and value is not None
-    }
-    settings.setdefault("server_url", SERVER_URL)
-    return run_install(
-        InstallOptions(
-            client=args.install,
-            settings=settings,
-            force=args.force,
-            dry_run=args.dry_run,
-            store_password_in_config=args.store_password_in_config,
-            allow_unverified_remote_control=args.allow_unverified_remote_control,
-        )
-    )
+        return run_verify(action.argv)
+    if action.kind == "help":
+        print(usage())
+        return 0
+    if action.kind == "version":
+        print(package_version())
+        return 0
+    if action.kind == "error":
+        print(f"opcua-mcp-server: {action.message}", file=sys.stderr)
+        print(usage(), file=sys.stderr)
+        return 2
+    assert action.options is not None
+    return run_install(action.options)

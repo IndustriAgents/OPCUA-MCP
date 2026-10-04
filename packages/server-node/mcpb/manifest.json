@@ -105,7 +105,7 @@
       "required": false
     },
     "opcua_server_trust_store": {
-      "type": "file",
+      "type": "directory",
       "title": "Server CA trust store",
       "description": "Directory with trusted/certs root CAs, issuers/certs intermediate CAs, and trusted/crl plus issuers/crl signed current revocation lists. Authenticate the OPC UA peer by its validated chain and expected server URI. Requires secured channel and OPCUA_SERVER_APPLICATION_URI; Python requires the maintained asyncua backend. Missing, stale, forged or revoked trust material refuses connection. Cannot be combined with an exact server certificate pin.",
       "required": false

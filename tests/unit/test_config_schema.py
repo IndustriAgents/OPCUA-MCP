@@ -123,6 +123,7 @@ def test_every_setting_is_well_formed(setting):
         assert isinstance(setting["mustExist"], bool)
         assert setting["contents"] in {
             "certificate",
+            "trust-store",
             "private-key",
             "policy-json",
             "audit-log",

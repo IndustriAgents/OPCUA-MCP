@@ -218,7 +218,9 @@ connection. No issuer/CRL downloads, online OCSP, automatic trust acceptance or
 writes to the administrator store occur.
 
 Material is bounded to 100 files across all folders, 1 MiB per file, 16 MiB total
-and a verified chain of at most eight certificates. The store is reloaded on
+and a verified chain of at most eight certificates. The Node native issuer
+search is additionally bounded to 64 expansions, refusing cyclic or overly
+ambiguous issuer graphs rather than continuing indefinitely. The store is reloaded on
 connection validation, including reconnection. Updating a CRL does not terminate
 an already established session; force reconnection to apply a new revocation
 immediately. Keep current signed CRLs available before restarting clients.

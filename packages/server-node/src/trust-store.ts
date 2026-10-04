@@ -139,6 +139,12 @@ export async function certificateProblem(
     if (authorities.some((data) => !new X509Certificate(data).ca)) {
       return "BadCertificateInvalid";
     }
+    if (
+      Array.isArray(certificate)
+        ? certificate.length > 8 || certificate.some((item) => item.length > 1024 * 1024)
+        : certificate.length > 8 * 1024 * 1024
+    )
+      return "BadCertificateInvalid";
     const peer = Array.isArray(certificate) ? certificate[0] : split_der(certificate)[0];
     if (!peer || peer.length > 1024 * 1024) return "BadCertificateInvalid";
     const leaf = Certificate.fromBER(Uint8Array.from(peer).buffer);
@@ -195,6 +201,11 @@ export async function certificateProblem(
       crls,
       checkDate: now,
     });
+    let issuerSteps = 0;
+    engine.findIssuer = (cert, validationEngine, crypto) => {
+      if (++issuerSteps > 64) throw new Error("Bounded issuer search exhausted");
+      return validationEngine.defaultFindIssuer(cert, validationEngine, crypto);
+    };
     const result = await engine.verify({ passedWhenNotRevValues: false }, cryptoEngine);
     if (!result.result) {
       if (result.resultCode === ChainValidationCode.noRevocation) {
@@ -203,7 +214,9 @@ export async function certificateProblem(
       if (
         [ChainValidationCode.noPath, ChainValidationCode.noValidPath].includes(result.resultCode) ||
         (result.resultCode === ChainValidationCode.unknown &&
-          result.resultMessage === "No valid certificate paths found")
+          ["No valid certificate paths found", "Bounded issuer search exhausted"].includes(
+            result.resultMessage
+          ))
       ) {
         return "BadCertificateUntrusted";
       }

@@ -422,6 +422,26 @@
       "advertisedUri": "urn:opcua-mcp:trust-fixture",
       "expected": "BadCertificateInvalid",
       "id": "name-constraints"
+    },
+    {
+      "certificate": "cycle-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "cycle-a.pem",
+        "cycle-b.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "cycle-a-current.crl",
+        "cycle-b-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "cyclic-issuer-chain"
     }
   ],
   "configuration": [

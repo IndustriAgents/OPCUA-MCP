@@ -180,3 +180,13 @@ constrained_issuer = certificate(
 )
 certificate("constrained-server", 51, leaf_key, constrained_issuer, issuer_key)
 crl("constrained-issuer-current", constrained_issuer, issuer_key)
+
+
+cycle_a_key = key("cycle-a")
+cycle_b_key = key("cycle-b")
+cycle_a = certificate("cycle-a", 60, cycle_a_key, ca=True)
+cycle_b = certificate("cycle-b", 61, cycle_b_key, cycle_a, cycle_a_key, ca=True)
+cycle_a = certificate("cycle-a", 60, cycle_a_key, cycle_b, cycle_b_key, ca=True)
+certificate("cycle-server", 62, leaf_key, cycle_a, cycle_a_key)
+crl("cycle-a-current", cycle_a, cycle_a_key)
+crl("cycle-b-current", cycle_b, cycle_b_key)

@@ -55,27 +55,34 @@ class PythonOpcuaReadPort:
 
     async def values(self, node_ids: list[str]) -> list[ReadRecord]:
         def read():
-            nodes = [self.client.get_node(node_id) for node_id in node_ids]
-            values = self.client.uaclient.get_attributes(
-                [node.nodeid for node in nodes], ua.AttributeIds.Value
-            )
-            return [
-                node_value_record(node_id, value)
-                for node_id, value in zip(node_ids, values, strict=True)
-            ]
+            # Translate before asyncio transfers the exception across threads:
+            # Python 3.10 can replace timeout exceptions during that transfer.
+            try:
+                nodes = [self.client.get_node(node_id) for node_id in node_ids]
+                values = self.client.uaclient.get_attributes(
+                    [node.nodeid for node in nodes], ua.AttributeIds.Value
+                )
+                return [
+                    node_value_record(node_id, value)
+                    for node_id, value in zip(node_ids, values, strict=True)
+                ]
+            except Exception as error:
+                raise AdapterFailure(
+                    "read", message("readFailed", reason=describe_error(error)), error
+                ) from error
 
-        try:
-            return await asyncio.to_thread(read)
-        except Exception as error:
-            raise AdapterFailure(
-                "read", message("readFailed", reason=describe_error(error)), error
-            ) from error
+        return await asyncio.to_thread(read)
 
     async def engineering(self, node_ids: list[str]) -> dict[str, dict | None]:
-        try:
-            entries = await asyncio.to_thread(self.metadata.for_nodes, self.client, node_ids)
-            return {node_id: info.to_json() if info else None for node_id, info in entries.items()}
-        except Exception as error:
-            raise AdapterFailure(
-                "read", message("readFailed", reason=describe_error(error)), error
-            ) from error
+        def read_metadata():
+            try:
+                entries = self.metadata.for_nodes(self.client, node_ids)
+                return {
+                    node_id: info.to_json() if info else None for node_id, info in entries.items()
+                }
+            except Exception as error:
+                raise AdapterFailure(
+                    "read", message("readFailed", reason=describe_error(error)), error
+                ) from error
+
+        return await asyncio.to_thread(read_metadata)

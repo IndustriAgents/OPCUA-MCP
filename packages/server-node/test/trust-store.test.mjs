@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parseSecurityConfig } from "../build/security.js";
 import { certificateProblem } from "../build/trust-store.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -89,5 +90,11 @@ for (const mode of ["oversized-file", "too-many-files", "crl-reload"]) {
     } finally {
       rmSync(store, { recursive: true, force: true });
     }
+  });
+}
+
+for (const row of table.configuration) {
+  test(`invalid trust configuration: ${row.id}`, () => {
+    assert.throws(() => parseSecurityConfig(row.env, () => true), { message: row.error });
   });
 }

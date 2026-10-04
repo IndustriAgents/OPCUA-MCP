@@ -405,5 +405,45 @@
       "expected": "BadCertificateUntrusted",
       "id": "forged-chain"
     }
+  ],
+  "configuration": [
+    {
+      "id": "trust-on-insecure",
+      "env": {
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE requires a security policy other than None"
+    },
+    {
+      "id": "trust-pin-conflict",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust",
+        "OPCUA_SERVER_CERT": "/pki/server.pem"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE cannot be combined with OPCUA_SERVER_CERT"
+    },
+    {
+      "id": "missing-expected-uri",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI"
+    },
+    {
+      "id": "uri-without-trust",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_APPLICATION_URI": "urn:server"
+      },
+      "error": "OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE"
+    }
   ]
 }

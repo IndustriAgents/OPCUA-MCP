@@ -79,3 +79,20 @@ print(hasattr(SecureConnection._receive, '__wrapped__'))
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(patched)
+
+
+def test_legacy_trust_store_refuses_before_constructing_a_client(monkeypatch):
+    monkeypatch.setenv("OPCUA_PYTHON_BACKEND", "legacy")
+    monkeypatch.setattr(
+        security,
+        "security_config",
+        lambda: security.SecurityConfig(
+            "Basic256Sha256",
+            "SignAndEncrypt",
+            server_trust_store="/pki/trust",
+            server_application_uri="urn:server",
+        ),
+    )
+    monkeypatch.setattr(security, "Client", lambda _: pytest.fail("constructed a client"))
+    with pytest.raises(ValueError, match="requires OPCUA_PYTHON_BACKEND=asyncua"):
+        security.create_client("opc.tcp://localhost:4840")

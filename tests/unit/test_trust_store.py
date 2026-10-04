@@ -9,6 +9,7 @@ from datetime import datetime
 import pytest
 from conftest import ROOT
 from cryptography import x509
+from opcua_mcp_server.security import parse_security_config
 from opcua_mcp_server.trust_store import certificate_problem
 
 FIXTURES = ROOT / "tests/fixtures/trust-store"
@@ -88,3 +89,10 @@ def test_crl_reload_refuses_a_previously_valid_peer(tmp_path):
         FIXTURES / "issuer-revoked-leaf.crl", tmp_path / "issuers/crl/issuer-current.crl"
     )
     assert check() == "BadCertificateRevoked"
+
+
+@pytest.mark.parametrize("case", TABLE["configuration"], ids=lambda case: case["id"])
+def test_invalid_trust_configuration_refuses_without_connecting(case):
+    with pytest.raises(ValueError) as error:
+        parse_security_config(case["env"], exists=lambda _: True)
+    assert str(error.value) == case["error"]

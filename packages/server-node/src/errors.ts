@@ -29,7 +29,16 @@ export const TEMPLATES: Record<string, string> = Object.fromEntries(
  * says the plant rejected it, when the point of the refusal is that nothing
  * reached the plant at all. Python's `ToolError` plays the same part there.
  */
-export class ContractRefusal extends Error {}
+export class ToolFailure extends Error {}
+
+export class ContractRefusal extends ToolFailure {}
+
+/** A crash carries its cause internally while exposing only the tool name. */
+export class UnexpectedToolFailure extends Error {
+  constructor(tool: string, cause: unknown) {
+    super(message("unexpectedToolError", { tool }), { cause });
+  }
+}
 
 /** One contract error message with its placeholders filled in.
  *

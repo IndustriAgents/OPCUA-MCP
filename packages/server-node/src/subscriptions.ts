@@ -24,7 +24,7 @@ import {
 
 import { CONTRACT } from "./contract.js";
 import { HistoryRecord, toHistoryRecord } from "./records.js";
-import { message } from "./errors.js";
+import { ToolFailure, message } from "./errors.js";
 import { isGood } from "./status.js";
 
 // Defaults and bounds, read from the contract rather than written here. They
@@ -196,7 +196,7 @@ export function resolveFilter(options: {
 }): SubscriptionFilter {
   const deadbandType = options.deadbandType ?? "none";
   if (!Object.hasOwn(DEADBAND_TYPES, deadbandType)) {
-    throw new Error(
+    throw new ToolFailure(
       message("notAllowedValue", {
         tool: "subscribe_opcua_nodes",
         argument: "deadband_type",
@@ -209,7 +209,7 @@ export function resolveFilter(options: {
   }
   const trigger = options.dataChangeTrigger ?? DEFAULT_DATA_CHANGE_TRIGGER;
   if (!Object.hasOwn(DATA_CHANGE_TRIGGERS, trigger)) {
-    throw new Error(
+    throw new ToolFailure(
       message("notAllowedValue", {
         tool: "subscribe_opcua_nodes",
         argument: "data_change_trigger",
@@ -224,7 +224,7 @@ export function resolveFilter(options: {
     return { deadbandType: "none", deadbandValue: 0, trigger };
   }
   if (options.deadbandValue === undefined || options.deadbandValue === null) {
-    throw new Error(message("deadbandNeedsValue", { deadband_type: deadbandType }));
+    throw new ToolFailure(message("deadbandNeedsValue", { deadband_type: deadbandType }));
   }
   return {
     deadbandType,
@@ -374,7 +374,9 @@ export class SubscriptionManager {
       // by throwing, so an unreadable node would otherwise leave a subscription
       // that silently never fires.
       if (monitoredItem.statusCode && !isGood(monitoredItem.statusCode)) {
-        throw new Error(`Monitoring rejected with status: ${monitoredItem.statusCode.toString()}`);
+        throw new ToolFailure(
+          `Monitoring rejected with status: ${monitoredItem.statusCode.toString()}`
+        );
       }
       monitoredItem.on("changed", (dataValue: DataValue) => this.record(entry, dataValue));
       entry.subscription = subscription;
@@ -399,7 +401,7 @@ export class SubscriptionManager {
   async unsubscribe(id: string): Promise<SubscriptionRecord> {
     const entry = this.entries.get(id);
     if (!entry) {
-      throw new Error(unknownSubscriptionMessage(id));
+      throw new ToolFailure(unknownSubscriptionMessage(id));
     }
     // Drop it from the map first: even if terminate() fails, the agent must not
     // be told a subscription is still active when nothing is listening to it.
@@ -412,7 +414,7 @@ export class SubscriptionManager {
       // Unlike shutdown, an explicit cancel reports this. The caller asked for
       // something specific and did not fully get it, and no longer holds an ID
       // to retry with.
-      throw new Error(
+      throw new ToolFailure(
         terminateFailedMessage(id, error instanceof Error ? error.message : String(error))
       );
     }

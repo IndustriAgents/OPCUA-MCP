@@ -895,6 +895,7 @@
     "unknownArgument": "{tool} has no argument {argument}. It accepts: {allowed}.",
     "notAllowedValue": "{tool} argument {argument} must be one of {allowed}, got {value}",
     "belowMinimum": "{tool} argument {argument} must be at least {minimum}, got {value}",
+    "unexpectedToolError": "Error executing tool {tool}",
     "unknownTool": "Unknown tool: {tool}",
     "toolDisabled": "Tool \"{tool}\" is disabled by OPCUA_PROFILE={profile}",
     "controlNeedsSecureChannel": "Tool \"{tool}\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",

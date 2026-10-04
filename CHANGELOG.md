@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — hide unexpected tool crash messages consistently (#157 B19)
+- Unexpected feature failures expose only the contract’s tool-name frame on both
+  runtimes, including control audit failures. Anticipated failures are explicitly
+  typed on Node and retain their wording; native connection causes still drive
+  retry and uncertain-outcome decisions.
+
 ### Fixed — aggregate, alarm and browse parity (#157 B12/B19/B20/B21)
 - Aggregate discovery requires the standard node ID and name, excludes prototype
   names and duplicates, and reports unsupported aggregate functions consistently.

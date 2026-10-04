@@ -685,7 +685,10 @@ class PolicyMCPServer(MCPServer):
         class Port:
             new_call_id = staticmethod(new_call_id)
             wait_for_connection = owner.state.await_connection_in_flight
-            authorize = owner.state.policy.authorize
+
+            def authorize(self, name, arguments):
+                owner.state.policy.authorize(name, arguments)
+
             normalize_failure = staticmethod(_without_sdk_prefix)
             normalize_result = staticmethod(normalize_result_text)
 

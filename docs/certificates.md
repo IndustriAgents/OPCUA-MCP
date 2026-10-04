@@ -208,7 +208,9 @@ Place PEM or DER material in these four folders:
 | `trusted/crl` | Signed current CRLs for root-issued certificates |
 | `issuers/crl` | Signed current CRLs for intermediate-issued certificates |
 
-Both runtimes verify signatures, validity, CA/key-usage constraints, path lengths
+Every configured CA must be current and unrevoked, including authorities unused
+by the selected peer path. Remove expired or revoked CA material before
+reconnecting. Both runtimes verify signatures, validity, CA/key-usage constraints, path lengths
 and revocation throughout the chain. CRLs must be signed by a configured CA with
 CRL-signing permission and have a current `thisUpdate`/`nextUpdate` window. Missing,
 expired, future or forged CRLs refuse connection. This profile accepts critical

@@ -190,3 +190,9 @@ cycle_a = certificate("cycle-a", 60, cycle_a_key, cycle_b, cycle_b_key, ca=True)
 certificate("cycle-server", 62, leaf_key, cycle_a, cycle_a_key)
 crl("cycle-a-current", cycle_a, cycle_a_key)
 crl("cycle-b-current", cycle_b, cycle_b_key)
+
+
+certificate("unused-expired-root", 70, key("unused-expired-root"), ca=True, end=2025)
+unused_revoked_key = key("unused-revoked-root")
+unused_revoked = certificate("unused-revoked-root", 71, unused_revoked_key, ca=True)
+crl("root-unused-revoked-current", unused_revoked, unused_revoked_key, [71])

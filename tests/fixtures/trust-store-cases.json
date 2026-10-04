@@ -443,6 +443,45 @@
       "advertisedUri": "urn:opcua-mcp:trust-fixture",
       "expected": "BadCertificateUntrusted",
       "id": "cyclic-issuer-chain"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem",
+        "unused-expired-root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateIssuerTimeInvalid",
+      "id": "unused-expired-root"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem",
+        "unused-revoked-root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl",
+        "root-unused-revoked-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateIssuerRevoked",
+      "id": "unused-revoked-root"
     }
   ],
   "configuration": [

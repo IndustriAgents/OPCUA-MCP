@@ -65,7 +65,9 @@ What this does **not** do, and you should still plan for:
   session activation. It requires the maintained Python backend and a secured
   channel. Material reloads on connection validation, rather than periodically
   terminating live sessions; force reconnection when revocation must apply
-  immediately. Missing or invalid revocation material refuses connection.
+  immediately. Missing or invalid revocation material refuses connection. Peer
+  leaf certificates are limited to 1 MiB DER before path verification; every
+  configured CA must be current and unrevoked, including unused authorities.
   [The certificate guide](docs/certificates.md#authenticating-a-server-through-a-ca-trust-store)
   specifies the supported certificate profile and bounds. The OPC UA server
   independently decides whether to trust the configured client certificate.

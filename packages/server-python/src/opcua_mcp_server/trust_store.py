@@ -159,6 +159,26 @@ def certificate_problem(
             for crl in crls
         ):
             return "BadCertificateInvalid"
+        if not certificate.not_valid_before_utc <= moment < certificate.not_valid_after_utc:
+            return "BadCertificateTimeInvalid"
+        authorities = anchors + issuers
+        if any(
+            not authority.not_valid_before_utc <= moment < authority.not_valid_after_utc
+            for authority in authorities
+        ):
+            return "BadCertificateIssuerTimeInvalid"
+
+        def revoked(cert):
+            return any(
+                crl.issuer == cert.issuer
+                and crl.get_revoked_certificate_by_serial_number(cert.serial_number) is not None
+                for crl in crls
+            )
+
+        if revoked(certificate):
+            return "BadCertificateRevoked"
+        if any(revoked(authority) for authority in authorities):
+            return "BadCertificateIssuerRevoked"
         # OpenSSL's chain engine verifies CRL signatures and issuer permissions,
         # not merely matching serial numbers in an unsigned list.
         store = crypto.X509Store()

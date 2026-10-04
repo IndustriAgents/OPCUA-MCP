@@ -28,6 +28,7 @@ from .adapters.opcua_events import PythonOpcuaEventPort
 from .adapters.opcua_history import PythonOpcuaHistoryPort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
+from .adapters.opcua_subscriptions import PythonOpcuaSubscriptionPort
 from .adapters.opcua_write import PythonOpcuaWritePort
 from .application.alarms import act_on_alarm as act_on_alarm_use_case
 from .application.alarms import list_alarms
@@ -38,6 +39,8 @@ from .application.events import subscribe_events as subscribe_events_use_case
 from .application.history import read_history
 from .application.methods import call_method
 from .application.read import read_nodes
+from .application.subscriptions import list_subscriptions as list_subscriptions_use_case
+from .application.subscriptions import subscribe_nodes, unsubscribe_nodes
 from .application.write import write_nodes
 from .audit import (
     AuditSink,
@@ -59,9 +62,6 @@ from .capabilities import (
     requirements,
     verdict,
 )
-from .completeness import (
-    buffer_completeness,
-)
 from .config import describe_reconnect, reconnect_config
 from .connection import (
     OpcuaConnection,
@@ -76,7 +76,6 @@ from .errors import AdapterFailure, ApplicationRefusal
 from .errors import message as error_message
 from .generated_contract import TOOL_NAMES
 from .limits import (
-    MAX_SUBSCRIPTIONS,
     LimitExceeded,
     check_request_bounds,
 )
@@ -97,8 +96,6 @@ from .security import describe_security, security_config
 from .state import ServerState
 from .subscriptions import (
     resolve_filter,
-    unknown_subscription_message,
-    unknown_subscriptions_message,
 )
 from .validation import validate_arguments
 from .version import package_version
@@ -1272,6 +1269,15 @@ async def call_opcua_method(
 # --- data-change subscriptions ---------------------------------------------------
 
 
+def _subscription_port(ctx: Context):
+    state = _state(ctx)
+    return PythonOpcuaSubscriptionPort(
+        lambda: ctx.request_context.lifespan_context["opcua_client"],
+        state.subscriptions,
+        state.node_metadata,
+    )
+
+
 async def subscribe_opcua_nodes(
     node_ids: list[str],
     ctx: Context,
@@ -1282,130 +1288,45 @@ async def subscribe_opcua_nodes(
     deadband_value: float | None = None,
     data_change_trigger: str | None = None,
 ) -> CallToolResult:
-    """
-    Watch one or more OPC UA nodes for value changes instead of polling them.
-
-    Returns:
-        CallToolResult: One record per new subscription, shaped by
-            ``resultShapes.subscriptionRecords``, and ``completeness``.
-    """
+    """Watch nodes for changes, validating percent ranges before creating subscriptions."""
     if not node_ids:
         raise ToolError(
             error_message("emptyArray", tool="subscribe_opcua_nodes", argument="node_ids")
         )
     try:
         data_filter = resolve_filter(deadband_type, deadband_value, data_change_trigger)
-    except ValueError as error:
-        raise ToolError(str(error)) from error
-    # One OPC UA subscription per monitored node is what makes a single
-    # unsubscribe take the whole thing down — and it is also what makes an
-    # unbounded subscribe ask a PLC for one subscription per node, past whatever
-    # it is willing to hold, with nothing here counting them.
-    subscriptions = _state(ctx).subscriptions
-    active = len(subscriptions.list())
-    if active + len(node_ids) > MAX_SUBSCRIPTIONS:
-        raise ToolError(
-            error_message(
-                "tooManySubscriptions",
-                active=active,
-                limit=MAX_SUBSCRIPTIONS,
-                wanted=len(node_ids),
-            )
+        result = await subscribe_nodes(
+            _subscription_port(ctx),
+            node_ids,
+            {
+                "publishingInterval": publishing_interval,
+                "samplingInterval": sampling_interval,
+                "bufferSize": buffer_size,
+            },
+            data_filter,
         )
-    if data_filter.deadband_type == "percent":
-        # A percent deadband is a percentage *of the node's EURange*, so a node
-        # that publishes none cannot have one. Checked here, before a single
-        # subscription is created, so a batch is refused whole rather than
-        # leaving some nodes monitored and some not.
-        client = ctx.request_context.lifespan_context["opcua_client"]
-        engineering = _state(ctx).node_metadata.for_nodes(client, node_ids)
-        for node_id in node_ids:
-            info = engineering.get(node_id)
-            if info is None or info.eu_range is None:
-                raise ToolError(error_message("percentDeadbandNeedsRange", node_id=node_id))
-
-    records = []
-    for node_id in node_ids:
-        # `ToolError`, not a bare exception: the SDK forwards a ToolError's
-        # message to the client and withholds anything else as a crash. A bad
-        # node ID is the caller's to fix, so it has to reach them — worded as the
-        # Node server words it.
-        try:
-            records.append(
-                await asyncio.to_thread(
-                    subscriptions.subscribe,
-                    node_id,
-                    publishing_interval,
-                    sampling_interval,
-                    buffer_size,
-                    data_filter,
-                )
-            )
-        except Exception as e:
-            raise ToolError(
-                error_message("subscribeFailed", node_id=node_id, reason=describe_error(e))
-            ) from e
-    return _subscription_result(records)
-
-
-def _subscription_result(records: list[dict]) -> CallToolResult:
-    """The subscription family's records, and the changes their buffers dropped.
-
-    Each record carries its own ring buffer's ``dropped``; ``completeness``
-    totals them so one field answers for the whole result (issue #137).
-    """
-    return _records_result(records, buffer_completeness(records))
+        return _records_result(result["records"], result["completeness"])
+    except (ValueError, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 def list_subscriptions(ctx: Context) -> CallToolResult:
-    """
-    List the active OPC UA data-change subscriptions and their buffered changes.
-
-    Returns:
-        CallToolResult: One record per active subscription, shaped by
-            `contract/tools.json` -> `resultShapes.subscriptionRecords`, and
-            ``completeness``. No records when nothing is subscribed.
-    """
-    # No thread hop and no OPC UA call: this reads buffers already filled by
-    # python-opcua's publishing thread, so it answers even if the server is down.
-    return _subscription_result(_state(ctx).subscriptions.list())
+    """Read existing buffers even when the OPC UA connection is unavailable."""
+    result = list_subscriptions_use_case(_subscription_port(ctx))
+    return _records_result(result["records"], result["completeness"])
 
 
 async def unsubscribe_opcua_nodes(subscription_ids: list[str], ctx: Context) -> CallToolResult:
-    """
-    Cancel one or more subscriptions, reporting each as it was when cancelled.
-
-    Every id is checked before any is cancelled: a list with one bad id would
-    otherwise leave the caller unable to tell which of the others had already
-    gone, and their buffered changes would be lost to a typo.
-
-    Returns:
-        CallToolResult: The cancelled subscriptions, shaped by
-            ``resultShapes.subscriptionRecords``, so anything still buffered can
-            be read one last time, and ``completeness``.
-    """
+    """Validate every subscription ID before cancelling any subscription."""
     if not subscription_ids:
         raise ToolError(
             error_message("emptyArray", tool="unsubscribe_opcua_nodes", argument="subscription_ids")
         )
-    subscriptions = _state(ctx).subscriptions
-    active = {record["subscription_id"] for record in subscriptions.list()}
-    unknown = [entry for entry in subscription_ids if entry not in active]
-    if unknown:
-        # Both runtimes word an unknown ID identically; see subscriptions.py.
-        raise ToolError(unknown_subscriptions_message(unknown))
-
-    records = []
-    for subscription_id in subscription_ids:
-        try:
-            records.append(await asyncio.to_thread(subscriptions.unsubscribe, subscription_id))
-        except KeyError as e:
-            raise ToolError(unknown_subscription_message(subscription_id)) from e
-        except RuntimeError as e:
-            # The OPC UA server refused the delete. Already worded for the caller
-            # by `delete_failed_message`, and shared with the Node server.
-            raise ToolError(str(e)) from e
-    return _subscription_result(records)
+    try:
+        result = await unsubscribe_nodes(_subscription_port(ctx), subscription_ids)
+        return _records_result(result["records"], result["completeness"])
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 # --- events and Alarms & Conditions -----------------------------------------------

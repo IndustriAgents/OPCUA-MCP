@@ -6,6 +6,13 @@
 import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import {
+  subscribeNodes,
+  unsubscribeNodes,
+  listSubscriptions,
+  type SubscriptionRecord,
+} from "./application/subscriptions.js";
+import { NodeOpcuaSubscriptionPort } from "./adapters/opcua-subscriptions.js";
 import { actOnAlarm, listAlarms } from "./application/alarms.js";
 import { NodeOpcuaAlarmPort } from "./adapters/opcua-alarms.js";
 import { subscribeEvents, readEvents, readEventHistory } from "./application/events.js";
@@ -71,9 +78,7 @@ import {
   SubscribeOptions,
   SubscriptionFilter,
   SubscriptionManager,
-  SubscriptionRecord,
   resolveFilter,
-  unknownSubscriptionsMessage,
 } from "./subscriptions.js";
 import {
   ToolPolicy,
@@ -1004,7 +1009,8 @@ export class OpcuaTools {
         return await this.unsubscribeOpcuaNodes(args.subscription_ids as string[]);
 
       case "list_subscriptions":
-        return subscriptionResult(this.subs.list());
+        const listed = listSubscriptions(this.subscriptionPort());
+        return recordBlocks(listed.records, listed.completeness);
 
       case "subscribe_events":
         return await this.subscribeEvents(
@@ -1225,88 +1231,20 @@ export class OpcuaTools {
 
   // --- data-change subscriptions -------------------------------------------
 
+  private subscriptionPort() {
+    return new NodeOpcuaSubscriptionPort(() => this.requireSession(), this.subs, this.metadata);
+  }
   private async subscribeOpcuaNodes(
     nodeIds: string[],
     options: SubscribeOptions,
     filter: SubscriptionFilter
   ) {
-    if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new ToolFailure(
-        message("emptyArray", { tool: "subscribe_opcua_nodes", argument: "node_ids" })
-      );
-    }
-    // One OPC UA subscription per monitored node is what makes a single
-    // unsubscribe take the whole thing down — and it is also what makes an
-    // unbounded subscribe ask a PLC for one subscription per node, past whatever
-    // it is willing to hold, with nothing here counting them.
-    const active = this.subs.list().length;
-    if (active + nodeIds.length > MAX_SUBSCRIPTIONS) {
-      throw new ToolFailure(
-        message("tooManySubscriptions", {
-          active,
-          limit: MAX_SUBSCRIPTIONS,
-          wanted: nodeIds.length,
-        })
-      );
-    }
-    const session = this.requireSession();
-
-    if (filter.deadbandType === "percent") {
-      // A percent deadband is a percentage *of the node's EURange*, so a node
-      // that publishes none cannot have one. Checked here, before a single
-      // subscription is created, so a batch is refused whole rather than leaving
-      // some nodes monitored and some not.
-      const engineering = await this.metadata.forNodes(session, nodeIds);
-      for (const nodeId of nodeIds) {
-        if (!engineering.get(nodeId)?.eu_range) {
-          throw new ToolFailure(message("percentDeadbandNeedsRange", { node_id: nodeId }));
-        }
-      }
-    }
-
-    const records: SubscriptionRecord[] = [];
-    for (const nodeId of nodeIds) {
-      // Named per node, as the Python runtime words it: a batch that fails on
-      // its fourth node should say which one, not report the library's own
-      // phrasing for whichever call happened to throw.
-      try {
-        records.push(await this.subs.subscribe(session, nodeId, options, filter));
-      } catch (error) {
-        throw new ToolFailure(
-          message("subscribeFailed", { node_id: nodeId, reason: describeError(error) }),
-          { cause: error }
-        );
-      }
-    }
-    return subscriptionResult(records);
+    const result = await subscribeNodes(this.subscriptionPort(), nodeIds, options, filter);
+    return recordBlocks(result.records, result.completeness);
   }
-
-  /** Cancel subscriptions, reporting each as it was at the moment it went.
-   *
-   * Every id is checked before any is cancelled: a list with one bad id would
-   * otherwise leave the caller unable to tell which of the others had already
-   * gone, and their buffered changes would be lost to a typo.
-   */
   private async unsubscribeOpcuaNodes(subscriptionIds: string[]) {
-    if (!Array.isArray(subscriptionIds) || subscriptionIds.length === 0) {
-      throw new ToolFailure(
-        message("emptyArray", {
-          tool: "unsubscribe_opcua_nodes",
-          argument: "subscription_ids",
-        })
-      );
-    }
-    const active = new Set(this.subs.list().map((record) => record.subscription_id));
-    const unknown = subscriptionIds.filter((id) => !active.has(id));
-    if (unknown.length > 0) {
-      throw new ToolFailure(unknownSubscriptionsMessage(unknown));
-    }
-
-    const records: SubscriptionRecord[] = [];
-    for (const id of subscriptionIds) {
-      records.push(await this.subs.unsubscribe(id));
-    }
-    return subscriptionResult(records);
+    const result = await unsubscribeNodes(this.subscriptionPort(), subscriptionIds);
+    return recordBlocks(result.records, result.completeness);
   }
 
   // --- events and Alarms & Conditions ------------------------------------------

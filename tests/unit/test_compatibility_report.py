@@ -22,6 +22,7 @@ def evidence(tmp_path):
         "schemaVersion": 1,
         "required": True,
         "pythonVersion": "3.13.3",
+        "pythonBackend": "legacy",
         "exitStatus": 0,
         "outcomes": {"passed": 2500},
         "groups": {group: {"passed": 2} for group in report.GROUPS},
@@ -151,3 +152,27 @@ def test_workflow_matrices_match_the_release_report_requirement():
         source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
         legs = re.findall(r'python-version: "([\d.]+)"\s+node-version: "([\d.]+)"', source)
         assert set(legs) == report.MATRIX, name
+
+
+@pytest.mark.parametrize("backend", [None, "unknown"])
+def test_unknown_or_missing_backend_cannot_claim_qualification(evidence, backend):
+    document, python, _ = evidence
+    document["pythonBackend"] = backend
+    python.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="backend must identify"):
+        build(evidence)
+
+
+def test_mixed_backend_matrix_cannot_claim_release_qualification(evidence):
+    runs = matrix(build(evidence))
+    runs[0]["pythonBackend"] = "asyncua"
+    runs[0]["pytest"]["pythonBackend"] = "asyncua"
+    with pytest.raises(ValueError, match="one Python backend"):
+        report.release_report(runs, require_matrix=True)
+
+
+def test_backend_cannot_disagree_with_the_test_evidence(evidence):
+    run = build(evidence)
+    run["pytest"]["pythonBackend"] = "asyncua"
+    with pytest.raises(ValueError, match="backend differs"):
+        report.release_report([run])

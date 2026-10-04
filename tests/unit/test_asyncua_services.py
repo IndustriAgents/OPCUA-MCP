@@ -66,3 +66,29 @@ def test_numeric_native_status_translation_does_not_change_retry_policy(code, de
         assert is_connection_error(caught.value) is dead
     finally:
         client.disconnect()
+
+
+def test_capability_browse_wraps_native_children_and_compares_ids_across_sdks(monkeypatch):
+    from opcua_mcp_server.capabilities import client_aggregate_functions
+
+    client = MaintainedClient("opc.tcp://localhost:4840")
+    root = client.get_node("i=2997")
+    child = client.aio_obj.get_node("i=2342")
+
+    async def referenced(**kwargs):
+        assert kwargs["direction"] is ua.BrowseDirection.Forward
+        assert kwargs["refs"] == ua.ObjectIds.References
+        return [child]
+
+    async def name():
+        return ua.QualifiedName("Average", 0)
+
+    monkeypatch.setattr(root.aio_obj, "get_referenced_nodes", referenced)
+    monkeypatch.setattr(child, "read_browse_name", name)
+    monkeypatch.setattr(client, "get_node", lambda _: root)
+    try:
+        probe, functions = client_aggregate_functions(client)
+        assert probe.support == "supported"
+        assert functions["Average"].to_string() == "i=2342"
+    finally:
+        client.disconnect()

@@ -74,6 +74,8 @@ def check_pytest(evidence: dict) -> None:
         or not all(successful(evidence["groups"][group]) for group in GROUPS)
     ):
         raise ValueError("Python/E2E evidence must be a complete successful required-mode run")
+    if evidence.get("pythonBackend") not in {"legacy", "asyncua"}:
+        raise ValueError("Python backend must identify the selected client")
     if not re.fullmatch(r"\d+\.\d+\.\d+", evidence.get("pythonVersion", "")):
         raise ValueError("Python version must be an exact version")
 
@@ -88,6 +90,7 @@ def build_run(pytest_path: Path, node_path: Path, commit: str, node_version: str
     return {
         "sourceCommit": commit,
         "pythonVersion": evidence["pythonVersion"],
+        "pythonBackend": evidence["pythonBackend"],
         "nodeVersion": node_version,
         "pytest": {**evidence, "sha256": digest(pytest_path)},
         "nodeUnit": node_evidence(node_path),
@@ -97,12 +100,16 @@ def build_run(pytest_path: Path, node_path: Path, commit: str, node_version: str
 def release_report(runs: list[dict], *, require_matrix: bool = False) -> dict:
     if not runs or len({run["sourceCommit"] for run in runs}) != 1:
         raise ValueError("all evidence must describe one source commit")
+    if len({run.get("pythonBackend") for run in runs}) != 1:
+        raise ValueError("all evidence must describe one Python backend")
     for run in runs:
         check_pytest(run["pytest"])
         if not re.fullmatch(r"[0-9a-f]{40}", run["sourceCommit"]):
             raise ValueError("source commit must be a full Git commit hash")
         if not re.fullmatch(r"\d+\.\d+\.\d+", run["nodeVersion"]):
             raise ValueError("Node version must be an exact version")
+        if run.get("pythonBackend") != run["pytest"].get("pythonBackend"):
+            raise ValueError("Python backend differs from the test evidence")
         if run["pythonVersion"] != run["pytest"]["pythonVersion"]:
             raise ValueError("runtime version differs from the test evidence")
         if not successful({"passed": run["nodeUnit"].get("passed")}):
@@ -134,6 +141,7 @@ def release_report(runs: list[dict], *, require_matrix: bool = False) -> dict:
         "supportModel": "two-first-class-runtimes",
         "packageVersion": read_json(ROOT / "packages/server-node/package.json")["version"],
         "sourceCommit": runs[0]["sourceCommit"],
+        "pythonBackend": runs[0]["pythonBackend"],
         "qualification": "repository-mocks; independent results are dated historical evidence",
         "matrixComplete": legs == MATRIX,
         "runs": sorted(runs, key=lambda run: (run["pythonVersion"], run["nodeVersion"])),

@@ -14,6 +14,7 @@ silent downgrade.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -26,7 +27,8 @@ from opcua import Client, ua
 from opcua.crypto import security_policies, uacrypto
 
 from .client_identity import CLIENT_APPLICATION_NAME, application_uri_problem
-from .transport_limits import advertise_limits
+from .python_backend import python_backend
+from .transport_limits import advertise_limits, install_receive_guard
 
 #: Policies this runtime can negotiate — the four both runtimes share.
 POLICIES = ("None", "Basic128Rsa15", "Basic256", "Basic256Sha256")
@@ -384,12 +386,20 @@ def create_client(url: str) -> Client:
     fetches the server's certificate from its endpoint list here, so this does
     talk to the server. Call it off the event loop.
     """
-    client = Client(url)
+    backend = python_backend()
+    if backend == "asyncua":
+        from .adapters.asyncua_services import MaintainedClient
+
+        client = MaintainedClient(url)
+    else:
+        install_receive_guard()
+        client = Client(url)
     client.application_name = CLIENT_APPLICATION_NAME
     # Before anything is sent: these go out in the Hello, and python-opcua's own
     # defaults are 0, which tells the server this client will accept a message of
     # any size in any number of chunks.
-    advertise_limits(client)
+    if backend == "legacy":
+        advertise_limits(client)
     config = security_config()
 
     certificate_uri = (
@@ -409,6 +419,18 @@ def create_client(url: str) -> Client:
         if problem is not None:
             raise ValueError(problem)
 
+    try:
+        _configure_client_security(client, config)
+    except Exception:
+        if backend == "asyncua":
+            with contextlib.suppress(Exception):
+                client.disconnect()
+        raise
+
+    return client
+
+
+def _configure_client_security(client, config):
     if config.policy != "None":
         policy = getattr(security_policies, f"SecurityPolicy{config.policy}")
         client.set_security(
@@ -431,5 +453,3 @@ def create_client(url: str) -> Client:
     elif config.username is not None:
         client.set_user(config.username)
         client.set_password(config.password or "")
-
-    return client

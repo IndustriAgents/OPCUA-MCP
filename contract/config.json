@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for every environment variable either server reads (issue #133). tools.json is the tool surface; this is the configuration surface. Both runtimes ship a copy (Node: build/config.json and inlined into the bundles; Python: opcua_mcp_server/config.json in the wheel and the executable), so code that runs from an installed package — the --install helpers — can read it as readily as the build scripts can. The configuration sections of packages/server-node/mcpb/manifest.json and of the root server.json are GENERATED from this file by packages/server-node/scripts/config-artifacts.mjs: edit this file, then run `npm run config:generate` in packages/server-node. CI runs `npm run config:check`, and tests/unit/test_config_schema.py fails if either runtime reads a variable this file does not declare, if this file declares one a runtime does not read, or if a runtime parser disagrees with a declared type, choice, minimum or default. The runtimes still parse the environment themselves; this file describes what they accept, and the tests hold them to it. Field meanings are in \"fields\".",
+  "$comment": "Single source of truth for every environment variable either server reads (issue #133). tools.json is the tool surface; this is the configuration surface. Both runtimes ship a copy (Node: build/config.json and inlined into the bundles; Python: opcua_mcp_server/config.json in the wheel and the executable), so code that runs from an installed package \u2014 the --install helpers \u2014 can read it as readily as the build scripts can. The configuration sections of packages/server-node/mcpb/manifest.json and of the root server.json are GENERATED from this file by packages/server-node/scripts/config-artifacts.mjs: edit this file, then run `npm run config:generate` in packages/server-node. CI runs `npm run config:check`, and tests/unit/test_config_schema.py fails if either runtime reads a variable this file does not declare, if this file declares one a runtime does not read, or if a runtime parser disagrees with a declared type, choice, minimum or default. The runtimes still parse the environment themselves; this file describes what they accept, and the tests hold them to it. Field meanings are in \"fields\".",
   "version": 1,
   "fields": {
     "env": "The environment variable name. The only name the runtimes read.",
@@ -15,8 +15,8 @@
     "maximum": "number only, optional: the largest accepted value. Absent means no ceiling.",
     "integer": "number only, optional: true when only a whole number written in decimal digits is accepted (no fraction, exponent or hex).",
     "mustExist": "path only: whether the runtime refuses to start when the path does not exist. false for a file the server creates.",
-    "contents": "path only: what the file holds — certificate, private-key, policy-json, audit-log or key (a symmetric secret such as an HMAC key).",
-    "itemFormat": "list only: what each comma-separated item is — tool-name, node-id or object-method-pair.",
+    "contents": "path only: what the file holds \u2014 certificate, private-key, policy-json, audit-log or key (a symmetric secret such as an HMAC key).",
+    "itemFormat": "list only: what each comma-separated item is \u2014 tool-name, node-id or object-method-pair.",
     "default": "The value the runtimes use when unset or blank, as the type's JSON value; null when there is none or it is derived (then see defaultDescription).",
     "defaultDescription": "Optional: prose for a default that depends on other settings.",
     "example": "Optional: an illustrative value (never a real credential) for placeholders and docs.",
@@ -76,6 +76,22 @@
       "securityNote": "Nothing verifies who answers at this address unless the server certificate is pinned.",
       "runtimes": ["node", "python"],
       "surfaces": ["mcpb", "registry", "installer", "docs"]
+    },
+    {
+      "env": "OPCUA_PYTHON_BACKEND",
+      "key": "python_backend",
+      "category": "connection",
+      "title": "Python OPC UA client backend",
+      "description": "Select the Python client implementation. During migration asyncua is opt-in; legacy retains the existing backend and provides the one-release rollback path. This setting affects the Python server only.",
+      "type": "enum",
+      "choices": ["asyncua", "legacy"],
+      "default": "legacy",
+      "required": false,
+      "secret": false,
+      "sensitive": false,
+      "securityRelevant": true,
+      "runtimes": ["python"],
+      "surfaces": ["registry", "installer", "docs"]
     },
     {
       "env": "OPCUA_SECURITY_POLICY",

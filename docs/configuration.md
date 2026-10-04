@@ -36,13 +36,14 @@ declare.
 
 <!-- BEGIN GENERATED: config-reference from contract/config.json by packages/server-node/scripts/config-artifacts.mjs. Do not edit by hand: edit the source, then run `npm run config:generate` in packages/server-node. -->
 
-29 settings in six groups. A blank value means the default, whatever the type; a boolean accepts `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off`.
+30 settings in six groups. A blank value means the default, whatever the type; a boolean accepts `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off`.
 
 **Connection** — Which OPC UA server to talk to.
 
 | Variable | Default | Description |
 |---|---|---|
 | `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | URL of the OPC UA server to connect to, including any path the server expects. Read once at startup: one process serves one endpoint. Nothing verifies who answers at this address unless the server certificate is pinned. |
+| `OPCUA_PYTHON_BACKEND` | `legacy` | **Python runtime only.** Select the Python client implementation. During migration asyncua is opt-in; legacy retains the existing backend and provides the one-release rollback path. This setting affects the Python server only. One of `asyncua`, `legacy`. |
 
 **Channel security** — How the OPC UA secure channel is signed, encrypted and verified.
 

@@ -58,16 +58,8 @@ from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID
 from .errors import describe_error, message
 from .policy import ToolPolicy, tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
-from .transport_limits import install_receive_guard
 
 T = TypeVar("T")
-
-# Bound what a server may send before any client exists. python-opcua reassembles
-# a chunked message into a list with nothing counting it, so a server that never
-# terminates the message exhausts this process (CVE-2022-25304, no fixed version,
-# unmaintained library). See transport_limits.py for what the guard does and why
-# it is a patch.
-install_receive_guard()
 
 _DEAD_SESSION = CONTRACT["deadSession"]
 

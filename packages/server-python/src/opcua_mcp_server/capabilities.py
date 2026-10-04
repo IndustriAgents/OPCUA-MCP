@@ -274,7 +274,7 @@ def client_aggregate_functions(client) -> tuple[Probe, dict[str, ua.NodeId]]:
                 name = child.get_browse_name().Name
             except Exception:
                 continue
-            if name in spec and child.nodeid == spec[name]:
+            if name in spec and child.nodeid.to_string() == spec[name].to_string():
                 advertised[name] = child.nodeid
     except Exception as error:
         if _unanswered(error):

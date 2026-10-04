@@ -2,7 +2,7 @@
 
 The production client still uses python-opcua. Issue [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) remains open until the maintained adapter passes the feature, security, reconnect and distribution gates. The nine application ports extracted in #141 provide its contract boundary.
 
-The first implemented slice is `adapters/asyncua_transport.py`, qualified against asyncua 2.0.1 on native wire frames. Its dependency range is `>=2.0.1,<2.1`; widening this minor ceiling requires requalifying the receive and lifecycle hooks. It does not monkey-patch library classes or select a new production backend. `adapters/asyncua_client.py` composes that protocol per client and cancels autonomous watchdog tasks before they run, preserving native secure-channel renewal. Live connection/read and channel-renewal tests qualify this construction; it is not yet wired to MCP feature adapters.
+The first implemented slice is `adapters/asyncua_transport.py`, qualified against asyncua 2.0.1 on native wire frames. Its dependency range is `>=2.0.1,<2.1`; widening this minor ceiling requires requalifying the receive and lifecycle hooks. It does not monkey-patch library classes. Set `OPCUA_PYTHON_BACKEND=asyncua` to select the maintained client for qualification; the default remains `legacy` until the complete migration gates pass. `OPCUA_PYTHON_BACKEND=legacy` is the explicit rollback path. Invalid selections refuse startup. `adapters/asyncua_client.py` composes that protocol per client and cancels autonomous watchdog tasks before they run, preserving native secure-channel renewal. Live connection/read and channel-renewal tests qualify this construction; the service adapter connects it to the extracted application ports.
 
 ## Compatibility and qualification matrix
 
@@ -11,7 +11,7 @@ The first implemented slice is `adapters/asyncua_transport.py`, qualified agains
 | Browse and continuation release | Application fake-port characterization exists; wire/client integration pending |
 | Batch read/write and Variant typing | Application characterization exists; native shared-value/request codec tests pass; live whole-batch control integration pending |
 | Method InputArguments | Application characterization exists; native Argument value encoding passes; live metadata/type resolution pending |
-| Raw and aggregate history | Application characterization exists; bounded paging/release integration pending |
+| Raw and aggregate history | Native aggregate discovery and existing aggregate MCP E2E checks pass; complete raw/paging/release qualification is in progress |
 | Event history | Application characterization exists; native paged event history pending |
 | Data-change subscription and deadband | Application characterization exists; native monitored-item/filter integration pending |
 | Alarms & Conditions | Application characterization exists; refresh ordering and native action integration pending |
@@ -22,7 +22,7 @@ The first implemented slice is `adapters/asyncua_transport.py`, qualified agains
 | Keepalive, renewal and subscription reconnect | The qualification client disables autonomous reconnect/subscription watchdogs and renews a native secure channel without replacing its session; subscription reattachment and longer/vendor sessions remain pending |
 | Timestamps, status names and structured values | All 32 shared native value cases pass, including timestamps, StatusCodes, standard ExtensionObjects, opaque values and bounded cycles |
 | Python 3.10/current | Foundation native/live tests pass on Python 3.10 and current Python; full adapter matrix remains pending |
-| Dual backend CI and rollback | Temporary comparison matrix and one-release rollback selection pending |
+| Dual backend CI and rollback | Explicit asyncua/legacy selection and separate Python 3.10/3.13 maintained-backend CI jobs; complete matrix and rollback smoke qualification pending |
 | Packaged wheel and executable | Both maintained and rollback distribution paths require smoke qualification |
 
 ## Receive boundary
@@ -35,4 +35,4 @@ Run `uv run pytest -q tests/unit/test_asyncua_transport.py` to exercise native f
 
 ## Native value boundary
 
-`adapters/asyncua_values.py` converts fields of locally constructed request DTOs into maintained native types. The maintained library owns binary encoding and network response parsing; the legacy DTOs remain an internal compatibility boundary for rollback. Nonempty request checks retain node IDs, typed method/write values, aggregate parameters and opaque continuation points. Standard native structures use library-known class identities and bounded field traversal without evaluating annotations. Unknown/custom structures remain explicitly undecodable. `adapters/asyncua_services.py` owns a private maintained SDK loop behind the existing async application ports. Live core checks cover engineering metadata, typed writes, derived method arguments, raw history and filtered subscriptions; native failures retain numeric status/cause classification and failed connection attempts stop their owned loop. End-to-end MCP backend selection, security, event/alarm and reconnect qualification, and dual-backend CI are still required.
+`adapters/asyncua_values.py` converts fields of locally constructed request DTOs into maintained native types. The maintained library owns binary encoding and network response parsing; the legacy DTOs remain an internal compatibility boundary for rollback. Nonempty request checks retain node IDs, typed method/write values, aggregate parameters and opaque continuation points. Standard native structures use library-known class identities and bounded field traversal without evaluating annotations. Unknown/custom structures remain explicitly undecodable. `adapters/asyncua_services.py` owns a private maintained SDK loop behind the existing async application ports. Live core checks cover engineering metadata, typed writes, derived method arguments, raw history and filtered subscriptions; native failures retain numeric status/cause classification and failed connection attempts stop their owned loop. MCP backend selection is explicit and covered by factory/patch-isolation tests. Separate maintained-backend CI artifacts record the selected Python client, and release aggregation refuses mixed-backend matrices. Security, event/alarm, reconnect and packaged rollback qualification remain required before changing the default.

@@ -76,6 +76,7 @@ from .protocol.tools import (
 from .protocol.tools import (
     write_opcua_nodes as write_opcua_nodes,
 )
+from .python_backend import python_backend
 from .result_text import pretty_json
 from .security import security_config
 from .state import ServerState
@@ -187,6 +188,7 @@ def main() -> None:
     # printed one "Configuration error:" line (#157).
     try:
         security_config()
+        python_backend()
         policy = mcp.state.policy
         reconnect = reconnect_config()
         # Opened here and not lazily: an operator who set OPCUA_AUDIT_FILE and

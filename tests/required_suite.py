@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from opcua_mcp_server.python_backend import python_backend
 
 ENV_VAR = "OPCUA_TESTS_REQUIRED"
 
@@ -189,6 +190,7 @@ class RequiredSuite:
                 "schemaVersion": 1,
                 "required": self.required,
                 "pythonVersion": platform.python_version(),
+                "pythonBackend": python_backend(),
                 "exitStatus": int(session.exitstatus),
                 "outcomes": dict(Counter(self.outcomes.values())),
                 "groups": {

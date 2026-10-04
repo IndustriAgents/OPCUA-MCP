@@ -124,6 +124,28 @@ jobs:
           python-version: ${{ matrix.python-version }}
           node-version: ${{ matrix.node-version }}
 
+  maintained-backend:
+    name: Maintained backend — Python ${{ matrix.python-version }} / Node 22
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      OPCUA_PYTHON_BACKEND: asyncua
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Maintained backend conformance
+        uses: ./.github/actions/conformance
+        with:
+          python-version: ${{ matrix.python-version }}
+          node-version: "22"
+          evidence-suffix: -asyncua
+
   # Builds every artifact a user can actually download — npm tarball, Python
   # wheel, the `.mcpb` bundle and both single-file executables — installs them
   # somewhere isolated, and drives them over MCP. The rest of CI runs from the

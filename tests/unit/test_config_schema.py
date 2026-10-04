@@ -34,6 +34,7 @@ from opcua_mcp_server.audit import parse_audit_config
 from opcua_mcp_server.config import parse_reconnect_config
 from opcua_mcp_server.contract import load_config_schema
 from opcua_mcp_server.policy import parse_policy_config
+from opcua_mcp_server.python_backend import parse_python_backend
 from opcua_mcp_server.security import parse_security_config
 
 SCHEMA_PATH = ROOT / "contract" / "config.json"
@@ -293,6 +294,7 @@ def _probe_chain(value: str):
 #: `test_every_typed_setting_has_a_probe` fails when the schema grows one this
 #: does not cover.
 PROBES = {
+    "OPCUA_PYTHON_BACKEND": lambda value: parse_python_backend({"OPCUA_PYTHON_BACKEND": value}),
     "OPCUA_SECURITY_POLICY": lambda v: _security(_secured(OPCUA_SECURITY_POLICY=v)).policy,
     "OPCUA_SECURITY_MODE": _probe_mode,
     "OPCUA_PROFILE": lambda v: parse_policy_config({"OPCUA_PROFILE": v}).profile,

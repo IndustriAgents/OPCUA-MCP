@@ -336,6 +336,7 @@ the ADR and expected to stay until a library change retires it (usually
 
 | ID | What differs | Could retire it |
 |---|---|---|
+| `python-client-backend` | Python can opt into the maintained client with `OPCUA_PYTHON_BACKEND=asyncua`; legacy remains the qualification default and rollback path. Node uses node-opcua-client. |
 | `security-policies-aes` | `Aes128_Sha256_RsaOaep` and `Aes256_Sha256_RsaPss` are Node only; Python refuses them at startup, naming the Node runtime | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `certificate-file-encoding` | Python reads a certificate or key as PEM only when it is named `*.pem`; Node sniffs the contents. Name every file `*.pem` and both work | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `mcp-protocol-generation` | Python's `mcp` 2.x serves MCP protocol revisions up to 2026-07-28; Node's SDK 1.x up to 2025-11-25. Same tools and results either way; change notifications are offered on neither | — |

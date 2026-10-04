@@ -125,7 +125,7 @@
       "python": "python-opcua has no reconnection. The connection layer builds a fresh client and a new session when a tool call next needs one, and re-creates the data-change and event subscriptions on it; the audit record's session id changes across the outage.",
       "node": "node-opcua repairs the channel itself, in the background and without waiting for a call, and re-activates the same session with its subscriptions; the audit record's session id is unchanged by such a repair. Only when the library gives up does the connection layer rebuild, as Python does.",
       "observable": true,
-      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* — a timeout counted as a dead session on Python only — that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
+      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* \u2014 a timeout counted as a dead session on Python only \u2014 that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
       "tracking": ["#144"],
       "evidence": [
         "packages/server-python/src/opcua_mcp_server/connection.py",
@@ -251,13 +251,31 @@
       "python": "python-opcua announces urn:freeopcua:client unless OPCUA_APPLICATION_URI is set. It generates no application certificate.",
       "node": "node-opcua announces the SAN URI of its generated or persisted default application certificate, or its hostname-based fallback when that certificate has no URI.",
       "observable": true,
-      "rationale": "Retain the identity bound to Node’s persisted PKI certificate rather than announcing a different URI from its SAN. This is part of the declared extra PKI capability. Secured channels require an explicitly configured certificate on both runtimes; that certificate’s URI is used identically and conflicting overrides are refused.",
+      "rationale": "Retain the identity bound to Node\u2019s persisted PKI certificate rather than announcing a different URI from its SAN. This is part of the declared extra PKI capability. Secured channels require an explicitly configured certificate on both runtimes; that certificate\u2019s URI is used identically and conflicting overrides are refused.",
       "evidence": [
         "packages/server-node/src/security.ts",
         "packages/server-python/src/opcua_mcp_server/security.py",
         "docs/certificates.md"
       ],
       "tracking": ["#144"]
+    },
+    {
+      "id": "python-client-backend",
+      "area": "configuration",
+      "summary": "Only Python offers maintained-client qualification and legacy rollback selection.",
+      "python": "OPCUA_PYTHON_BACKEND accepts asyncua or legacy; legacy remains the default until qualification completes.",
+      "node": "Uses node-opcua-client and does not read the Python-only backend setting.",
+      "observable": true,
+      "rationale": "The maintained library migration is specific to Python. A one-release fallback makes uncovered vendor incompatibilities reversible without changing the MCP tool contract.",
+      "tracking": ["#144"],
+      "evidence": [
+        "packages/server-python/src/opcua_mcp_server/python_backend.py",
+        "packages/server-python/src/opcua_mcp_server/adapters/asyncua_services.py",
+        "contract/config.json"
+      ],
+      "facts": {
+        "configSettings": ["OPCUA_PYTHON_BACKEND"]
+      }
     }
   ]
 }

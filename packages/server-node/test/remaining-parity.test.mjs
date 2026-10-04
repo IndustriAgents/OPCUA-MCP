@@ -11,7 +11,7 @@ import {
   QualifiedName,
 } from "node-opcua-client";
 import { OpcuaConnection } from "../build/connection.js";
-import { OpcuaTools } from "../build/tools.js";
+import { ProtocolFeatureHandlers } from "../build/protocol/feature-handlers.js";
 import { alarmAction } from "../build/events.js";
 const cases = (name) =>
   JSON.parse(readFileSync(new URL(`../../../tests/fixtures/${name}`, import.meta.url), "utf8"))
@@ -97,9 +97,12 @@ for (const [namespace, identifier, expected] of [
   });
 }
 test("invalid aggregate name is a bare refusal", async () => {
-  const tools = Object.create(OpcuaTools.prototype);
-  tools.conn = { session: {} };
-  tools.capabilities = { aggregateFunctions: ["Average", "Minimum"] };
+  const tools = Object.create(ProtocolFeatureHandlers.prototype);
+  tools.runtime = {
+    conn: { session: {} },
+    capabilities: { aggregateFunctions: ["Average", "Minimum"] },
+  };
+  tools.requireSession = () => tools.runtime.conn.session;
   await assert.rejects(
     () =>
       tools.readOpcuaHistory({

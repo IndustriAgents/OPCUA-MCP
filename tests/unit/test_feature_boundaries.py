@@ -49,11 +49,14 @@ def test_native_adapters_do_not_import_the_mcp_server():
             if isinstance(node, ast.ImportFrom):
                 assert not (node.module or "").startswith("mcp"), file
                 assert node.module != "server", file
+                assert not (node.module or "").startswith("protocol"), file
             elif isinstance(node, ast.Import):
                 assert all(not alias.name.startswith("mcp") for alias in node.names), file
     for file in (NODE / "adapters").glob("*.ts"):
         text = file.read_text(encoding="utf-8")
-        assert not re.search(r'from\s+["\'](?:@modelcontextprotocol/|[^"\']*tools\.js)', text), file
+        assert not re.search(
+            r'from\s+["\'](?:@modelcontextprotocol/|[^"\']*(?:tools\.js|protocol/))', text
+        ), file
 
 
 def test_new_feature_files_stay_reviewable():
@@ -62,6 +65,8 @@ def test_new_feature_files_stay_reviewable():
         (PYTHON / "adapters", "py"),
         (NODE / "application", "ts"),
         (NODE / "adapters", "ts"),
+        (PYTHON / "infrastructure", "py"),
+        (NODE / "infrastructure", "ts"),
     ]:
         for file in directory.glob("*." + extension):
             assert len(file.read_text(encoding="utf-8").splitlines()) <= 400, file
@@ -83,3 +88,8 @@ def test_protocol_modules_do_not_import_native_sdks_or_the_central_adapter():
     for directory, extension in [(PYTHON / "protocol", "py"), (NODE / "protocol", "ts")]:
         for file in directory.glob("*." + extension):
             assert len(file.read_text(encoding="utf-8").splitlines()) <= 400, file
+
+
+def test_central_composition_modules_stay_reviewable():
+    for file in [PYTHON / "server.py", NODE / "tools.ts"]:
+        assert len(file.read_text(encoding="utf-8").splitlines()) <= 400, file

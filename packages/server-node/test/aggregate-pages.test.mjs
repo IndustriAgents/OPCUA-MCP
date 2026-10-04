@@ -70,7 +70,7 @@ test("resume and release keep the original query and session", async () => {
 });
 
 test("history tool reports completed server pages", async () => {
-  const { OpcuaTools } = await import("../build/tools.js");
+  const { ProtocolFeatureHandlers } = await import("../build/protocol/feature-handlers.js");
   const { DataValue, DataType, AggregateFunction } = await import("node-opcua-client");
   const queries = [];
   const page = (value, point) => ({
@@ -95,9 +95,9 @@ test("history tool reports completed server pages", async () => {
       return { results: [page(2, null)] };
     },
   };
-  const tools = Object.create(OpcuaTools.prototype);
-  tools.conn = { session };
-  tools.capabilities = { aggregateFunctions: ["Average"] };
+  const tools = Object.create(ProtocolFeatureHandlers.prototype);
+  tools.runtime = { conn: { session }, capabilities: { aggregateFunctions: ["Average"] } };
+  tools.requireSession = () => session;
   const answer = await tools.readOpcuaHistory({
     nodeId: "ns=2;i=7",
     start: "2026-01-01T00:00:00Z",

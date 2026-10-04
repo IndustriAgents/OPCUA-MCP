@@ -2,7 +2,7 @@
 
 The production client still uses python-opcua. Issue [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) remains open until the maintained adapter passes the feature, security, reconnect and distribution gates. The nine application ports extracted in #141 provide its contract boundary.
 
-The first implemented slice is `adapters/asyncua_transport.py`, qualified against asyncua 2.0.1 on native wire frames. Its dependency range is `>=2.0.1,<2.1`; widening this minor ceiling requires requalifying the receive and lifecycle hooks. It does not monkey-patch library classes or select a new production backend.
+The first implemented slice is `adapters/asyncua_transport.py`, qualified against asyncua 2.0.1 on native wire frames. Its dependency range is `>=2.0.1,<2.1`; widening this minor ceiling requires requalifying the receive and lifecycle hooks. It does not monkey-patch library classes or select a new production backend. `adapters/asyncua_client.py` composes that protocol per client and cancels autonomous watchdog tasks before they run, preserving native secure-channel renewal. Live connection/read and channel-renewal tests qualify this construction; it is not yet wired to MCP feature adapters.
 
 ## Compatibility and qualification matrix
 
@@ -19,7 +19,7 @@ The first implemented slice is `adapters/asyncua_transport.py`, qualified agains
 | Namespace URI and reconnect generation | Client lifecycle integration and namespace rebinding tests pending |
 | Message/chunk bounds | Native framing tests cover hostile split headers, local receive caps, count/byte reassembly caps, exact boundaries and memory release |
 | Negotiated receive/send limits | Native Ack tests prove correct buffer direction; zero or enlarged peer limits never widen local caps |
-| Keepalive, renewal and subscription reconnect | Lifecycle ownership and long-session tests pending; library watchdogs must not create an unaudited retry path |
+| Keepalive, renewal and subscription reconnect | The qualification client disables autonomous reconnect/subscription watchdogs and renews a native secure channel without replacing its session; subscription reattachment and longer/vendor sessions remain pending |
 | Timestamps, status names and structured values | Existing shared fixtures must pass with maintained native types |
 | Python 3.10/current | Foundation tests run on current Python; floor qualification follows before merging |
 | Dual backend CI and rollback | Temporary comparison matrix and one-release rollback selection pending |

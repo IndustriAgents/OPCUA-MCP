@@ -6,6 +6,7 @@ Other tools still use the existing execution and feature code.
 
 | Layer | Python | Node | Ownership |
 |---|---|---|---|
+| Protocol registration/results | `protocol/tools.py`, `protocol/value_tools.py`, `protocol/monitoring_tools.py`, `protocol/results.py` | `protocol/dispatch.ts`, `protocol/results.ts` | Stable tool signatures, contract dispatch, context lookup, output schemas and MCP result conversion |
 | MCP adapter | `server.py:read_opcua_nodes` | `tools.ts:readOpcuaNodes` | Context lookup, injected port construction, protocol result/error conversion |
 | Read use case and port | `application/read.py` | `application/read.ts` | Ordered logical reads, sequential service batches, one metadata lookup, JSON records |
 | Browse use case and port | `application/browse.py` | `application/browse.ts` | Path matching, bounded breadth-first traversal, filtering, cycle detection and completeness |
@@ -150,3 +151,12 @@ once more. A second failure is never retried. Fourteen shared
 `invocation-port.json` cases cover each control, recovery failures, changed
 policy/capabilities and audit failure before resend. Status remains a special
 bounded-warmup invocation, without connecting in the outer pipeline.
+
+Protocol handlers and presenters now have their own modules. Python keeps the
+external function signatures and reexports the legacy entry points; registration
+uses an immutable catalogue of stateless functions. Node contract dispatch uses
+injected handler methods. Protocol modules import no native SDK and do not
+import the central server, and each is capped at 400 lines by boundary tests.
+Completeness-schema and limit-ownership checks follow the extracted owners.
+Native lifecycle/cache wiring and audit construction still need their final
+central-module ownership extraction.

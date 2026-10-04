@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract protocol handlers and presenters (#141)
+- Move MCP tool signatures, contract dispatch and result/schema framing into
+  small protocol modules. Preserve external names, default arguments, result
+  records and instance-owned state; enforce native SDK import and size limits.
+
 ### Changed — extract contract-directed invocation and recovery (#141)
 - Share the connected-attempt and recovery policy behind injected services.
   Preserve one read resend with fresh policy/audit/capability checks, one control

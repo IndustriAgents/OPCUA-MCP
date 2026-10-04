@@ -65,3 +65,21 @@ def test_new_feature_files_stay_reviewable():
     ]:
         for file in directory.glob("*." + extension):
             assert len(file.read_text(encoding="utf-8").splitlines()) <= 400, file
+
+
+def test_protocol_modules_do_not_import_native_sdks_or_the_central_adapter():
+    for file in (PYTHON / "protocol").glob("*.py"):
+        tree = ast.parse(file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(
+                    alias.name.split(".")[0] not in {"opcua", "asyncua"} for alias in node.names
+                ), file
+            elif isinstance(node, ast.ImportFrom):
+                assert (node.module or "").split(".")[0] not in {"opcua", "asyncua", "server"}, file
+    for file in (NODE / "protocol").glob("*.ts"):
+        text = file.read_text(encoding="utf-8")
+        assert not re.search(r'from\s+["\'](?:node-opcua|[^"\']*tools\.js)', text), file
+    for directory, extension in [(PYTHON / "protocol", "py"), (NODE / "protocol", "ts")]:
+        for file in directory.glob("*." + extension):
+            assert len(file.read_text(encoding="utf-8").splitlines()) <= 400, file

@@ -41,7 +41,7 @@ COMMANDS = {
 
 
 def _run(
-    impl: str, args: list[str], home, extra_env: dict | None = None, cwd=None
+    impl: str, args: list[str], home, extra_env: dict | None = None, cwd=None, binary=False
 ) -> subprocess.CompletedProcess:
     """Run one runtime's CLI with HOME redirected at a scratch directory.
 
@@ -65,7 +65,7 @@ def _run(
         env.pop(name, None)
     env.update(extra_env or {})
     return subprocess.run(
-        COMMANDS[impl] + args, capture_output=True, text=True, timeout=120, env=env, cwd=cwd
+        COMMANDS[impl] + args, capture_output=True, text=not binary, timeout=120, env=env, cwd=cwd
     )
 
 
@@ -392,8 +392,8 @@ CLI_CASES = json.loads((ROOT / "tests/fixtures/cli-cases.json").read_text(encodi
     ids=lambda c: c["name"],
 )
 def test_cli_output_is_byte_identical(case, tmp_path):
-    python = _run("python", case["argv"], tmp_path)
-    node = _run("node", case["argv"], tmp_path)
+    python = _run("python", case["argv"], tmp_path, binary=True)
+    node = _run("node", case["argv"], tmp_path, binary=True)
     assert python.returncode == node.returncode == (2 if case["kind"] == "error" else 0)
     assert python.stdout == node.stdout
     assert python.stderr == node.stderr

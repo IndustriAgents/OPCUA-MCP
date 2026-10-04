@@ -46,7 +46,9 @@ picking one would leave the operator believing the other was in force.
 
 The ApplicationUri the session announces is taken from the `subjectAltName` of
 the client certificate, which is what servers check it against;
-`OPCUA_APPLICATION_URI` overrides that, for a certificate that carries no URI.
+`OPCUA_APPLICATION_URI` supplies it for a certificate that carries no URI. A
+configured URI that conflicts with the certificate is refused before connecting
+on both runtimes.
 Generating a certificate servers accept, and getting it into a server's trust
 list, is [docs/certificates.md](docs/certificates.md).
 

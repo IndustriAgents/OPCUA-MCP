@@ -110,7 +110,10 @@
       "node": "Installs opcua-mcp-server and the alias opcua-mcp, the same entry point.",
       "observable": true,
       "rationale": "Kept through the 0.2.0 rename for existing npm users (docs/ROADMAP-0.2.0.md). The documented command, and what --install writes, is opcua-mcp-server on both.",
-      "evidence": ["packages/server-node/package.json", "packages/server-python/pyproject.toml"],
+      "evidence": [
+        "packages/server-node/package.json",
+        "packages/server-python/pyproject.toml"
+      ],
       "facts": {
         "nodeOnlyCommands": ["opcua-mcp"]
       }
@@ -164,7 +167,10 @@
       "node": "node-opcua creates a per-user PKI folder (node-opcua-default-nodejs/PKI under the user's config directory) on first connect, generates a self-signed default application certificate and key there when none is configured, and files the server certificates it has seen.",
       "observable": true,
       "rationale": "Library behaviour. The generated certificate is never used for a secured channel, because any policy other than None refuses to start without OPCUA_CLIENT_CERT, and the stored server certificates are not a trust decision: pinning is OPCUA_SERVER_CERT on both runtimes.",
-      "evidence": ["packages/server-node/src/security.ts", "docs/certificates.md"]
+      "evidence": [
+        "packages/server-node/src/security.ts",
+        "docs/certificates.md"
+      ]
     },
     {
       "id": "user-key-handling",
@@ -237,6 +243,21 @@
         "tests/unit/test_result_text.py",
         "packages/server-node/test/result-text.test.mjs"
       ]
+    },
+    {
+      "id": "certificate-less-application-uri",
+      "area": "connection",
+      "summary": "Without a configured client certificate, library default ApplicationUris differ.",
+      "python": "python-opcua announces urn:freeopcua:client unless OPCUA_APPLICATION_URI is set. It generates no application certificate.",
+      "node": "node-opcua announces the SAN URI of its generated or persisted default application certificate, or its hostname-based fallback when that certificate has no URI.",
+      "observable": true,
+      "rationale": "Retain the identity bound to Node’s persisted PKI certificate rather than announcing a different URI from its SAN. This is part of the declared extra PKI capability. Secured channels require an explicitly configured certificate on both runtimes; that certificate’s URI is used identically and conflicting overrides are refused.",
+      "evidence": [
+        "packages/server-node/src/security.ts",
+        "packages/server-python/src/opcua_mcp_server/security.py",
+        "docs/certificates.md"
+      ],
+      "tracking": ["#144"]
     }
   ]
 }

@@ -29,6 +29,8 @@
 // the client package keeps the compiler honest about what this server may use.
 import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua-client";
 
+import { CLIENT_APPLICATION_NAME } from "./client-identity.js";
+
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
 
@@ -329,7 +331,7 @@ export class OpcuaConnection {
 
       const reconnect = this.reconnectSettings;
       client = OPCUAClient.create({
-        applicationName: "OPC UA MCP Client",
+        applicationName: CLIENT_APPLICATION_NAME,
         // The retries of *one round*, never -1. node-opcua reads `maxRetry` for
         // the initial connect, and -1 there is a `connect()` that never settles
         // while the endpoint is unreachable — which, awaited before the MCP
@@ -344,6 +346,8 @@ export class OpcuaConnection {
         // is built on from moving under us in a future release.
         keepSessionAlive: true,
         requestedSessionTimeout: reconnect.sessionTimeout,
+        // Same request as Python; the server may revise either lifetime.
+        defaultSecureTokenLifetime: reconnect.sessionTimeout,
         // What this client will let the server send it. node-opcua enforces both
         // itself; the Python runtime has to patch its library to do the same, and
         // the point of taking the numbers from the contract is that the two are

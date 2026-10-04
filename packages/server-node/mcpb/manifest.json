@@ -93,7 +93,7 @@
     "opcua_application_uri": {
       "type": "string",
       "title": "Application URI",
-      "description": "Application URI announced to the server. Set it only for a certificate that carries no URI of its own: a server may reject a session whose URI does not match the certificate. Leave blank for the subjectAltName URI of the client certificate.",
+      "description": "Application URI announced to the server. Set it only for a certificate that carries no URI of its own. A configured URI that conflicts with the certificate is refused before connecting. Leave blank for the subjectAltName URI of the client certificate.",
       "required": false
     },
     "opcua_server_cert": {

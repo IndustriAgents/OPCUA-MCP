@@ -25,6 +25,7 @@ from cryptography import x509
 from opcua import Client, ua
 from opcua.crypto import security_policies, uacrypto
 
+from .client_identity import CLIENT_APPLICATION_NAME, application_uri_problem
 from .transport_limits import advertise_limits
 
 #: Policies this runtime can negotiate — the four both runtimes share.
@@ -384,6 +385,7 @@ def create_client(url: str) -> Client:
     talk to the server. Call it off the event loop.
     """
     client = Client(url)
+    client.application_name = CLIENT_APPLICATION_NAME
     # Before anything is sent: these go out in the Hello, and python-opcua's own
     # defaults are 0, which tells the server this client will accept a message of
     # any size in any number of chunks.
@@ -393,15 +395,10 @@ def create_client(url: str) -> Client:
     certificate_uri = (
         certificate_application_uri(config.client_cert) if config.client_cert else None
     )
+    if problem := application_uri_problem(config.application_uri, certificate_uri):
+        raise ValueError(problem)
     if config.application_uri is not None:
         client.application_uri = config.application_uri
-        if certificate_uri is not None and certificate_uri != config.application_uri:
-            _warn_once(
-                f"OPCUA_APPLICATION_URI={config.application_uri} does not match the "
-                f"subjectAltName URI of OPCUA_CLIENT_CERT ({certificate_uri}); a server that "
-                f"checks the two will reject the session with BadCertificateUriInvalid. Unset "
-                f"OPCUA_APPLICATION_URI to announce the certificate's own URI."
-            )
     elif certificate_uri is not None:
         # The certificate is the authority on this, and the operator has not
         # said otherwise. Matches what node-opcua does with the same files.

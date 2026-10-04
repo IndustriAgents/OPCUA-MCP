@@ -1,60 +1,92 @@
 import argparse
-import copy
 import logging
 import random
 import time
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
-from opcua import Server, ua
-from opcua.common.node import Node
-from opcua.server.address_space import AttributeService
+from asyncua import ua
+from asyncua.server.address_space import AttributeService
+from asyncua.server.history import HistoryDict
+from asyncua.sync import Server as NativeServer
+from asyncua.sync import SyncNode as Node
 
 
-def answer_writes_to_unknown_nodes():
-    """Make a write to a node the server does not have an answer, not a hang-up.
+class MockAttributeService(AttributeService):
+    """Preserve per-item unknown-node answers and source times for stored values."""
 
-    python-opcua checks the AccessLevel bits of every node a non-admin session
-    writes to — which is every client here, since the endpoints are anonymous —
-    and reads them straight off what ``get_attribute_value`` returns. For a node
-    id the address space does not have, that is an empty ``DataValue`` carrying
-    BadNodeIdUnknown and a null Variant, so the bit test raises ``TypeError:
-    unsupported operand type(s) for &: 'NoneType' and 'int'`` out of the request
-    handler. The server then never answers the WriteRequest and drops the
-    connection; the client waits out its own transaction timeout (15s in
-    node-opcua) and every other node in the same batch is lost with it (#64).
+    async def write(self, params, *args, **kwargs):
+        statuses = []
+        for item in params.NodesToWrite:
+            if item.NodeId not in self._aspace:
+                statuses.append(ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown))
+                continue
+            if item.AttributeId == ua.AttributeIds.Value and item.Value.SourceTimestamp is None:
+                item = replace(
+                    item, Value=replace(item.Value, SourceTimestamp=datetime.now(timezone.utc))
+                )
+            result = await super().write(replace(params, NodesToWrite=[item]), *args, **kwargs)
+            statuses.extend(result)
+        return statuses
 
-    A conformant server answers per item: BadNodeIdUnknown for the node it does
-    not have, Good for the ones it wrote. So screen the unknown ids out here and
-    let the library write the rest. python-opcua is archived upstream in favour
-    of asyncua, so this is patched at the mock rather than waiting for a release.
-    """
-    original_write = AttributeService.write
 
-    def write(self, params, *args, **kwargs):
-        known = [item for item in params.NodesToWrite if item.NodeId in self._aspace]
-        if len(known) == len(params.NodesToWrite):
-            return original_write(self, params, *args, **kwargs)
+class MockHistory(HistoryDict):
+    """Keep native storage, with a continuation for request-limited raw pages."""
 
-        statuses = iter(())
-        if known:
-            screened = copy.copy(params)
-            screened.NodesToWrite = known
-            statuses = iter(original_write(self, screened, *args, **kwargs))
-        return [
-            next(statuses)
-            if item.NodeId in self._aspace
-            else ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown)
-            for item in params.NodesToWrite
-        ]
+    async def read_node_history(self, node_id, start, end, nb_values):
+        values, continuation = await super().read_node_history(
+            node_id, start, end, nb_values + 1 if nb_values else 0
+        )
+        if nb_values and len(values) > nb_values:
+            continuation = values[nb_values].SourceTimestamp
+            values = values[:nb_values]
+        return values, continuation
 
-    AttributeService.write = write
+
+class Server(NativeServer):
+    """Small synchronous facade around the maintained mock server's SDK loop."""
+
+    def __init__(self):
+        super().__init__()
+        # Only this owned mock instance changes; no library class is patched.
+        self.aio_obj.iserver.attribute_service = MockAttributeService(self.aio_obj.iserver.aspace)
+        self.aio_obj.iserver.history_manager.set_storage(MockHistory())
+
+    def start(self):
+        super().start()
+        status = self.get_node(ua.ObjectIds.Server_ServerStatus).read_data_value()
+
+        async def install_clock():
+            def current_status(node_id, attribute):
+                now = datetime.now(timezone.utc)
+                value = replace(status.Value.Value, CurrentTime=now)
+                return replace(
+                    status,
+                    Value=ua.Variant(value, ua.VariantType.ExtensionObject),
+                    SourceTimestamp=now,
+                    ServerTimestamp=now,
+                )
+
+            self.aio_obj.iserver.set_attribute_value_callback(
+                ua.NodeId(ua.ObjectIds.Server_ServerStatus), current_status
+            )
+
+        self.tloop.post(install_clock())
+
+    def get_objects_node(self):
+        return self.nodes.objects
+
+    def historize_node_data_change(self, node, **kwargs):
+        return self.tloop.post(self.aio_obj.historize_node_data_change(node.aio_obj, **kwargs))
+
+    def historize_node_event(self, node, **kwargs):
+        return self.tloop.post(self.aio_obj.historize_node_event(node.aio_obj, **kwargs))
 
 
 def _engineering_units(display: str, description: str) -> ua.EUInformation:
     """One ``EUInformation``, built field by field.
 
-    python-opcua's generated structures take no keyword arguments, so this is
-    what constructing one looks like. ``UnitId`` is the UNECE code the spec
+    ``UnitId`` is the UNECE code the spec
     points at — 4408652 is "CEL", degree Celsius — and a real server publishes
     it, so a mock that omitted it would teach the wrong shape.
     """
@@ -117,7 +149,7 @@ class IndustrialControlSystem:
 
     #: The URI for namespace index 2, where every node in this mock lives.
     #:
-    #: Registered rather than left implicit. python-opcua lets a node be created
+    #: Registered rather than left implicit. The SDK lets a node be created
     #: at a bare index, so every node here sat at `ns=2` while the server's own
     #: NamespaceArray listed only indexes 0 and 1 — a server whose node ids point
     #: at a namespace it does not admit to having. Real servers publish a URI for
@@ -130,7 +162,7 @@ class IndustrialControlSystem:
         """Setup the OPC UA address space with industrial control structure."""
 
         # Index 2, matching where every node below is created. Asserted rather
-        # than assumed: python-opcua appends, so a namespace registered earlier
+        # than assumed: the SDK appends, so a namespace registered earlier
         # would silently shift this and leave every `ns=2` id pointing elsewhere.
         index = self.server.register_namespace(self.NAMESPACE_URI)
         assert index == 2, f"expected namespace index 2 for {self.NAMESPACE_URI}, got {index}"
@@ -168,10 +200,10 @@ class IndustrialControlSystem:
 
     #: The OperationLimits this mock publishes (Part 5 §6.3.11), both below the
     #: MCP servers' own per-call caps (contract limits: 500 per read, 100 per
-    #: write). python-opcua's default is 10000 for every one, which no client
+    #: write). The SDK's default is 10000 for every one, which no client
     #: limit is ever lower than — so against the default, the path where a
     #: server's stated limit is the one that binds would never run in the suite.
-    #: python-opcua does not enforce them; they are a statement for clients to
+    #: the SDK does not enforce them; they are a statement for clients to
     #: honour, which is exactly what is being tested (issue #139).
     MAX_NODES_PER_READ = 100
     MAX_NODES_PER_WRITE = 50
@@ -234,8 +266,8 @@ class IndustrialControlSystem:
         for child in industrial_system.get_children():
             for variable in child.get_variables():
                 logging.info(
-                    f"historize {child.get_display_name().to_string()};"
-                    f"{variable.get_display_name().to_string()}"
+                    f"historize {child.read_display_name().to_string()};"
+                    f"{variable.read_display_name().to_string()}"
                 )
                 self.server.historize_node_data_change(
                     variable, period=timedelta(minutes=10), count=0
@@ -247,7 +279,7 @@ class IndustrialControlSystem:
         """Announce alarm transitions as OPC UA events.
 
         Emitted from the **Server** object (`ns=0;i=2253`) rather than from the
-        plant folder, because python-opcua's server delivers an event only to
+        plant folder, because the SDK's server delivers an event only to
         monitored items on the node that emits it — it does not propagate one up
         the notifier hierarchy the way a spec-complete server does. A client
         subscribing to the Server object, which is where clients look first and
@@ -255,9 +287,8 @@ class IndustrialControlSystem:
         these. `SourceNode`/`SourceName` still name the plant, so the event says
         what it is about.
 
-        These are plain `BaseEventType` events, not conditions: python-opcua has
-        no condition model, so there is nothing here to acknowledge and
-        `ConditionRefresh` is not implemented. `packages/mock-server-alarms` is
+        This mock emits plain `BaseEventType` events and does not model
+        conditions, acknowledgement or `ConditionRefresh`. `packages/mock-server-alarms` is
         the mock that covers that half.
         """
         self.event_generator = self.server.get_event_generator()
@@ -271,7 +302,7 @@ class IndustrialControlSystem:
     def _historize_events(self):
         """Keep the events, so a client can look backwards at an alarm burst.
 
-        Two pieces of setup, neither of which python-opcua does for you:
+        Two pieces of setup, neither of which the SDK does for you:
 
         `historize_node_event` subscribes to the event types the *source*
         declares it generates, so a node with no `GeneratesEvent` reference gets
@@ -279,23 +310,15 @@ class IndustrialControlSystem:
         history is silently always empty. The Server object here emits
         `BaseEventType`, so that is what it has to declare.
 
-        And `AccessHistoryEventsCapability` (`ns=0;i=11194`) does not exist in
-        python-opcua's namespace 0 at all, so it has to be created. It is the
-        node a client reads to decide whether asking for event history is worth
-        a round trip, and a server that stores events but never says so is a
-        server whose history nobody looks for.
+        The maintained namespace already defines `AccessHistoryEventsCapability`
+        (`ns=0;i=11242`). Publish it only when event storage is enabled, so a
+        client's capability probe describes the configured archive.
         """
         emitter = self.server.get_node(ua.NodeId(ua.ObjectIds.Server))
         emitter.add_reference(ua.NodeId(ua.ObjectIds.BaseEventType), ua.ObjectIds.GeneratesEvent)
         self.server.historize_node_event(emitter, period=timedelta(minutes=10), count=0)
 
-        capabilities = self.server.get_node(ua.NodeId(ua.ObjectIds.HistoryServerCapabilities))
-        node = capabilities.add_variable(
-            ua.NodeId(11194),
-            ua.QualifiedName("AccessHistoryEventsCapability", 0),
-            True,
-        )
-        node.add_reference(ua.NodeId(ua.ObjectIds.PropertyType), ua.ObjectIds.HasTypeDefinition)
+        self.server.get_node(ua.NodeId(11242)).set_value(True)
         logging.info("event history enabled")
 
     def _emit_alarm_transitions(self):
@@ -837,8 +860,6 @@ def main():
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    answer_writes_to_unknown_nodes()
-
     # Create and configure the server
     server = Server()
 
@@ -864,12 +885,12 @@ def main():
         # Setup the address space
         industrial_system.setup_address_space()
 
-        # Start the server
-        server.start()
+        # Publish capabilities before the listener admits clients.
         industrial_system.advertise_operation_limits()
         if not args.no_history:
             industrial_system.historize()
         industrial_system.setup_events(keep_history=not args.no_history)
+        server.start()
         logging.info(f"OPC UA Server started at {args.endpoint}")
         logging.info("Server is running and ready for connections")
 

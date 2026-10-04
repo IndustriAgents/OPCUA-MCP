@@ -73,7 +73,7 @@ def test_a_write_to_an_unknown_node_is_answered_per_item(opcua_server):
     answer nothing at all and close the connection. A client then sat on the
     request until its own transaction timeout — 15s in node-opcua — and lost the
     writes that *did* land alongside it: the mock applies them before it trips.
-    `answer_writes_to_unknown_nodes` in the mock screens those ids out first.
+    The instance-owned mock attribute service preserves these per-item answers.
 
     The good node goes first on purpose: a server that answered the unknown item
     but dropped the rest would still line up if the statuses were checked as a

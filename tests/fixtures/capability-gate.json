@@ -249,7 +249,7 @@
         "reasons": {}
       },
       "url": "opc.tcp://plc:4840",
-      "expected": "capability_not_supported: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11194), and the OPC UA server at opc.tcp://plc:4840 does not offer it (determined on session generation 3 at 2026-09-24T10:00:00.000Z). Nothing was sent. This server keeps no event archive, so past events cannot be read back. Capture events from now on with subscribe_events and read_events, or list the alarms that are active now with list_active_alarms; to keep events, enable event historizing on the OPC UA server."
+      "expected": "capability_not_supported: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11242), and the OPC UA server at opc.tcp://plc:4840 does not offer it (determined on session generation 3 at 2026-09-24T10:00:00.000Z). Nothing was sent. This server keeps no event archive, so past events cannot be read back. Capture events from now on with subscribe_events and read_events, or list the alarms that are active now with list_active_alarms; to keep events, enable event historizing on the OPC UA server."
     },
     {
       "name": "neither history nor aggregates: the advice is history's",
@@ -341,7 +341,7 @@
         "reasons": null
       },
       "url": "opc.tcp://plc:4840",
-      "expected": "capability_unknown: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11194), and whether the OPC UA server at opc.tcp://plc:4840 offers it could not be determined on session generation none (not yet asked: no OPC UA session has been established). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities."
+      "expected": "capability_unknown: read_event_history needs event history (AccessHistoryEventsCapability, ns=0;i=11242), and whether the OPC UA server at opc.tcp://plc:4840 offers it could not be determined on session generation none (not yet asked: no OPC UA session has been established). Nothing was sent. Call it again to re-check; get_server_status reports what is known under capabilities."
     }
   ],
   "status": [

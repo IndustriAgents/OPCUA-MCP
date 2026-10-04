@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Move the bundled Python mock to asyncua, preserving node IDs, histories and
+  control callbacks with instance-owned mock attribute handling. Correct the
+  shared event-history capability node to the standard `ns=0;i=11242`; the old
+  `i=11194` probe missed event archives on independent servers (#144).
+
 - Add explicit Python maintained-client qualification and legacy rollback selection; the default backend stays legacy pending complete qualification (#144).
 
 - Qualify instance-owned maintained OPC UA services through the existing application ports, preserving typed writes, derived method metadata and numeric failure classification (#144).

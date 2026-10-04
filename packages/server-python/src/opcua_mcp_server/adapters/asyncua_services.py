@@ -15,6 +15,7 @@ from asyncua.crypto import security_policies
 from opcua import ua as legacy
 
 from .asyncua_client import ApplicationOwnedClient
+from .asyncua_loop import OwnedLoop
 from .asyncua_values import native_request
 
 
@@ -160,11 +161,10 @@ class MaintainedClient(sync.Client):
     def __init__(self, url, timeout=4):
         # Construct before starting the thread so a malformed URL cannot leak it.
         self.aio_obj = ApplicationOwnedClient(url, timeout=timeout)
-        self.tloop = sync.ThreadLoop(120)
+        self.tloop = OwnedLoop()
         self.close_tloop = True
         self._closed = False
         self.uaclient = ServiceView(self.tloop, self.aio_obj.uaclient)
-        self.tloop.start()
 
     @property
     def application_name(self):
@@ -204,7 +204,8 @@ class MaintainedClient(sync.Client):
             return
         self._closed = True
         try:
-            _post(self.tloop, self.aio_obj.disconnect())
+            if self.tloop.is_alive():
+                _post(self.tloop, self.aio_obj.disconnect())
         finally:
             self.tloop.stop()
 

@@ -18,6 +18,8 @@ def test_clients_own_distinct_sdk_loops_sessions_and_cleanup():
         assert first.tloop is not second.tloop
         assert first.aio_obj.uaclient.session is not second.aio_obj.uaclient.session
         assert first.uaclient.client is first.aio_obj.uaclient
+        assert not first.tloop.is_alive()
+        assert not second.tloop.is_alive()
         first.session_timeout = 10000
         first.secure_channel_timeout = 8000
         assert first.aio_obj.session_timeout == 10000

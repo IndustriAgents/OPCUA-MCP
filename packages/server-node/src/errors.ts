@@ -56,3 +56,19 @@ export function message(key: string, fields: Record<string, string | number> = {
     return value === undefined ? placeholder : String(value);
   });
 }
+
+/** A failed native operation; retain its cause for retry classification. */
+export class AdapterFailure extends ToolFailure {
+  constructor(
+    readonly operation: string,
+    text: string,
+    cause: unknown
+  ) {
+    super(text, { cause });
+  }
+}
+
+/** An error's message, however it arrived. */
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message || error.name : String(error);
+}

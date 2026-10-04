@@ -1,8 +1,8 @@
 // The OPC UA tool implementations.
 //
-// Adding a tool touches this file and contract/tools.json, and nothing else:
-// `listTools` is generated from the contract, `callTool` dispatches by name, and
-// the policy layer authorises it from the `guard` the contract declares.
+// Current-value reads delegate to the application port and native adapter.
+// The remaining feature slices and execution pipeline move incrementally
+// under #141; see docs/feature-modules.md.
 import {
   AttributeIds,
   DataType,
@@ -16,6 +16,10 @@ import {
   ClientSession,
 } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
+
+import { readNodes } from "./application/read.js";
+import { NodeOpcuaReadPort } from "./adapters/opcua-read.js";
+export { toNodeValueRecord } from "./adapters/opcua-read.js";
 
 import { browseAllReferences, typeDefinitionOf } from "./browse.js";
 import {
@@ -39,7 +43,13 @@ import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
 import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
-import { ContractRefusal, ToolFailure, UnexpectedToolFailure, message } from "./errors.js";
+import {
+  ContractRefusal,
+  ToolFailure,
+  UnexpectedToolFailure,
+  describeError,
+  message,
+} from "./errors.js";
 import {
   MAX_HISTORY_VALUES,
   MAX_SUBSCRIPTIONS,
@@ -120,17 +130,6 @@ const ROOT_FOLDER = "ns=0;i=84";
 /** The HasSubtype reference type (ns=0), which links a DataType to its parent. */
 const HAS_SUBTYPE = 45;
 
-/** One node's reading (resultShapes.nodeValues). */
-interface NodeValueRecord {
-  node_id: string;
-  value: unknown;
-  data_type: string | null;
-  status: string;
-  source_timestamp: string | null;
-  server_timestamp: string | null;
-  engineering: AnalogInfo | null;
-}
-
 /** One node found by a browse (resultShapes.nodeRefs.nodes). */
 interface NodeRefRecord {
   node_id: string;
@@ -155,11 +154,6 @@ interface WriteRequest {
   node_id: string;
   value: unknown;
   data_type?: string;
-}
-
-/** An error's message, however it arrived. */
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message || error.name : String(error);
 }
 
 function clampInt(value: number, low: number, high: number): number {
@@ -286,35 +280,6 @@ export function checkMaxChange(
       })
     );
   }
-}
-
-/** One node's reading as a canonical record (resultShapes.nodeValues).
- *
- * The value goes through the *shared* codec, so a Boolean is `true` on both
- * runtimes rather than `true` here and `True` there, and an Int64 is a number
- * or a numeric string rather than node-opcua's `[high, low]` pair. Reading used
- * to stringify natively and so diverged by construction — the one thing
- * `value-encoding.json` exists to prevent, just outside its reach.
- */
-export function toNodeValueRecord(
-  nodeId: string,
-  dataValue: DataValue | undefined,
-  engineering: AnalogInfo | null = null
-): NodeValueRecord {
-  const good = dataValue !== undefined && isGood(dataValue.statusCode);
-  return {
-    node_id: canonicalNodeId(nodeId),
-    value: good ? variantToJson(dataValue?.value) : null,
-    data_type: good ? dataTypeName(dataValue?.value) : null,
-    // An absent status code means Good in OPC UA, so name it rather than null.
-    status: dataValue?.statusCode?.name ?? "Good",
-    source_timestamp: toIsoUtc(dataValue?.sourceTimestamp),
-    server_timestamp: toIsoUtc(dataValue?.serverTimestamp),
-    // What the plant says this number means. null for most nodes, because only
-    // an AnalogItemType publishes it — but on the ones that do it is the
-    // difference between "51.75" and "51.75 °C, normal range 0 to 150".
-    engineering,
-  };
 }
 
 /** Where a truncated history read resumes, or null when its arguments cannot say.
@@ -1384,33 +1349,8 @@ export class OpcuaTools {
    * MaxNodesPerRead is lower gets the list in consecutive Reads instead.
    */
   private async readOpcuaNodes(nodeIds: string[]) {
-    const session = this.requireSession();
-    if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
-      throw new ToolFailure(
-        message("emptyArray", { tool: "read_opcua_nodes", argument: "node_ids" })
-      );
-    }
-    const chunk = readChunk(await this.operationLimits());
-
-    try {
-      const dataValues = await this.readValues(
-        session,
-        nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
-        chunk
-      );
-      // Two extra round trips on a cold cache for the whole batch, none on a
-      // warm one, and never a reason for the read to fail. See node-metadata.ts.
-      const engineering = await this.metadata.forNodes(session, nodeIds);
-      return recordBlocks(
-        nodeIds.map((nodeId, index) =>
-          toNodeValueRecord(nodeId, dataValues[index], engineering.get(nodeId) ?? null)
-        )
-      );
-    } catch (error) {
-      throw new ToolFailure(message("readFailed", { reason: describeError(error) }), {
-        cause: error,
-      });
-    }
+    const port = new NodeOpcuaReadPort(this.requireSession(), this.metadata);
+    return recordBlocks(await readNodes(port, nodeIds, readChunk(await this.operationLimits())));
   }
 
   /** `read_opcua_history`: raw stored readings, or one aggregate per interval.

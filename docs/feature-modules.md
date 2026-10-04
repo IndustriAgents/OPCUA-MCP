@@ -12,6 +12,7 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Invocation and recovery policy | `application/invocation.py` | `application/invocation.ts` | Connected attempt, session identity, one read resend, reauthorization/reaudit/recheck and control uncertainty |
 | Execution envelope | `application/execution.py` | `application/execution.ts` | Bounds/schema checks, waiting for in-flight connections, authorization, fail-closed allowed audit, outcome audit and protocol-normalization hooks |
 | Diagnostics use case and port | `application/diagnostics.py` | `application/diagnostics.ts` | Fast connecting status, disconnected error records and capabilities sampled after the read |
 | Native diagnostics adapter | `adapters/opcua_diagnostics.py` | `adapters/opcua-diagnostics.ts` | Native status/namespace/summary decoding and connection recovery with original causes |
@@ -135,7 +136,17 @@ callbacks; the envelope imports neither MCP nor the native library. Shared
 `execution-port.json` cases cover all four control declarations, refusal before
 operation on policy/audit failure, normalization before failed audit, second
 physical-attempt numbering and suppression of duplicate failure after a retry
-denial. Connection/capability preparation and uncertain-outcome recovery remain
-in the existing runtime shims for the next extraction. The current ordering is
+denial. Connection/capability preparation and uncertain-outcome recovery now use the
+shared invocation port; runtime shims provide only the underlying services. The current ordering is
 preserved: bounds/schema, in-flight wait, policy, allowed audit, then connected
 invocation/capability preparation; the refactor does not broaden permission.
+
+Invocation/recovery consumes callbacks rather than a native connection or
+protocol server. It reconnects once after a classified dead session, then follows
+only the contract retry policy: controls report uncertainty without a second
+send; reconnect-only tools propagate their failure; reads reauthorize, durably
+audit the second permission, recheck the new capability generation and dispatch
+once more. A second failure is never retried. Fourteen shared
+`invocation-port.json` cases cover each control, recovery failures, changed
+policy/capabilities and audit failure before resend. Status remains a special
+bounded-warmup invocation, without connecting in the outer pipeline.

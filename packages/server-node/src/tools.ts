@@ -3,6 +3,7 @@
 // Current-value reads delegate to the application port and native adapter.
 // The remaining feature slices and execution pipeline move incrementally
 // under #141; see docs/feature-modules.md.
+import { invokeTool } from "./application/invocation.js";
 import { executeTool, type ExecutionCall } from "./application/execution.js";
 import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -717,125 +718,53 @@ export class OpcuaTools {
   }
 
   private async runTool(call: ExecutionCall) {
-    const { name, arguments: args, spec } = call;
-    if (name === "get_server_status") {
-      await this.awaitWarmUp();
-      return await this.invokeFeature(spec.name, args, async () =>
-        statusResult(await this.getServerStatus())
-      );
-    }
-    try {
-      await this.ensureConnection();
-    } catch (error) {
-      throw new ContractRefusal(notConnectedMessage(this.conn.endpointUrl, describeError(error)));
-    }
-    call.session = this.conn.sessionId;
-    await this.ensureCapabilities(spec, args);
-    try {
-      return await this.invokeFeature(spec.name, args);
-    } catch (error) {
-      if (!isConnectionError(error)) throw error;
-      return await this.recover(spec, args, call.callId, call, call.session, error);
-    }
-  }
-
-  /** Rebuild the session a call died on, and decide what may follow it.
-   *
-   * A connection can die between `ensureConnection` and the call: it can only
-   * report what was true a moment ago. What happens next is settled by the
-   * contract's own `retryPolicy` — *not* by `annotations.idempotentHint`, which
-   * both runtimes used to read for this. That annotation tells the model whether
-   * calling a tool twice is meaningful; this decides whether this server may put
-   * a second request on the wire after an outcome it does not know.
-   * `write_opcua_nodes` carries `idempotentHint: true` and must not be re-sent:
-   * Part 4 §5.11.4 lets a Write partially succeed and defines no operation order,
-   * so a lost response never proved the write had not landed (issue #106).
-   *
-   * The connection is rebuilt whatever the policy, so the next call finds a live
-   * session.
-   */
-  private async recover(
-    spec: ToolSpec,
-    args: Record<string, unknown>,
-    callId: string,
-    audit: { attempt: number; denied: boolean },
-    session: string | null,
-    error: unknown
-  ) {
-    const policy = spec.retryPolicy;
-    console.error(
-      `OPC UA call failed on a dead session; reconnecting${
-        policy === "resend" ? " and retrying once" : ""
-      }`
+    return await invokeTool(
+      {
+        endpoint: () => this.conn.endpointUrl,
+        session: () => this.conn.sessionId,
+        hasConnection: () => true,
+        waitForWarmUp: () => this.awaitWarmUp(),
+        connect: () => this.ensureConnection(),
+        capabilities: (call) => this.ensureCapabilities(call.spec, call.arguments),
+        dispatch: async (call) =>
+          call.name === "get_server_status"
+            ? await this.invokeFeature(call.spec.name, call.arguments, async () =>
+                statusResult(await this.getServerStatus())
+              )
+            : await this.invokeFeature(call.spec.name, call.arguments),
+        isConnectionError,
+        reconnect: (session) => this.conn.reconnect(session),
+        logRecovery: (resend) =>
+          console.error(
+            `OPC UA call failed on a dead session; reconnecting${resend ? " and retrying once" : ""}`
+          ),
+        targets: (call) => describeTargets(call.spec, call.arguments),
+        authorize: (call) => this.policy.authorize(call.name, call.arguments),
+        allowed: (call) =>
+          auditPermission(
+            this.audit,
+            this.policy,
+            this.conn,
+            call.name,
+            call.arguments,
+            call.callId,
+            call.attempt
+          ),
+        denied: (call, reason) =>
+          auditAfter(
+            this.audit,
+            this.policy,
+            this.conn,
+            call.name,
+            call.arguments,
+            "denied",
+            call.callId,
+            call.attempt,
+            reason
+          ),
+      },
+      call
     );
-    try {
-      await this.conn.reconnect(session);
-    } catch (rebuildFailed) {
-      // The same failure the pre-dispatch path reports, worded the same way.
-      // Left bare, this reached the model as whatever the client library said —
-      // the same outage the call before it had described as "Not connected to the
-      // OPC UA server at …: … Call get_server_status for details", so one server
-      // said two things about one event depending on where in the request it
-      // happened to notice.
-      throw new ContractRefusal(
-        notConnectedMessage(this.conn.endpointUrl, describeError(rebuildFailed))
-      );
-    }
-
-    if (policy === "uncertainOutcome") {
-      throw new Error(
-        message("uncertainOutcome", {
-          tool: spec.name,
-          reason: describeError(error),
-          targets: describeTargets(spec, args),
-        })
-      );
-    }
-    if (policy !== "resend") throw error;
-
-    // Re-authorize before the second attempt, and audit it as its own.
-    //
-    // `reconnect` has just re-read the server's NamespaceArray and re-bound it
-    // into the policy, because a server that restarted may have loaded its
-    // namespaces in a different order — which is the whole reason the `nsu=`
-    // allowlist form exists. So the mapping this call was authorized against is
-    // not necessarily the mapping the second attempt will resolve against, and
-    // re-running the check is what stops a request reaching a node nobody
-    // allowed (issue #105). It touches no network.
-    audit.attempt = 2;
-    try {
-      this.policy.authorize(spec.name, args);
-    } catch (denial) {
-      audit.denied = true;
-      auditAfter(
-        this.audit,
-        this.policy,
-        this.conn,
-        spec.name,
-        args,
-        "denied",
-        callId,
-        2,
-        denial instanceof Error ? denial.message : String(denial)
-      );
-      throw denial;
-    }
-    try {
-      auditPermission(this.audit, this.policy, this.conn, spec.name, args, callId, 2);
-    } catch (refusal) {
-      // Refused before the second attempt went out, and recorded as nothing
-      // more: a `failed` line would read as though the plant had answered.
-      audit.denied = true;
-      throw refusal;
-    }
-
-    // And re-check what the server can do, for the same reason: the session the
-    // first attempt was checked against is gone, and the one this attempt rides
-    // on may be a restarted server that no longer keeps history. Only a `resend`
-    // tool gets here, and every capability-gated tool is one (#140).
-    await this.ensureCapabilities(spec, args);
-
-    return await this.invokeFeature(spec.name, args);
   }
 
   /** Anticipated failures keep their wording; crashes share the Python SDK boundary. */

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract contract-directed invocation and recovery (#141)
+- Share the connected-attempt and recovery policy behind injected services.
+  Preserve one read resend with fresh policy/audit/capability checks, one control
+  send with uncertainty reporting, and the reconnect-only subscription rules.
+
 ### Changed — extract the common execution envelope (#141)
 - Route every tool through native-free authorization/audit orchestration with
   injected protocol and invocation hooks. Preserve fail-closed audit permission,

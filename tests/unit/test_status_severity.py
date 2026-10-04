@@ -12,12 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import ROOT
-from mcp.server.mcpserver.exceptions import ToolError
 from opcua import ua
 from opcua_mcp_server.adapters.opcua_read import node_value_record as _node_value_record
+from opcua_mcp_server.adapters.opcua_write import check_max_change
+from opcua_mcp_server.errors import ApplicationRefusal
 from opcua_mcp_server.policy import ValueBound
 from opcua_mcp_server.records import history_data
-from opcua_mcp_server.server import check_max_change
 
 FIXTURE = json.loads(
     (ROOT / "tests" / "fixtures" / "status-severity.json").read_text(encoding="utf-8")
@@ -62,7 +62,7 @@ def test_max_change_measures_from_a_good_subcode_s_value(case):
     if case["error"] is None:
         check_max_change(*arguments)
     else:
-        with pytest.raises(ToolError) as raised:
+        with pytest.raises(ApplicationRefusal) as raised:
             check_max_change(*arguments)
         assert str(raised.value) == case["error"]
 

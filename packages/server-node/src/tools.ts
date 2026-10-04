@@ -3,17 +3,11 @@
 // Current-value reads delegate to the application port and native adapter.
 // The remaining feature slices and execution pipeline move incrementally
 // under #141; see docs/feature-modules.md.
-import {
-  AttributeIds,
-  DataType,
-  Variant,
-  VariantArrayType,
-  DataValue,
-  AggregateFunction,
-  ClientSession,
-} from "node-opcua-client";
+import { AttributeIds, DataValue, AggregateFunction, ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { writeNodes, type WriteRequest } from "./application/write.js";
+import { NodeOpcuaWritePort } from "./adapters/opcua-write.js";
 import { callMethod } from "./application/methods.js";
 import { NodeOpcuaMethodPort } from "./adapters/opcua-methods.js";
 import { browseNodes, type BrowseRequest } from "./application/browse.js";
@@ -42,7 +36,7 @@ import {
 } from "./connection.js";
 import type { ToolName } from "./generated/contract-types.js";
 import { CONTRACT, type ToolSpec } from "./contract.js";
-import { NodeMetadata, withinRange, type AnalogInfo } from "./node-metadata.js";
+import { NodeMetadata } from "./node-metadata.js";
 import { AuditSink, AuditWriteError, buildRecord, operatorId } from "./audit.js";
 import {
   ContractRefusal,
@@ -109,130 +103,20 @@ import {
 } from "./subscriptions.js";
 import {
   ToolPolicy,
-  asNumber,
   controlGate,
   formatNumber,
   pairsAt,
   serverIdentityRecord,
   toolPolicy,
   valuesAt,
-  type ValueBound,
 } from "./policy.js";
-import { convertForVariant } from "./variant-codec.js";
 import { isGood } from "./status.js";
 import { randomBytes } from "crypto";
 
 /** The standard Root and Objects folders, which a browse path is written from. */
 
-/** One attempted write (resultShapes.writeResults). */
-interface WriteResultRecord {
-  node_id: string;
-  status: string;
-  error: string | null;
-}
-
-/** One requested write, as `write_opcua_nodes` receives it. */
-interface WriteRequest {
-  node_id: string;
-  value: unknown;
-  data_type?: string;
-}
-
-/** The OPC UA name of a variant's data type: "Double", "Boolean", "Int32". */
-function dataTypeName(variant: Variant | null | undefined): string | null {
-  const dataType = variant?.dataType;
-  if (dataType === undefined || dataType === null || dataType === DataType.Null) return null;
-  return DataType[dataType] ?? null;
-}
-
-/** A DataType named as the contract names it, or a readable refusal. */
-function namedDataType(name: string): DataType {
-  const dataType = DataType[name as keyof typeof DataType];
-  if (typeof dataType !== "number") {
-    throw new Error(`Unknown data_type "${name}"`);
-  }
-  return dataType;
-}
-
-/** A node's present reading as a number, or null if there is not one to compare. */
-function currentNumber(dataValue: DataValue | undefined): number | null {
-  if (!dataValue || !isGood(dataValue.statusCode)) return null;
-  return asNumber(variantToJson(dataValue.value));
-}
-
-/** Refuse a value outside the range the OPC UA server itself published.
- *
- * This is the bound that needs no policy file at all, and it is the better one:
- * the plant declared what the node is expected to hold in normal operation
- * (Part 8 §5.3), so nobody has to retype it into a JSON file and keep it in
- * step. An operator's `min`/`max` is checked separately, by the policy layer,
- * and both apply — so a policy file can only ever *narrow* what the equipment
- * already allows, never widen it.
- *
- * A non-numeric value is left alone: the variant codec is what judges whether a
- * string or a boolean belongs on this node, and it says so better than a range
- * comparison could.
- */
-export function checkEuRange(nodeId: string, value: unknown, info: AnalogInfo | null): void {
-  const range = info?.eu_range;
-  if (!range) return;
-  const number = asNumber(value);
-  if (number === null || withinRange(range, number)) return;
-  throw new ContractRefusal(
-    message("valueOutOfRange", {
-      value: formatNumber(number),
-      node_id: nodeId,
-      low: formatNumber(range.low),
-      high: formatNumber(range.high),
-      unit: info?.unit ? ` ${info.unit}` : "",
-      source: "the OPC UA server's own EURange",
-    })
-  );
-}
-
-/** Refuse a move larger than the operator allows in one write.
- *
- * Scalars only. An array write has no single "how far did it move", and guessing
- * one — the largest element-wise delta, say — would be a rule nobody could
- * predict from the policy file, so it is refused instead.
- */
-export function checkMaxChange(
-  nodeId: string,
-  value: unknown,
-  limit: number,
-  dataValue: DataValue | undefined
-): void {
-  const present = currentNumber(dataValue);
-  if (present === null) {
-    const reason = !dataValue
-      ? "it could not be read"
-      : !isGood(dataValue.statusCode)
-        ? dataValue.statusCode.name
-        : "the node returned no usable value";
-    throw new ContractRefusal(message("currentValueUnreadable", { node_id: nodeId, reason }));
-  }
-  const wanted = asNumber(value);
-  if (wanted === null) {
-    throw new ContractRefusal(
-      message("valueNotComparable", {
-        node_id: nodeId,
-        value: JSON.stringify(value) ?? String(value),
-      })
-    );
-  }
-  const change = Math.abs(wanted - present);
-  if (change > limit) {
-    throw new ContractRefusal(
-      message("valueChangeTooLarge", {
-        node_id: nodeId,
-        current: formatNumber(present),
-        value: formatNumber(wanted),
-        change: formatNumber(change),
-        limit: formatNumber(limit),
-      })
-    );
-  }
-}
+export { checkEuRange } from "./application/write.js";
+export { checkMaxChange } from "./adapters/opcua-write.js";
 
 /** Where a truncated history read resumes, or null when its arguments cannot say.
  *
@@ -1485,168 +1369,27 @@ export class OpcuaTools {
   private async writeOpcuaNodes(nodes: WriteRequest[]) {
     const session = this.requireSession();
     if (!Array.isArray(nodes) || nodes.length === 0) {
-      throw new ToolFailure(
+      throw new ContractRefusal(
         message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" })
       );
     }
+    const port = new NodeOpcuaWritePort(session, this.metadata);
     const serverLimits = await this.operationLimits();
-    const limit = writeLimit(serverLimits);
-    if (nodes.length > limit) {
-      throw new ContractRefusal(
-        message("tooManyWritesForServer", {
-          tool: "write_opcua_nodes",
-          count: nodes.length,
-          limit,
-        })
-      );
-    }
-    const bounds = new Map<number, ValueBound | null>(
-      nodes.map((node, index) => [index, this.policy.boundFor(String(node?.node_id ?? ""))])
+    const bounds = new Map(
+      nodes.map((node, index) => [
+        index,
+        this.policy.boundFor(String(node?.node_id ?? ""))?.maxChange ?? null,
+      ])
     );
-
-    try {
-      const results: WriteResultRecord[] = nodes.map((node) => ({
-        node_id: canonicalNodeId(String(node?.node_id ?? "")),
-        status: "Good",
-        error: null,
-      }));
-
-      // A node needs its current value read for either of two reasons: its type
-      // was not declared and has to be inferred, or it carries a `max_change`
-      // bound, which is a bound on the *move* and so cannot be judged without
-      // knowing where the node is now. One read covers both.
-      const inferred = nodes
-        .map((node, index) => ({ node, index }))
-        .filter((entry) => !entry.node?.data_type);
-      const needsCurrent = [
-        ...new Set([
-          ...inferred.map((entry) => entry.index),
-          ...[...bounds].filter(([, b]) => b?.maxChange != null).map(([index]) => index),
-        ]),
-      ].sort((a, b) => a - b);
-      const current =
-        needsCurrent.length > 0
-          ? await this.readValues(
-              session,
-              needsCurrent.map((index) => ({
-                nodeId: nodes[index].node_id,
-                attributeId: AttributeIds.Value,
-              })),
-              readChunk(serverLimits)
-            )
-          : [];
-      const currentByIndex = new Map(
-        needsCurrent.map((index, position) => [index, current[position]])
-      );
-
-      // Before anything is sent, and throwing rather than marking one record:
-      // the whole batch is refused so it can never end up partially applied,
-      // which is the property the identity allowlist already had.
-      await this.checkWriteBounds(session, nodes, bounds, currentByIndex);
-
-      const writes: Array<{ nodeId: string; attributeId: AttributeIds; value: DataValue }> = [];
-      const writeIndices: number[] = [];
-
-      nodes.forEach((node, index) => {
-        try {
-          const declared = node?.data_type ? namedDataType(node.data_type) : undefined;
-          let dataType: DataType;
-          let arrayType = VariantArrayType.Scalar;
-          let dimensions: number[] | null = null;
-
-          if (declared !== undefined) {
-            dataType = declared;
-            if (Array.isArray(node.value)) arrayType = VariantArrayType.Array;
-          } else {
-            const dataValue = currentByIndex.get(index);
-            if (!dataValue || !isGood(dataValue.statusCode) || !dataValue.value) {
-              results[index] = {
-                node_id: results[index].node_id,
-                status: dataValue?.statusCode?.name ?? "BadUnexpectedError",
-                error:
-                  "could not read the node's data type to convert the value; " +
-                  "give data_type to write without reading it first",
-              };
-              return;
-            }
-            dataType = dataValue.value.dataType;
-            arrayType = dataValue.value.arrayType;
-            dimensions = dataValue.value.dimensions;
-          }
-
-          const value = convertForVariant(node.value, dataType, arrayType);
-          writes.push({
-            nodeId: node.node_id,
-            attributeId: AttributeIds.Value,
-            value: new DataValue({
-              value: new Variant({ dataType, arrayType, dimensions, value }),
-            }),
-          });
-          writeIndices.push(index);
-        } catch (error) {
-          // A value this server refuses to send at all — a ByteString over
-          // limits.maxByteStringBytes — stops the batch rather than becoming
-          // one node's status: nothing has been sent yet, and nothing should be.
-          if (error instanceof ContractRefusal) throw error;
-          results[index] = {
-            node_id: results[index].node_id,
-            status: "BadTypeMismatch",
-            error: describeError(error),
-          };
-        }
-      });
-
-      if (writes.length > 0) {
-        const statuses = await session.write(writes);
-        statuses.forEach((statusCode, position) => {
-          results[writeIndices[position]].status = statusCode.name;
-        });
-      }
-
-      return recordBlocks(results);
-    } catch (error) {
-      // A refusal is already worded the way the contract words it, and it ends
-      // in "Nothing was written". Wrapping it in "Failed to write nodes:" would
-      // bury the reason under a framing that says the plant rejected the value
-      // when in fact this server never sent it.
-      if (error instanceof ContractRefusal) throw error;
-      throw new ToolFailure(message("writeFailed", { reason: describeError(error) }), {
-        cause: error,
-      });
-    }
-  }
-
-  /** Refuse the whole batch if any value is outside what its node may hold.
-   *
-   * Two bounds, from two places, and both apply. The operator's `min`/`max` and
-   * `enum` were already checked by the policy layer, before the network was
-   * touched at all; what is left here is everything that needed a read — the
-   * server's own `EURange`, and `maxChange`, which is a bound on the move.
-   */
-  private async checkWriteBounds(
-    session: ClientSession,
-    nodes: WriteRequest[],
-    bounds: Map<number, ValueBound | null>,
-    current: Map<number, DataValue | undefined>
-  ): Promise<void> {
-    const nodeIds = nodes.map((node) => String(node?.node_id ?? ""));
-    const engineering = this.policy.config.allowOutOfRangeWrites
-      ? new Map<string, AnalogInfo | null>()
-      : await this.metadata.forNodes(session, nodeIds);
-
-    nodes.forEach((node, index) => {
-      const nodeId = nodeIds[index];
-      const value = node?.value;
-      // An array write is checked element by element. Writing [0, 9999] to a
-      // node whose range stops at 100 is writing 9999 to it.
-      for (const element of Array.isArray(value) ? value : [value]) {
-        checkEuRange(nodeId, element, engineering.get(nodeId) ?? null);
-      }
-      const bound = bounds.get(index);
-      if (bound?.maxChange != null) {
-        checkMaxChange(nodeId, value, bound.maxChange, current.get(index));
-      }
-    });
+    return recordBlocks(
+      await writeNodes(
+        port,
+        nodes,
+        { write: writeLimit(serverLimits), read: readChunk(serverLimits) },
+        bounds,
+        this.policy.config.allowOutOfRangeWrites
+      )
+    );
   }
 
   /** `call_opcua_method`: run a method with arguments of the types it declares.

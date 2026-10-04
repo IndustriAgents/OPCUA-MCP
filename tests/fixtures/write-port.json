@@ -1,0 +1,572 @@
+{
+  "cases": [
+    {
+      "name": "explicit write-only values skip inference but keep engineering",
+      "nodes": [
+        {
+          "node_id": "i=85",
+          "value": "café 🙂",
+          "data_type": "String"
+        },
+        {
+          "node_id": "ns=2;i=20",
+          "value": 2,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "statuses": [
+        "GoodClamped",
+        "BadNotWritable"
+      ],
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "i=85",
+            "ns=2;i=20"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "prepare",
+          "index": 1
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=0;i=85",
+          "status": "GoodClamped",
+          "error": null
+        },
+        {
+          "node_id": "ns=2;i=20",
+          "status": "BadNotWritable",
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "inference and max change share one ordered read",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 50
+        },
+        {
+          "node_id": "ns=2;i=21",
+          "value": 55,
+          "data_type": "Double"
+        },
+        {
+          "node_id": "ns=2;i=22",
+          "value": 1,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {
+        "1": 10
+      },
+      "allow_out_of_range": false,
+      "current": {
+        "0": {
+          "good": true,
+          "status": "GoodClamped",
+          "number": 40
+        },
+        "1": {
+          "good": true,
+          "status": "Good",
+          "number": 50
+        }
+      },
+      "calls": [
+        {
+          "name": "current",
+          "indices": [
+            0,
+            1
+          ],
+          "chunk": 2
+        },
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20",
+            "ns=2;i=21",
+            "ns=2;i=22"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "prepare",
+          "index": 1
+        },
+        {
+          "name": "prepare",
+          "index": 2
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=2;i=20",
+          "status": "Good",
+          "error": null
+        },
+        {
+          "node_id": "ns=2;i=21",
+          "status": "Good",
+          "error": null
+        },
+        {
+          "node_id": "ns=2;i=22",
+          "status": "Good",
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "empty batch does not touch the port",
+      "nodes": [],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "calls": [],
+      "error": "emptyArray",
+      "fields": {
+        "tool": "write_opcua_nodes",
+        "argument": "nodes"
+      }
+    },
+    {
+      "name": "over server limit is refused before any read",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=0",
+          "value": 1
+        },
+        {
+          "node_id": "ns=2;i=1",
+          "value": 1
+        },
+        {
+          "node_id": "ns=2;i=2",
+          "value": 1
+        },
+        {
+          "node_id": "ns=2;i=3",
+          "value": 1
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "calls": [],
+      "error": "tooManyWritesForServer",
+      "fields": {
+        "tool": "write_opcua_nodes",
+        "count": 4,
+        "limit": 3
+      }
+    },
+    {
+      "name": "array EURange refusal occurs before preparation",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": [
+            0,
+            101
+          ],
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "engineering": {
+        "ns=2;i=20": {
+          "unit": "°C",
+          "eu_range": {
+            "low": 0,
+            "high": 100
+          }
+        }
+      },
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20"
+          ]
+        }
+      ],
+      "error": "valueOutOfRange",
+      "fields": {
+        "node_id": "ns=2;i=20",
+        "value": "101",
+        "low": "0",
+        "high": "100",
+        "unit": " °C",
+        "source": "the OPC UA server's own EURange"
+      }
+    },
+    {
+      "name": "unreadable current refuses a bounded write",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 10,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {
+        "0": 1
+      },
+      "allow_out_of_range": false,
+      "current": {
+        "0": {
+          "good": false,
+          "status": "BadNotReadable",
+          "number": null
+        }
+      },
+      "calls": [
+        {
+          "name": "current",
+          "indices": [
+            0
+          ],
+          "chunk": 2
+        },
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20"
+          ]
+        }
+      ],
+      "error": "currentValueUnreadable",
+      "fields": {
+        "node_id": "ns=2;i=20",
+        "reason": "BadNotReadable"
+      }
+    },
+    {
+      "name": "range bypass still enforces max change",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 52,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {
+        "0": 2
+      },
+      "allow_out_of_range": true,
+      "current": {
+        "0": {
+          "good": true,
+          "status": "GoodClamped",
+          "number": 50
+        }
+      },
+      "calls": [
+        {
+          "name": "current",
+          "indices": [
+            0
+          ],
+          "chunk": 2
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=2;i=20",
+          "status": "Good",
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "mixed conversion error stays correlated to input",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 1,
+          "data_type": "Double"
+        },
+        {
+          "node_id": "ns=2;i=21",
+          "value": "oops",
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "failures": {
+        "1": {
+          "status": "BadTypeMismatch",
+          "error": "Cannot convert \"oops\" to Double"
+        }
+      },
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20",
+            "ns=2;i=21"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "prepare",
+          "index": 1
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=2;i=20",
+          "status": "Good",
+          "error": null
+        },
+        {
+          "node_id": "ns=2;i=21",
+          "status": "BadTypeMismatch",
+          "error": "Cannot convert \"oops\" to Double"
+        }
+      ]
+    },
+    {
+      "name": "all conversion failures never send",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": "oops",
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "failures": {
+        "0": {
+          "status": "BadTypeMismatch",
+          "error": "Cannot convert \"oops\" to Double"
+        }
+      },
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=2;i=20",
+          "status": "BadTypeMismatch",
+          "error": "Cannot convert \"oops\" to Double"
+        }
+      ]
+    },
+    {
+      "name": "encoded-size refusal abandons earlier preparations",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 1,
+          "data_type": "Double"
+        },
+        {
+          "node_id": "ns=2;i=21",
+          "value": 1,
+          "data_type": "ByteString"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "refuse_at": 1,
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20",
+            "ns=2;i=21"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "prepare",
+          "index": 1
+        }
+      ],
+      "refusal": "encoded limit; nothing sent"
+    },
+    {
+      "name": "send failure is attempted exactly once",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 1,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "crash": "send",
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "error": "writeFailed",
+      "fields": {
+        "reason": "native timeout"
+      }
+    },
+    {
+      "name": "inference failure prevents preparation",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 1
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "crash": "current",
+      "calls": [
+        {
+          "name": "current",
+          "indices": [
+            0
+          ],
+          "chunk": 2
+        }
+      ],
+      "error": "writeFailed",
+      "fields": {
+        "reason": "native timeout"
+      }
+    },
+    {
+      "name": "metadata failure prevents preparation",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=20",
+          "value": 1,
+          "data_type": "Double"
+        }
+      ],
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "crash": "engineering",
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=20"
+          ]
+        }
+      ],
+      "error": "writeFailed",
+      "fields": {
+        "reason": "native timeout"
+      }
+    }
+  ]
+}

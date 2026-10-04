@@ -26,10 +26,12 @@ from . import events
 from .adapters.opcua_browse import PythonOpcuaBrowsePort
 from .adapters.opcua_methods import PythonOpcuaMethodPort
 from .adapters.opcua_read import PythonOpcuaReadPort
+from .adapters.opcua_write import PythonOpcuaWritePort
 from .aggregates import validate_aggregate_function
 from .application.browse import browse_nodes
 from .application.methods import call_method
 from .application.read import read_nodes
+from .application.write import write_nodes
 from .audit import (
     AuditSink,
     AuditWriteError,
@@ -87,24 +89,20 @@ from .limits import (
     history_values,
 )
 from .node_ids import canonical_node_id
-from .node_metadata import AnalogInfo
 from .notices import notice
-from .numeric import json_text
 from .operation_limits import (
     read_chunk,
     read_operation_limits,
     write_limit,
 )
 from .policy import (
-    ValueBound,
-    as_number,
     control_gate,
     describe_policy,
     format_number,
     server_identity_record,
     values_at,
 )
-from .records import history_data, history_records, variant_to_json
+from .records import history_data, history_records
 from .result_text import normalize_result_text, pretty_json
 from .security import describe_security, security_config
 from .state import ServerState
@@ -114,7 +112,6 @@ from .subscriptions import (
     unknown_subscriptions_message,
 )
 from .validation import validate_arguments
-from .variant_codec import convert_for_variant
 from .version import package_version
 
 
@@ -1347,7 +1344,7 @@ async def browse_opcua_nodes(
 # --- writing ---------------------------------------------------------------------
 
 
-def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
+async def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     """
     Write a value to one or more OPC UA nodes.
 
@@ -1372,222 +1369,27 @@ def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[dict]:
     """
     if not nodes:
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
-    client = ctx.request_context.lifespan_context["opcua_client"]
     state = _state(ctx)
-    limit = write_limit(state.operation_limits)
-    if len(nodes) > limit:
-        raise ToolError(
-            error_message(
-                "tooManyWritesForServer", tool="write_opcua_nodes", count=len(nodes), limit=limit
-            )
-        )
-    policy = state.policy
-    bounds = {
-        index: policy.bound_for(str(node.get("node_id", ""))) for index, node in enumerate(nodes)
-    }
-    try:
-        results: list[dict] = [
-            {
-                "node_id": canonical_node_id(str(node.get("node_id", ""))),
-                "status": "Good",
-                "error": None,
-            }
-            for node in nodes
-        ]
-
-        # A node needs its current value read for either of two reasons: its type
-        # was not declared and has to be inferred, or it carries a `max_change`
-        # bound, which is a bound on the *move* and so cannot be judged without
-        # knowing where the node is now. One read covers both.
-        inferred = [index for index, node in enumerate(nodes) if not node.get("data_type")]
-        needs_current = sorted(
-            set(inferred)
-            | {
-                index
-                for index, bound in bounds.items()
-                if bound is not None and bound.max_change is not None
-            }
-        )
-        current: dict[int, Any] = {}
-        if needs_current:
-            read = _read_values(
-                client,
-                [client.get_node(nodes[index]["node_id"]).nodeid for index in needs_current],
-                ua.AttributeIds.Value,
-                read_chunk(state.operation_limits),
-            )
-            current = dict(zip(needs_current, read, strict=True))
-
-        # Before anything is sent, and raising rather than marking one record:
-        # the whole batch is refused so it can never end up partially applied,
-        # which is the property the identity allowlist already had.
-        check_write_bounds(state, nodes, bounds, current, client)
-
-        write_ids = []
-        write_values = []
-        write_indices = []
-        for index, node in enumerate(nodes):
-            try:
-                declared = node.get("data_type")
-                if declared:
-                    variant_type = ua.VariantType[declared]
-                    is_array = isinstance(node.get("value"), (list, tuple))
-                else:
-                    data_value = current.get(index)
-                    if data_value is None or not data_value.StatusCode.is_good():
-                        status = data_value.StatusCode.name if data_value else "BadUnexpectedError"
-                        results[index] = {
-                            "node_id": results[index]["node_id"],
-                            "status": str(status),
-                            "error": (
-                                "could not read the node's data type to convert the value; "
-                                "give data_type to write without reading it first"
-                            ),
-                        }
-                        continue
-                    variant_type = data_value.Value.VariantType
-                    is_array = data_value.Value.is_array
-
-                converted = convert_for_variant(node.get("value"), variant_type, is_array)
-                write_ids.append(client.get_node(node["node_id"]).nodeid)
-                write_values.append(ua.DataValue(ua.Variant(converted, variant_type)))
-                write_indices.append(index)
-            except LimitExceeded as e:
-                # A value this server refuses to send at all — a ByteString over
-                # limits.maxByteStringBytes — stops the batch rather than
-                # becoming one node's status: nothing has been sent yet, and
-                # nothing should be.
-                raise ToolError(str(e)) from e
-            except Exception as e:
-                results[index] = {
-                    "node_id": results[index]["node_id"],
-                    "status": "BadTypeMismatch",
-                    "error": str(e),
-                }
-
-        if write_ids:
-            statuses = client.uaclient.set_attributes(
-                write_ids, write_values, ua.AttributeIds.Value
-            )
-            for index, status in zip(write_indices, statuses, strict=True):
-                results[index]["status"] = str(status.name)
-
-        return results
-    except ToolError:
-        # A refusal is already worded the way the contract words it, and it ends
-        # in "Nothing was written". Wrapping it in "Failed to write nodes:" would
-        # bury the reason under a framing that says the plant rejected the value
-        # when in fact this server never sent it.
-        raise
-    except Exception as e:
-        raise ToolError(error_message("writeFailed", reason=describe_error(e))) from e
-
-
-def _current_number(data_value: Any) -> float | None:
-    """A node's present reading as a number, or None if there is not one to compare."""
-    status = getattr(data_value, "StatusCode", None)
-    if data_value is None or (status is not None and not status.is_good()):
-        return None
-    return as_number(variant_to_json(getattr(data_value, "Value", None)))
-
-
-def check_eu_range(node_id: str, value: Any, info: AnalogInfo | None) -> None:
-    """Refuse a value outside the range the OPC UA server itself published.
-
-    This is the bound that needs no policy file at all, and it is the better one:
-    the plant declared what the node is expected to hold in normal operation
-    (Part 8 §5.3), so nobody has to retype it into a JSON file and keep it in
-    step. An operator's ``min``/``max`` is checked separately, by the policy
-    layer, and both apply — so a policy file can only ever *narrow* what the
-    equipment already allows, never widen it.
-
-    A non-numeric value is left alone: the variant codec is what judges whether a
-    string or a boolean belongs on this node, and it says so better than a range
-    comparison could.
-    """
-    if info is None or info.eu_range is None:
-        return
-    number = as_number(value)
-    if number is None or info.eu_range.contains(number):
-        return
-    raise ToolError(
-        error_message(
-            "valueOutOfRange",
-            value=format_number(number),
-            node_id=node_id,
-            low=format_number(info.eu_range.low),
-            high=format_number(info.eu_range.high),
-            unit=f" {info.unit}" if info.unit else "",
-            source="the OPC UA server's own EURange",
-        )
+    port = PythonOpcuaWritePort(
+        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata
     )
-
-
-def check_max_change(node_id: str, value: Any, bound: ValueBound, data_value: Any) -> None:
-    """Refuse a move larger than the operator allows in one write.
-
-    Scalars only. An array write has no single "how far did it move", and
-    guessing one — the largest element-wise delta, say — would be a rule nobody
-    could predict from the policy file, so it is refused instead.
-    """
-    present = _current_number(data_value)
-    if present is None:
-        reason = "the node returned no usable value"
-        status = getattr(data_value, "StatusCode", None)
-        if data_value is None:
-            reason = "it could not be read"
-        elif status is not None and not status.is_good():
-            reason = str(status.name)
-        raise ToolError(error_message("currentValueUnreadable", node_id=node_id, reason=reason))
-    wanted = as_number(value)
-    if wanted is None:
-        raise ToolError(
-            error_message("valueNotComparable", node_id=node_id, value=json_text(value))
-        )
-    change = abs(wanted - present)
-    if change > bound.max_change:
-        raise ToolError(
-            error_message(
-                "valueChangeTooLarge",
-                node_id=node_id,
-                current=format_number(present),
-                value=format_number(wanted),
-                change=format_number(change),
-                limit=format_number(bound.max_change),
-            )
-        )
-
-
-def check_write_bounds(
-    state: ServerState,
-    nodes: list[dict[str, Any]],
-    bounds: dict[int, ValueBound | None],
-    current: dict[int, Any],
-    client: Any,
-) -> None:
-    """Refuse the whole batch if any value is outside what its node may hold.
-
-    Two bounds, from two places, and both apply. The operator's ``min``/``max``
-    and ``enum`` were already checked by the policy layer, before the network was
-    touched at all; what is left here is everything that needed a read — the
-    server's own ``EURange``, and ``max_change``, which is a bound on the move.
-    """
-    node_ids = [str(node.get("node_id", "")) for node in nodes]
-    engineering = (
-        {}
-        if state.policy.config.allow_out_of_range_writes
-        else state.node_metadata.for_nodes(client, node_ids)
-    )
+    bounds = {}
     for index, node in enumerate(nodes):
-        node_id = node_ids[index]
-        value = node.get("value")
-        # An array write is checked element by element. Writing [0, 9999] to a
-        # node whose range stops at 100 is writing 9999 to it.
-        for element in value if isinstance(value, list) else [value]:
-            check_eu_range(node_id, element, engineering.get(node_id))
-        bound = bounds.get(index)
-        if bound is not None and bound.max_change is not None:
-            check_max_change(node_id, value, bound, current.get(index))
+        bound = state.policy.bound_for(str(node.get("node_id", "")))
+        bounds[index] = bound.max_change if bound else None
+    try:
+        return await write_nodes(
+            port,
+            nodes,
+            {
+                "write": write_limit(state.operation_limits),
+                "read": read_chunk(state.operation_limits),
+            },
+            bounds,
+            state.policy.config.allow_out_of_range_writes,
+        )
+    except (ApplicationRefusal, AdapterFailure) as error:
+        raise ToolError(str(error)) from error
 
 
 async def call_opcua_method(

@@ -11,6 +11,7 @@ from typing import Any
 
 from opcua import ua
 
+from .adapters.asyncua_values import standard_fields
 from .contract import CONTRACT
 
 
@@ -41,7 +42,11 @@ def extension_to_json(value: Any, scalar: Callable) -> dict:
             if item.is_array or isinstance(item.Value, (list, tuple)):
                 kind = "ListOf" + kind
             return field(item.Value, kind, depth + 1)
-        if type_name == "ExtensionObject" or hasattr(item, "ua_types"):
+        if (
+            type_name == "ExtensionObject"
+            or hasattr(item, "ua_types")
+            or standard_fields(item) is not None
+        ):
             return structure(item, depth + 1)
         return scalar(item, type_name)
 
@@ -49,9 +54,10 @@ def extension_to_json(value: Any, scalar: Callable) -> dict:
         if depth > max_depth or isinstance(item, ua.ExtensionObject):
             raise _Undecodable
         # A server-defined class must not pass as a standard type by name.
-        if type(item) is not getattr(ua, type(item).__name__, None):
-            raise _Undecodable
-        fields = getattr(item, "ua_types", None)
+        if type(item) is getattr(ua, type(item).__name__, None):
+            fields = getattr(item, "ua_types", None)
+        else:
+            fields = standard_fields(item)
         if fields is None or len(fields) > max_items:
             raise _Undecodable
         return {name: field(getattr(item, name), kind, depth + 1) for name, kind in fields}

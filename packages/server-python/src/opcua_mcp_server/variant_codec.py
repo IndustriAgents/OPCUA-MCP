@@ -143,6 +143,8 @@ def _floating(raw: Any, variant_type: ua.VariantType) -> float:
 def _string_only(raw: Any, variant_type: ua.VariantType) -> str:
     if not isinstance(raw, str):
         raise ValueError(f"{variant_type.name} values must be a JSON string")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in raw):
+        raise ValueError(f"{variant_type.name} values must not contain unpaired Unicode surrogates")
     return raw
 
 

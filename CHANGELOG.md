@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — refuse malformed Unicode before control encoding (#157)
+- Both runtimes refuse unpaired Unicode surrogates in String, LocalizedText,
+  QualifiedName and NodeId values, including arrays and inferred method arguments.
+  Valid supplementary characters remain unchanged. Python JSON result and refusal
+  text escapes lone surrogates consistently with Node.
+
 ### Fixed — hide unexpected tool crash messages consistently (#157 B19)
 - Unexpected feature failures expose only the contract’s tool-name frame on both
   runtimes, including control audit failures. Anticipated failures are explicitly

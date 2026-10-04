@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract the write application port (#141)
+- Move whole-batch write bounds, inference ordering and result correlation behind
+  async ports in both runtimes. Native adapters own prepared Variants and issue
+  one Write service; refusals and uncertain-outcome rules retain their behavior.
+
 ### Refactored — method calls through normalized async ports (#141)
 - Method orchestration now consumes JSON-facing argument metadata; native
   adapters resolve datatype ancestry, encode variants and make one call.

@@ -379,3 +379,23 @@ def test_every_installer_setting_has_a_flag_and_no_secret_does(impl, tmp_path):
             assert flag not in helped, f"{impl} offers {flag}"
         elif "installer" in setting["surfaces"]:
             assert flag in helped, f"{impl} has no {flag}"
+
+
+CLI_CASES = json.loads((ROOT / "tests/fixtures/cli-cases.json").read_text(encoding="utf-8"))[
+    "cases"
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in CLI_CASES if c["kind"] in {"error", "help", "version"}],
+    ids=lambda c: c["name"],
+)
+def test_cli_output_is_byte_identical(case, tmp_path):
+    python = _run("python", case["argv"], tmp_path)
+    node = _run("node", case["argv"], tmp_path)
+    assert python.returncode == node.returncode == (2 if case["kind"] == "error" else 0)
+    assert python.stdout == node.stdout
+    assert python.stderr == node.stderr
+    assert not list(tmp_path.rglob("claude_desktop_config.json"))
+    assert not list(tmp_path.rglob("config.toml"))

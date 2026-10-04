@@ -1,0 +1,142 @@
+{
+  "defaultUrl": "opc.tcp://parity:4840",
+  "cases": [
+    {
+      "name": "serve",
+      "argv": [],
+      "kind": "serve"
+    },
+    {
+      "name": "--help",
+      "argv": ["--help"],
+      "kind": "help"
+    },
+    {
+      "name": "-h",
+      "argv": ["-h"],
+      "kind": "help"
+    },
+    {
+      "name": "--version",
+      "argv": ["--version"],
+      "kind": "version"
+    },
+    {
+      "name": "-v",
+      "argv": ["-v"],
+      "kind": "version"
+    },
+    {
+      "name": "--inst codex",
+      "argv": ["--inst", "codex"],
+      "kind": "error",
+      "message": "unknown argument: --inst"
+    },
+    {
+      "name": "--frobnicate",
+      "argv": ["--frobnicate"],
+      "kind": "error",
+      "message": "unknown argument: --frobnicate"
+    },
+    {
+      "name": "--install",
+      "argv": ["--install"],
+      "kind": "error",
+      "message": "--install needs a client name"
+    },
+    {
+      "name": "--install --dry-run",
+      "argv": ["--install", "--dry-run"],
+      "kind": "error",
+      "message": "--install needs a client name"
+    },
+    {
+      "name": "--install emacs",
+      "argv": ["--install", "emacs"],
+      "kind": "error",
+      "message": "unknown client: emacs (expected one of: claude-desktop, codex)"
+    },
+    {
+      "name": "--force",
+      "argv": ["--force"],
+      "kind": "error",
+      "message": "nothing to do \u2014 pass --install <client> or --help"
+    },
+    {
+      "name": "--install codex --url",
+      "argv": ["--install", "codex", "--url"],
+      "kind": "error",
+      "message": "--url needs an endpoint"
+    },
+    {
+      "name": "--install codex --url --dry-run",
+      "argv": ["--install", "codex", "--url", "--dry-run"],
+      "kind": "error",
+      "message": "--url needs an endpoint"
+    },
+    {
+      "name": "--install codex --server-url",
+      "argv": ["--install", "codex", "--server-url"],
+      "kind": "error",
+      "message": "--server-url needs a value"
+    },
+    {
+      "name": "--install codex --dry-run=false",
+      "argv": ["--install", "codex", "--dry-run=false"],
+      "kind": "error",
+      "message": "--dry-run takes no value"
+    },
+    {
+      "name": "--help=x",
+      "argv": ["--help=x"],
+      "kind": "error",
+      "message": "--help takes no value"
+    },
+    {
+      "name": "--version=x",
+      "argv": ["--version=x"],
+      "kind": "error",
+      "message": "--version takes no value"
+    },
+    {
+      "name": "--install codex --allow-insecure-control=false",
+      "argv": ["--install", "codex", "--allow-insecure-control=false"],
+      "kind": "error",
+      "message": "--allow-insecure-control takes no value"
+    },
+    {
+      "name": "--help --frobnicate",
+      "argv": ["--help", "--frobnicate"],
+      "kind": "help"
+    },
+    {
+      "name": "--frobnicate --help",
+      "argv": ["--frobnicate", "--help"],
+      "kind": "error",
+      "message": "unknown argument: --frobnicate"
+    },
+    {
+      "name": "--install codex stray",
+      "argv": ["--install", "codex", "stray"],
+      "kind": "error",
+      "message": "unknown argument: stray"
+    },
+    {
+      "name": "--install=codex --url=opc.tcp://parity:4840 --dry-run",
+      "argv": ["--install=codex", "--url=opc.tcp://parity:4840", "--dry-run"],
+      "kind": "install",
+      "settings": {
+        "server_url": "opc.tcp://parity:4840"
+      }
+    },
+    {
+      "name": "--install codex --reconnect-max-retry -1",
+      "argv": ["--install", "codex", "--reconnect-max-retry", "-1"],
+      "kind": "install",
+      "settings": {
+        "reconnect_max_retry": "-1",
+        "server_url": "opc.tcp://parity:4840"
+      }
+    }
+  ]
+}

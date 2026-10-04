@@ -3,6 +3,7 @@
 // Current-value reads delegate to the application port and native adapter.
 // The remaining feature slices and execution pipeline move incrementally
 // under #141; see docs/feature-modules.md.
+import { executeTool, type ExecutionCall } from "./application/execution.js";
 import type { ClientSession } from "node-opcua-client";
 import { Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 
@@ -53,7 +54,7 @@ import {
   describeError,
   message,
 } from "./errors.js";
-import { MAX_SUBSCRIPTIONS, checkRequestBounds, eventBufferSize, historyValues } from "./limits.js";
+import { eventBufferSize, historyValues } from "./limits.js";
 import { Completeness, bufferCompleteness } from "./completeness.js";
 import {
   ServerOperationLimits,
@@ -63,7 +64,6 @@ import {
   writeLimit,
 } from "./operation-limits.js";
 import { notice } from "./notices.js";
-import { validateArguments } from "./validation.js";
 import type { ServerStatusRecord } from "./application/diagnostics.js";
 import { getServerStatus } from "./application/diagnostics.js";
 import { NodeOpcuaDiagnosticsPort } from "./adapters/opcua-diagnostics.js";
@@ -672,155 +672,70 @@ export class OpcuaTools {
     };
   }
 
-  /** Serve a tools/call request: authorize it, then run it on a live session. */
+  /** Convert one protocol request through the common execution envelope. */
   async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
-    const { name } = request.params;
-    const args = request.params.arguments ?? {};
-    const callId = newCallId();
-    let authorized = false;
-    // How the audit trail sees this call while it is in flight.
-    //
-    // `attempt` is which *physical* attempt the lines below are about: one call
-    // can reach the plant twice — the session dies, the connection is rebuilt,
-    // the request is re-sent — and `recover` bumps it so `completed` and
-    // `failed` say which attempt they describe rather than folding both into one
-    // line (issue #105).
-    //
-    // `denied` keeps a refusal to one line rather than two. A denial has already
-    // been recorded as one, and the `failed` line below would otherwise repeat
-    // its reason and read as though the plant had rejected the call.
-    const audit = { attempt: 1, denied: false };
-    // Which session this call rides on, so recovery can tell "my session died"
-    // from "someone else already replaced it".
-    let session: string | null = null;
-
+    const name = request.params.name,
+      args = request.params.arguments ?? {};
     try {
-      // Shape before permission: a call that does not match the contract is not a
-      // call this server can reason about, and the policy layer reads the very
-      // arguments checked here to decide what a write is aimed at. There was no
-      // check at all on this runtime — the low-level MCP `Server` does not
-      // validate against the advertised `inputSchema`, and `dispatch` cast
-      // straight off the wire — so a malformed call reached node-opcua as
-      // whatever the client sent.
-      const spec = CONTRACT.tools.find((candidate) => candidate.name === name);
-      if (!spec) {
-        throw new Error(message("unknownTool", { tool: name }));
-      }
-
-      try {
-        // Inside the audited block, as on the Python runtime: a control call
-        // refused for its size or its shape is still a control attempt, and is
-        // recorded as `denied`. This one checked both first and so left no line
-        // at all (#157).
-        //
-        // Size before shape: the validator's work grows with the request, and
-        // this stops at the first thing out of bounds (issue #139). See limits.ts.
-        checkRequestBounds(name, args);
-        validateArguments(name, spec.inputSchema, args);
-        // Before the policy and the audit trail read the session, not merely
-        // before the request goes out. `get_server_status` is the exception: it
-        // reports on the connection, and waits for the warm-up only boundedly.
-        if (name !== "get_server_status") await this.awaitConnectionInFlight();
-        // This is the security boundary. Filtering tools/list improves the
-        // model's choices, but clients cache catalogs and may call a previously
-        // visible tool directly, so authorize again before touching the OPC UA
-        // network.
-        this.policy.authorize(name, args);
-      } catch (error) {
-        auditAfter(
-          this.audit,
-          this.policy,
-          this.conn,
-          name,
-          args,
-          "denied",
-          callId,
-          1,
-          error instanceof Error ? error.message : String(error)
-        );
-        throw error;
-      }
-      auditPermission(this.audit, this.policy, this.conn, name, args, callId, 1);
-      authorized = true;
-      // The one tool that must answer while the connection is down: it exists to
-      // say so. Everything below needs a session first.
-      if (name === "get_server_status") {
-        await this.awaitWarmUp();
-        return await this.invokeFeature(spec.name, args, async () =>
-          statusResult(await this.getServerStatus())
-        );
-      }
-
-      // Connecting is attempted before dispatching, so that a server that is
-      // simply not there is reported as that rather than as a puzzling failure
-      // from whichever tool happened to be called first.
-      //
-      // And before the capability gate, not after. A process that started while
-      // the plant was unreachable has asked no session anything, and checking
-      // first refused `read_opcua_history` as unsupported without ever asking
-      // the server. Unknown is not absent (issue #108) — and an unreachable
-      // server is `endpoint_offline`, not a capability answer (#140).
-      try {
-        await this.ensureConnection();
-      } catch (error) {
-        throw new Error(
-          notConnectedMessage(
-            this.conn.endpointUrl,
-            error instanceof Error ? error.message : String(error)
-          )
-        );
-      }
-
-      session = this.conn.sessionId;
-
-      await this.ensureCapabilities(spec, args);
-
-      let result;
-      try {
-        result = await this.invokeFeature(spec.name, args);
-      } catch (error) {
-        if (!isConnectionError(error)) throw error;
-        result = await this.recover(spec, args, callId, audit, session, error);
-      }
-      // The outcome, not only the decision. "Permitted" and "happened" are
-      // different facts, and the gap between them is where a control call that
-      // reached the plant and then failed lives — which is the one an operator
-      // most needs to find afterwards.
-      auditAfter(
-        this.audit,
-        this.policy,
-        this.conn,
+      return await executeTool(
+        {
+          newCallId,
+          waitForConnection: () => this.awaitConnectionInFlight(),
+          authorize: (name, args) => this.policy.authorize(name, args),
+          allowed: (call) =>
+            auditPermission(
+              this.audit,
+              this.policy,
+              this.conn,
+              call.name,
+              call.arguments,
+              call.callId,
+              call.attempt
+            ),
+          after: (call, decision, reason) =>
+            auditAfter(
+              this.audit,
+              this.policy,
+              this.conn,
+              call.name,
+              call.arguments,
+              decision,
+              call.callId,
+              call.attempt,
+              reason
+            ),
+          run: (call) => this.runTool(call),
+          normalizeFailure: (_name, error) => error,
+          normalizeResult: (result) => result,
+        },
         name,
-        args,
-        "completed",
-        callId,
-        audit.attempt
+        args
       );
-      return result;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      // Only for a call that got past authorization: a denial has already been
-      // recorded as one, and logging it twice would double-count refusals.
-      if (authorized && !audit.denied) {
-        auditAfter(
-          this.audit,
-          this.policy,
-          this.conn,
-          name,
-          args,
-          "failed",
-          callId,
-          audit.attempt,
-          reason
-        );
-      }
-      // No "Error: " prefix. `isError` already says it is one, and the Python
-      // runtime returns the bare message — so prefixing here made every failure
-      // read two ways depending on which runtime a client had started.
-      return {
-        content: [{ type: "text", text: reason }],
-        isError: true,
-      };
+      return { content: [{ type: "text", text: describeError(error) }], isError: true };
+    }
+  }
+
+  private async runTool(call: ExecutionCall) {
+    const { name, arguments: args, spec } = call;
+    if (name === "get_server_status") {
+      await this.awaitWarmUp();
+      return await this.invokeFeature(spec.name, args, async () =>
+        statusResult(await this.getServerStatus())
+      );
+    }
+    try {
+      await this.ensureConnection();
+    } catch (error) {
+      throw new ContractRefusal(notConnectedMessage(this.conn.endpointUrl, describeError(error)));
+    }
+    call.session = this.conn.sessionId;
+    await this.ensureCapabilities(spec, args);
+    try {
+      return await this.invokeFeature(spec.name, args);
+    } catch (error) {
+      if (!isConnectionError(error)) throw error;
+      return await this.recover(spec, args, call.callId, call, call.session, error);
     }
   }
 

@@ -13,7 +13,6 @@ import sys
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,6 +37,8 @@ from .application.diagnostics import get_server_status as get_server_status_use_
 from .application.events import read_event_history as read_event_history_use_case
 from .application.events import read_events as read_events_use_case
 from .application.events import subscribe_events as subscribe_events_use_case
+from .application.execution import ExecutionCall as _Call
+from .application.execution import execute_tool
 from .application.history import read_history
 from .application.methods import call_method
 from .application.read import read_nodes
@@ -77,7 +78,6 @@ from .errors import message as error_message
 from .generated_contract import TOOL_NAMES
 from .limits import (
     LimitExceeded,
-    check_request_bounds,
 )
 from .notices import notice
 from .operation_limits import (
@@ -97,7 +97,6 @@ from .state import ServerState
 from .subscriptions import (
     resolve_filter,
 )
-from .validation import validate_arguments
 from .version import package_version
 
 
@@ -155,32 +154,6 @@ def new_call_id() -> str:
     unique within a process, and a counter would invite reading it as a total.
     """
     return secrets.token_hex(8)
-
-
-@dataclass
-class _Call:
-    """One tools/call in flight, as the dispatcher and the audit trail see it.
-
-    ``attempt`` is mutable and is the reason this is an object rather than a
-    handful of parameters: the retry decision is taken several frames below the
-    audit lines that have to report it. Before this, a call that died on its
-    session and was re-sent wrote one ``allowed`` line for the first attempt and
-    nothing at all about the second — an audit trail that under-counts what
-    actually reached the plant (issue #105).
-    """
-
-    name: str
-    arguments: dict[str, Any]
-    spec: dict[str, Any]
-    call_id: str
-    attempt: int = 1
-    #: The connection's session id when this call was dispatched. Lets recovery
-    #: skip a rebuild the connection has already had.
-    session: str | None = None
-    #: Whether a refusal has already been recorded for this call. Keeps a denial
-    #: to one line rather than two: the ``failed`` line would otherwise repeat
-    #: its reason and read as though the plant had rejected the call.
-    denied: bool = False
 
 
 def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
@@ -706,65 +679,46 @@ class PolicyMCPServer(MCPServer):
             raise ToolError(refusal(spec["name"], decided, answers, connection.url))
 
     async def call_tool(self, name, arguments, context=None):
-        arguments = arguments or {}
-        call_id = new_call_id()
-        spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
-        try:
-            if spec is None:
-                raise ValueError(error_message("unknownTool", tool=name))
-            # Shape before permission: a call that does not match the contract is
-            # not a call this server can reason about, and the policy layer reads
-            # the very arguments being checked here to decide what a write is
-            # aimed at. `MCPServer` would validate later, against the looser
-            # signature-derived schema, and word it differently from the Node
-            # runtime; this is the contract's own schema on both.
-            #
-            # Size before shape: the validator's work grows with the request, and
-            # this stops at the first thing out of bounds (issue #139). A
-            # `LimitExceeded` is a `ValueError`, so it is refused and audited
-            # exactly as a malformed call is. See limits.py.
-            check_request_bounds(name, arguments)
-            validate_arguments(name, spec["inputSchema"], arguments)
-            # Before the policy and the audit trail read the session, not merely
-            # before the request goes out. `get_server_status` is the exception:
-            # it reports on the connection, and waits for the warm-up only
-            # boundedly.
-            if name != "get_server_status":
-                await self.state.await_connection_in_flight()
-            # Catalog filtering is not authorization: clients may retain an old
-            # tools/list result, so enforce the current policy again on every call.
-            self.state.policy.authorize(name, arguments)
-        except (PermissionError, ValueError) as exc:
-            _audit_after(
-                self.state, name, arguments, "denied", str(exc), call_id=call_id, attempt=1
-            )
-            raise ToolError(str(exc)) from exc
-        _audit_permission(self.state, name, arguments, call_id=call_id, attempt=1)
+        """Translate protocol errors around the shared execution envelope."""
+        owner = self
 
-        # The outcome, not only the decision. "Permitted" and "happened" are
-        # different facts, and the gap between them is where a control call that
-        # reached the plant and then failed lives — which is the one an operator
-        # most needs to find afterwards.
-        call = _Call(name=name, arguments=arguments, spec=spec, call_id=call_id)
-        try:
-            result = await self._run_tool(call, context)
-        except Exception as error:
-            reported = _without_sdk_prefix(name, error)
-            if not call.denied:
-                _audit_after(
-                    self.state,
-                    name,
-                    arguments,
-                    "failed",
-                    describe_error(reported),
-                    call_id=call_id,
+        class Port:
+            new_call_id = staticmethod(new_call_id)
+            wait_for_connection = owner.state.await_connection_in_flight
+
+            def authorize(self, name, arguments):
+                owner.state.policy.authorize(name, arguments)
+
+            normalize_failure = staticmethod(_without_sdk_prefix)
+            normalize_result = staticmethod(normalize_result_text)
+
+            def allowed(self, call):
+                _audit_permission(
+                    owner.state,
+                    call.name,
+                    call.arguments,
+                    call_id=call.call_id,
                     attempt=call.attempt,
                 )
-            raise reported from error.__cause__
-        _audit_after(
-            self.state, name, arguments, "completed", call_id=call_id, attempt=call.attempt
-        )
-        return normalize_result_text(result)
+
+            def after(self, call, decision, reason=""):
+                _audit_after(
+                    owner.state,
+                    call.name,
+                    call.arguments,
+                    decision,
+                    reason,
+                    call_id=call.call_id,
+                    attempt=call.attempt,
+                )
+
+            async def run(self, call):
+                return await owner._run_tool(call, context)
+
+        try:
+            return await execute_tool(Port(), name, arguments or {})
+        except (PermissionError, ValueError) as error:
+            raise ToolError(str(error)) from error
 
     async def _run_tool(self, call: _Call, context):
         name, arguments = call.name, call.arguments

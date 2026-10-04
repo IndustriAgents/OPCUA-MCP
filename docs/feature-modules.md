@@ -12,6 +12,7 @@ Other tools still use the existing execution and feature code.
 | Native browse adapter | `adapters/opcua_browse.py` | `adapters/opcua-browse.ts` | Browse/continuation services, attribute codecs and best-effort enrichment |
 | Write use case and port | `application/write.py` | `application/write.ts` | Whole-batch bounds, inference/current-read ordering, conversion result correlation and one send |
 | Native write adapter | `adapters/opcua_write.py` | `adapters/opcua-write.ts` | Native current values, engineering metadata, Variant preparation and the single Write service |
+| Execution envelope | `application/execution.py` | `application/execution.ts` | Bounds/schema checks, waiting for in-flight connections, authorization, fail-closed allowed audit, outcome audit and protocol-normalization hooks |
 | Diagnostics use case and port | `application/diagnostics.py` | `application/diagnostics.ts` | Fast connecting status, disconnected error records and capabilities sampled after the read |
 | Native diagnostics adapter | `adapters/opcua_diagnostics.py` | `adapters/opcua-diagnostics.ts` | Native status/namespace/summary decoding and connection recovery with original causes |
 | Subscription use cases and port | `application/subscriptions.py` | `application/subscriptions.ts` | Filter relationships, active caps, whole-batch range/ID checks, ordered creation/cancellation and loss completeness |
@@ -127,3 +128,14 @@ and diagnostics-summary codecs retain their existing exports and service
 footprints; the native adapter translates errors before retry classification
 and before crossing Python’s worker-thread boundary. Shared
 `diagnostics-port.json` cases pin these report and call-order rules.
+
+The execution envelope is shared by every control tool and consumes an injected
+port. The protocol adapter supplies authorization, durable audit and invocation
+callbacks; the envelope imports neither MCP nor the native library. Shared
+`execution-port.json` cases cover all four control declarations, refusal before
+operation on policy/audit failure, normalization before failed audit, second
+physical-attempt numbering and suppression of duplicate failure after a retry
+denial. Connection/capability preparation and uncertain-outcome recovery remain
+in the existing runtime shims for the next extraction. The current ordering is
+preserved: bounds/schema, in-flight wait, policy, allowed audit, then connected
+invocation/capability preparation; the refactor does not broaden permission.

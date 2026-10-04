@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — extract the common execution envelope (#141)
+- Route every tool through native-free authorization/audit orchestration with
+  injected protocol and invocation hooks. Preserve fail-closed audit permission,
+  physical-attempt numbering, retry denials and safe error normalization.
+
 ### Changed — extract diagnostic application ports (#141)
 - Separate fast offline status and capability snapshots from native status reads
   and connection recovery. Preserve public records, native failure causes and

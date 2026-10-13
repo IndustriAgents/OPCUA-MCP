@@ -58,7 +58,10 @@ class PythonOpcuaWritePort:
 
     async def facts(self, node_ids):
         # Never raises: a node whose attributes could not be read has None facts,
-        # and its plan falls back to the read-first inference.
+        # and its plan falls back to the read-first inference. So does every node
+        # when the port was built without a facts cache.
+        if self.node_facts is None:
+            return {}
         return await asyncio.to_thread(self.node_facts.for_nodes, self.client, node_ids)
 
     async def current(self, nodes, indices, chunk):

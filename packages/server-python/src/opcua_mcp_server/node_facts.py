@@ -54,7 +54,15 @@ from typing import Any
 
 from opcua import ua
 
-from .address_space import browse_references, node_id_text, supertype_of
+from .access_level import CURRENT_WRITE, HISTORY_READ, allows
+from .address_space import (
+    HAS_TYPE_DEFINITION,
+    browse_references,
+    is_node_id,
+    is_subtype_reference,
+    node_id_text,
+    supertype_of,
+)
 from .connection import describe_error, is_connection_error
 from .contract import CONTRACT
 from .limits import chunked
@@ -92,11 +100,6 @@ _MAX_DEPTH = 32
 _MAX_TYPE_DEPTH = 8
 
 _NS0_NUMERIC = re.compile(r"ns=0;i=([0-9]+)")
-
-#: The bit of AccessLevel / UserAccessLevel that allows writing the Value.
-CURRENT_WRITE = 0x02
-#: The bit that says the server keeps the Value's history (Part 3 §5.6.2).
-HISTORY_READ = 0x04
 
 #: The attributes round one reads, in the order they are requested, and the
 #: field of the record each one fills.
@@ -161,11 +164,6 @@ def resolve_data_type(
     return unresolved
 
 
-def allows(level: int | None, bit: int) -> bool | None:
-    """Whether an AccessLevel byte has ``bit`` set; None when the level is unknown."""
-    return None if level is None else bool(level & bit)
-
-
 def empty_facts(status: str) -> dict[str, Any]:
     """The record for a node whose NodeClass could not be read: only its status."""
     return {
@@ -216,7 +214,7 @@ def _attribute(field: str, data_value: Any) -> Any:
         except (TypeError, ValueError):
             return None
     if field == "data_type_id":
-        return node_id_text(value) if isinstance(value, ua.NodeId) else None
+        return node_id_text(value) if is_node_id(value) else None
     if field == "array_dimensions":
         if not isinstance(value, (list, tuple)):
             return None
@@ -537,17 +535,15 @@ def _method_on_object(client: Any, object_node_id: str, method_node_id: str) -> 
     forward = [reference for reference in references if reference.IsForward]
     if any(node_id_text(reference.NodeId) == method_node_id for reference in forward):
         return True
-    type_definition = ua.NodeId(ua.ObjectIds.HasTypeDefinition)
     current = next(
         (
             node_id_text(reference.NodeId)
             for reference in forward
-            if reference.ReferenceTypeId == type_definition
+            if node_id_text(reference.ReferenceTypeId) == HAS_TYPE_DEFINITION
         ),
         None,
     )
     seen: set[str] = set()
-    has_subtype = ua.NodeId(ua.ObjectIds.HasSubtype)
     for _ in range(_MAX_TYPE_DEPTH):
         if current is None or current in seen:
             break
@@ -567,7 +563,7 @@ def _method_on_object(client: Any, object_node_id: str, method_node_id: str) -> 
             (
                 node_id_text(reference.NodeId)
                 for reference in references
-                if not reference.IsForward and reference.ReferenceTypeId == has_subtype
+                if not reference.IsForward and is_subtype_reference(reference)
             ),
             None,
         )

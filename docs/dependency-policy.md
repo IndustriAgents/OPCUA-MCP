@@ -54,7 +54,7 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 
 | Package | Range | What it does here | Security-sensitive |
 |---|---|---|---|
-| `cryptography` | `>=50.0.1,<51` | X.509 parsing for the ApplicationUri; maintained and rollback channel signing and encryption | Certificates |
+| `cryptography` | `>=50.0.2,<51` | X.509 parsing for the ApplicationUri; maintained and rollback channel signing and encryption | Certificates |
 | `jsonschema` | `>=4.23,<5` | Draft 2020-12 input and result validation | Schema validation |
 | `typing-extensions` | `>=4.12,<5` | Generated TypedDict types on Python 3.10 | Static contract types |
 | `mcp[cli]` | `>=2.2.0,<3` | MCP protocol, stdio transport, tool input-schema validation | MCP protocol, schema validation |

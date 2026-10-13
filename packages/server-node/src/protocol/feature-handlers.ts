@@ -70,11 +70,15 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
       () => this.requireSession(),
       () => capabilityStatus(this.capabilities)
     );
-    return await getServerStatus(
+    const status = await getServerStatus(
       port,
       describeSecurity(securityConfig()),
       serverIdentityRecord(this.policy.config)
     );
+    // The check as it stands, never one of its own: it runs on every session,
+    // and says which generation it ran on. null while not connected — a check
+    // of a session that is gone describes nothing.
+    return { ...status, policy_check: status.connected ? this.runtime.policyCheck : null };
   }
 
   async readOpcuaNodes(nodeIds: string[]) {

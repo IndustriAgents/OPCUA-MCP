@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     # The secure end-to-end tests generate their own throwaway OPC UA
     # certificates rather than shipping a committed key pair.
-    "cryptography>=50.0.1,<51",
+    "cryptography>=50.0.2,<51",
     # Upper bound is load-bearing: 2.x renamed FastMCP to MCPServer and moved the
     # client models to snake_case, and 3.x is free to do the same again. The
     # server targets the 2.x API (`mcp.server.mcpserver`), so 1.x no longer works

@@ -17,7 +17,7 @@ dependencies = [
     # is what python-opcua signs and encrypts the channel with. cryptography
     # bumps its major on every feature release, so the ceiling moves often; the
     # policy's response times are what keep it from pinning users to an old one.
-    "cryptography>=50.0.1,<51",
+    "cryptography>=50.0.2,<51",
     # Upper bound is load-bearing: 2.x renamed FastMCP to MCPServer and moved the
     # client models to snake_case, and 3.x is free to do the same again. The
     # server targets the 2.x API (`mcp.server.mcpserver`), so 1.x no longer works

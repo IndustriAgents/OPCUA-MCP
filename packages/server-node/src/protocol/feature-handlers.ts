@@ -39,7 +39,8 @@ import { NodeOpcuaDiagnosticsPort } from "../adapters/opcua-diagnostics.js";
 
 import { describeSecurity, securityConfig } from "../security.js";
 import { SubscribeOptions, SubscriptionFilter } from "../subscriptions.js";
-import { ToolPolicy, serverIdentityRecord } from "../policy.js";
+import { ToolPolicy, boundRecord, serverIdentityRecord } from "../policy.js";
+import type { WriteAccessPolicyFor } from "../application/read.js";
 
 import type { FeatureHandlers } from "./dispatch.js";
 export class ProtocolFeatureHandlers implements FeatureHandlers {
@@ -84,9 +85,25 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
     return { ...status, policy_check: status.connected ? this.runtime.policyCheck : null };
   }
 
-  async readOpcuaNodes(nodeIds: string[]) {
-    const port = new NodeOpcuaReadPort(this.requireSession(), this.metadata);
-    return recordBlocks(await readNodes(port, nodeIds, readChunk(await this.operationLimits())));
+  async readOpcuaNodes(nodeIds: string[], includeWriteAccess = false) {
+    const port = new NodeOpcuaReadPort(this.requireSession(), this.metadata, this.facts);
+    const chunk = readChunk(await this.operationLimits());
+    return recordBlocks(
+      await readNodes(port, nodeIds, chunk, includeWriteAccess ? this.writeAccessPolicy() : null)
+    );
+  }
+
+  /** What `write_access` is told about this deployment's policy, per node. */
+  private writeAccessPolicy(): WriteAccessPolicyFor {
+    const toolRefusal = this.policy.toolRefusal("write_opcua_nodes");
+    const operator = this.policy.config.profile === "operator";
+    return (nodeId) => ({
+      tool_refusal: toolRefusal,
+      operator,
+      allowlisted: operator && this.policy.isWritable(nodeId),
+      bound: boundRecord(this.policy.boundFor(nodeId)),
+      allow_out_of_range: this.policy.config.allowOutOfRangeWrites,
+    });
   }
 
   async readOpcuaHistory(request: {
@@ -97,14 +114,14 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
     aggregateFunction?: string;
     processingInterval: number;
   }) {
-    const port = new NodeOpcuaHistoryPort(this.requireSession());
+    const port = new NodeOpcuaHistoryPort(this.requireSession(), this.runtime.facts ?? null);
     const result = await readHistory(port, request, this.capabilities.aggregateFunctions);
     return historyResult(result.records, result.completeness, "historyTruncated");
   }
 
   async browseOpcuaNodes(request: BrowseRequest) {
     const port = new NodeOpcuaBrowsePort(this.requireSession(), () => this.operationLimits());
-    const result = await browseNodes(port, request);
+    const result = await browseNodes(port, request, (nodeId) => this.policy.isReadDenied(nodeId));
     return objectResult(result.result, result.completeness);
   }
 
@@ -216,7 +233,8 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
         comment,
         durationMs,
         conditionId,
-        acknowledgement
+        acknowledgement,
+        this.policy.alarmScope()
       )
     );
   }

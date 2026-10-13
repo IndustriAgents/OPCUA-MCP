@@ -19,20 +19,37 @@ export function describeTargets(tool: ToolSpec, args: Record<string, unknown>): 
 
 export function auditTargets(
   tool: ToolSpec,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  policy: ToolPolicy | null = null
 ): Record<string, unknown> {
   const guard = tool.guard;
   if (!guard) return {};
   const record: Record<string, unknown> = {};
+  // The audit record also names each target by namespace URI (spec §8): an index
+  // is assigned per session, and a line read after the server has restarted
+  // must still say which node it was. Only for the audit line — `describeTargets`
+  // passes no policy, and the sentences it builds are unchanged.
+  const uri = (nodeId: string | null) =>
+    nodeId === null || policy === null ? null : policy.uriForm(nodeId);
 
   const nodeIds = (guard.nodeIdPaths ?? []).flatMap((path) => valuesAt(args, path));
-  if (nodeIds.length > 0) record.node_ids = nodeIds;
+  if (nodeIds.length > 0) {
+    record.node_ids = nodeIds;
+    if (policy !== null) record.node_uris = nodeIds.map(uri);
+  }
 
   const methods = (guard.methodPaths ?? []).map(({ objectPath, methodPath }) => ({
     object_node_id: valuesAt(args, objectPath)[0] ?? null,
     method_node_id: valuesAt(args, methodPath)[0] ?? null,
   }));
-  if (methods.length > 0) Object.assign(record, methods[0]);
+  if (methods.length > 0) {
+    const [method] = methods;
+    Object.assign(record, method);
+    if (policy !== null) {
+      record.object_node_uri = uri(method.object_node_id);
+      record.method_node_uri = uri(method.method_node_id);
+    }
+  }
 
   for (const path of guard.auditPaths ?? []) {
     // Only what is present: an absent optional argument is not a target, and
@@ -79,7 +96,7 @@ export function auditDecision(
         : {}),
       tool: name,
       decision,
-      targets: auditTargets(tool, args),
+      targets: auditTargets(tool, args, policy),
       reason: reason ?? null,
     })
   );

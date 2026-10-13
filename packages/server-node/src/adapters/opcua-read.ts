@@ -9,6 +9,8 @@ import {
 import { type ReadPort } from "../application/read.js";
 import { AdapterFailure, describeError, message } from "../errors.js";
 import { type AnalogInfo, NodeMetadata } from "../node-metadata.js";
+import type { NodeFacts, NodeFactsCache } from "../node-facts.js";
+import type { WriteAccessRecord } from "../write-plan.js";
 import { canonicalNodeId } from "../node-ids.js";
 import { isGood } from "../status.js";
 import { toIsoUtc, variantToJson } from "../records.js";
@@ -29,6 +31,7 @@ export interface NodeValueRecord {
   source_timestamp: string | null;
   server_timestamp: string | null;
   engineering: AnalogInfo | null;
+  write_access: WriteAccessRecord | null;
 }
 
 /** One node's reading as a canonical record (resultShapes.nodeValues).
@@ -42,7 +45,8 @@ export interface NodeValueRecord {
 export function toNodeValueRecord(
   nodeId: string,
   dataValue: DataValue | undefined,
-  engineering: AnalogInfo | null = null
+  engineering: AnalogInfo | null = null,
+  writeAccess: WriteAccessRecord | null = null
 ): NodeValueRecord {
   const good = dataValue !== undefined && isGood(dataValue.statusCode);
   return {
@@ -57,14 +61,23 @@ export function toNodeValueRecord(
     // an AnalogItemType publishes it — but on the ones that do it is the
     // difference between "51.75" and "51.75 °C, normal range 0 to 150".
     engineering,
+    // Always present, null unless asked for: a field that is sometimes missing
+    // is a shape a client has to guess at.
+    write_access: writeAccess,
   };
 }
 
 export class NodeOpcuaReadPort implements ReadPort {
   constructor(
     private readonly session: ClientSession,
-    private readonly metadata: NodeMetadata
+    private readonly metadata: NodeMetadata,
+    private readonly nodeFacts: NodeFactsCache | null = null
   ) {}
+
+  async facts(nodeIds: string[]): Promise<Map<string, NodeFacts | null>> {
+    if (this.nodeFacts === null) return new Map();
+    return await this.nodeFacts.forNodes(this.session, nodeIds);
+  }
 
   async values(nodeIds: string[]): Promise<NodeValueRecord[]> {
     try {

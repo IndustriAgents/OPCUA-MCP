@@ -21,7 +21,10 @@ const DEFAULT_NOTIFIER = CONTRACT.events.defaultNotifierNodeId;
 const EVENT_DEFAULTS = CONTRACT.events.defaults;
 export interface FeatureHandlers {
   getServerStatus(): Promise<ServerStatusReport>;
-  readOpcuaNodes(nodeIds: string[]): ProtocolResult | Promise<ProtocolResult>;
+  readOpcuaNodes(
+    nodeIds: string[],
+    includeWriteAccess: boolean
+  ): ProtocolResult | Promise<ProtocolResult>;
   browseOpcuaNodes(request: BrowseRequest): ProtocolResult | Promise<ProtocolResult>;
   readOpcuaHistory(request: {
     nodeId: string;
@@ -80,7 +83,10 @@ export async function dispatchFeature(
       return statusResult(await handlers.getServerStatus());
 
     case "read_opcua_nodes":
-      return await handlers.readOpcuaNodes(args.node_ids as string[]);
+      return await handlers.readOpcuaNodes(
+        args.node_ids as string[],
+        (args.include_write_access as boolean | undefined) ?? false
+      );
 
     case "browse_opcua_nodes":
       return await handlers.browseOpcuaNodes({

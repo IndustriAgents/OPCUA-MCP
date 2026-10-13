@@ -24,7 +24,7 @@ dependencies = [
     # either — hence a floor, not just a ceiling.
     "jsonschema>=4.23,<5",
     "pyopenssl>=26.4.0,<27",
-    "mcp[cli]>=2.2.0,<3",
+    "mcp[cli]>=2.3.0,<3",
     # python-opcua is unmaintained and 0.98.13 is its final release (#144 moves
     # off it). The ceiling is still stated: on a 0.x version the minor is the
     # major, and a surprise 0.99 would be exactly the untested major this rules out.

@@ -30,15 +30,15 @@ jobs:
     steps:
       - name: Checkout
         if: inputs.server == 'both' || inputs.server == matrix.server
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
         if: inputs.server == 'both' || inputs.server == matrix.server
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
       - name: Set up Node.js
         if: inputs.server == 'both' || inputs.server == matrix.server
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
@@ -46,7 +46,7 @@ jobs:
 
       - name: Set up Java (Milo)
         if: matrix.server == 'milo' && (inputs.server == 'both' || inputs.server == 'milo')
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: "21"
@@ -81,7 +81,7 @@ jobs:
 
       - name: Upload the result
         if: always() && (inputs.server == 'both' || inputs.server == matrix.server)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-${{ matrix.server }}
           path: ${{ runner.temp }}/results/

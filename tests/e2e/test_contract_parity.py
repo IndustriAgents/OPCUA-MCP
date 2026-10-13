@@ -58,36 +58,6 @@ EXPECTED_RESOURCES = {r["uri"]: r for r in CONTRACT["resources"]}
 
 RESULT_SHAPES = CONTRACT["resultShapes"]
 
-# Minimal JSON-Schema evaluation: the contract's record schemas use only these
-# keywords, and a `jsonschema` dependency for a handful of asserts would be more
-# machinery than the check is worth.
-_JSON_TYPES = {
-    "string": str,
-    "number": (int, float),
-    # JSON Schema's "integer" is a whole number, not Python's `int`. The `bool`
-    # exclusion below covers the other half of the trap.
-    "integer": int,
-    "boolean": bool,
-    "object": dict,
-    "array": list,
-    "null": type(None),
-}
-
-
-def _matches_type(value, declared) -> bool:
-    """True when ``value`` satisfies a schema ``type`` (a name, a list, or absent)."""
-    if declared is None:
-        return True  # No declared type — any JSON value is allowed.
-    names = [declared] if isinstance(declared, str) else declared
-    # `bool` is a subclass of `int`, so a boolean must not pass as a number.
-    if isinstance(value, bool) and "boolean" not in names:
-        return False
-    # A float that is not whole does not satisfy "integer", whatever Python says
-    # about isinstance.
-    if isinstance(value, float) and names == ["integer"]:
-        return value.is_integer()
-    return any(isinstance(value, _JSON_TYPES[name]) for name in names)
-
 
 def assert_matches_result_shape(records: list[dict], shape_name: str, context: str) -> None:
     """Assert every record satisfies the named shape from ``contract/tools.json``.
@@ -108,32 +78,11 @@ def assert_matches_result_shape(records: list[dict], shape_name: str, context: s
 
 
 def _assert_matches_object(record, schema: dict, context: str) -> None:
-    """One object against one object schema, descending into nested ones.
+    """Use the standard validator for every nested constraint in result schemas."""
+    from jsonschema import Draft202012Validator
 
-    Nested rather than top-level-only because `nodeValues.engineering` is an
-    object of objects: checking only that it *is* an object would let the two
-    runtimes name its fields differently, which is the exact divergence this file
-    exists to catch.
-    """
-    properties = schema["properties"]
-    required = set(schema["required"])
-
-    assert isinstance(record, dict), f"{context}: record is not an object: {record!r}"
-    assert set(record) >= required, (
-        f"{context}: record is missing {sorted(required - set(record))}: {record!r}"
-    )
-    if schema.get("additionalProperties") is False:
-        assert set(record) <= set(properties), (
-            f"{context}: record has fields outside the contract "
-            f"{sorted(set(record) - set(properties))}: {record!r}"
-        )
-    for field, spec in properties.items():
-        assert _matches_type(record[field], spec.get("type")), (
-            f"{context}: {field}={record[field]!r} does not match "
-            f"declared type {spec.get('type')!r}"
-        )
-        if isinstance(record[field], dict) and "properties" in spec:
-            _assert_matches_object(record[field], spec, f"{context}.{field}")
+    errors = list(Draft202012Validator(schema).iter_errors(record))
+    assert not errors, f"{context}: {errors[0].message if errors else ''}"
 
 
 @pytest.fixture(params=["python", "node"])

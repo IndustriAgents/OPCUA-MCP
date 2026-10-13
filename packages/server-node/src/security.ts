@@ -21,6 +21,7 @@ import {
 } from "node-opcua-crypto";
 
 import { existsSync } from "fs";
+import { applicationUriProblem } from "./client-identity.js";
 
 /** Policies both runtimes accept. */
 export const SHARED_POLICIES = ["None", "Basic128Rsa15", "Basic256", "Basic256Sha256"] as const;
@@ -80,6 +81,8 @@ export interface SecurityConfig {
   userCert?: string;
   /** Private key for `userCert`. Signs the server's challenge; never sent. */
   userKey?: string;
+  serverTrustStore?: string;
+  serverApplicationUri?: string;
 }
 
 /** Reports whether a path exists; injectable so the parser stays testable. */
@@ -175,6 +178,21 @@ export function parseSecurityConfig(
     );
   }
 
+  const serverTrustStore = read(env, "OPCUA_SERVER_TRUST_STORE");
+  const serverApplicationUri = read(env, "OPCUA_SERVER_APPLICATION_URI");
+  if (serverTrustStore) {
+    if (policy === "None")
+      throw new Error("OPCUA_SERVER_TRUST_STORE requires a security policy other than None");
+    if (serverCert)
+      throw new Error("OPCUA_SERVER_TRUST_STORE cannot be combined with OPCUA_SERVER_CERT");
+    if (!serverApplicationUri)
+      throw new Error("OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI");
+    if (!exists(serverTrustStore))
+      throw new Error(`OPCUA_SERVER_TRUST_STORE does not exist: ${serverTrustStore}`);
+  } else if (serverApplicationUri) {
+    throw new Error("OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE");
+  }
+
   // --- X.509 user authentication ----------------------------------------------
   const userCert = read(env, "OPCUA_USER_CERT");
   const userKey = read(env, "OPCUA_USER_KEY");
@@ -237,6 +255,8 @@ export function parseSecurityConfig(
     serverCert,
     userCert,
     userKey,
+    serverTrustStore,
+    serverApplicationUri,
   };
 }
 
@@ -262,7 +282,11 @@ export function describeSecurity(config: SecurityConfig): string {
   // `unpinned` on every startup would train the reader to skip it, and this is
   // the one word that distinguishes "encrypted" from "encrypted to whoever
   // answered".
-  const pinned = config.serverCert === undefined ? "" : " server-cert=pinned";
+  const pinned = config.serverTrustStore
+    ? " server-cert=trust-store"
+    : config.serverCert === undefined
+      ? ""
+      : " server-cert=pinned";
   return `policy=${config.policy} mode=${config.mode} user=${user}${pinned}`;
 }
 
@@ -281,7 +305,7 @@ export function securityWarnings(config: SecurityConfig): string[] {
     // answered — DNS, ARP, a compromised switch or a mistyped endpoint all
     // reach it. Said once, on a secured connection, because this is the gap a
     // reader of `policy=Basic256Sha256` is least likely to suspect.
-    return config.serverCert === undefined
+    return config.serverCert === undefined && config.serverTrustStore === undefined
       ? [
           "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT to " +
             "pin it. Encryption without it protects against passive eavesdropping, not " +
@@ -356,7 +380,23 @@ export function pinnedCertificateProblem(path: string, now: Date = new Date()): 
  * the extra endpoint round-trip it otherwise makes to fetch one — the two
  * runtimes end up doing the same thing for the same reason.
  */
+/** The first SAN URI, matching the library's CreateSession identity. */
+export function certificateApplicationUri(path: string): string | undefined {
+  try {
+    return exploreCertificate(readCertificate(path)).tbsCertificate.extensions?.subjectAltName
+      ?.uniformResourceIdentifier?.[0];
+  } catch {
+    // The library reports unreadable certificates when it loads the channel key.
+    return undefined;
+  }
+}
+
 export function clientSecurityOptions(config: SecurityConfig) {
+  const certificateUri = config.clientCert
+    ? certificateApplicationUri(config.clientCert)
+    : undefined;
+  const problem = applicationUriProblem(config.applicationUri, certificateUri);
+  if (problem !== null) throw new Error(problem);
   if (config.serverCert) {
     const problem = pinnedCertificateProblem(config.serverCert);
     if (problem !== null) throw new Error(problem);

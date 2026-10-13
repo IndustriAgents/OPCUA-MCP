@@ -26,6 +26,8 @@ from typing import Any
 
 from opcua import ua
 
+from .application.subscriptions import Filter as Filter
+from .application.subscriptions import resolve_filter as resolve_filter
 from .contract import CONTRACT
 from .errors import message
 from .records import history_record
@@ -86,28 +88,6 @@ DATA_CHANGE_TRIGGERS: dict[str, int] = {
 DEFAULT_DATA_CHANGE_TRIGGER = _LIMITS["defaultDataChangeTrigger"]
 
 
-@dataclass(frozen=True)
-class Filter:
-    """What a subscription reports, beyond how often it looks.
-
-    Point a subscription at a noisy analogue tag with no deadband and the default
-    20-record ring fills with sensor jitter in about a second: the agent reads it
-    back, sees nothing but noise, and has spent one of the server's subscriptions
-    to get it. This is OPC UA's own answer (Part 4 §7.22) rather than filtering
-    after the fact — the values never leave the server, so it costs no bandwidth
-    and no buffer.
-    """
-
-    deadband_type: str = "none"
-    deadband_value: float = 0.0
-    trigger: str = DEFAULT_DATA_CHANGE_TRIGGER
-
-    @property
-    def is_default(self) -> bool:
-        """True when this asks for nothing the server would not do anyway."""
-        return self.deadband_type == "none" and self.trigger == DEFAULT_DATA_CHANGE_TRIGGER
-
-
 def resolve_options(
     publishing_interval: float | None,
     sampling_interval: float | None,
@@ -128,53 +108,6 @@ def resolve_options(
         max(int(_number(buffer_size, DEFAULT_BUFFER_SIZE)), MIN_BUFFER_SIZE), MAX_BUFFER_SIZE
     )
     return publishing, sampling, size
-
-
-def resolve_filter(
-    deadband_type: str | None,
-    deadband_value: float | None,
-    data_change_trigger: str | None,
-) -> Filter:
-    """The filter a subscribe request resolves to, or raise if it cannot.
-
-    Validation the contract's own schema cannot express: the `enum` keyword
-    refuses an unknown name, but "a deadband needs a size" is a relationship
-    *between* two arguments. Refused rather than defaulted to zero, which would
-    be a deadband that filters nothing while reporting that one is in force —
-    the caller would read a buffer full of jitter and conclude the tag was
-    noisier than their threshold, which it may not be.
-    """
-    kind = deadband_type or "none"
-    if kind not in DEADBAND_TYPES:
-        raise ValueError(
-            message(
-                "notAllowedValue",
-                tool="subscribe_opcua_nodes",
-                argument="deadband_type",
-                allowed=", ".join(f'"{name}"' for name in DEADBAND_TYPES),
-                value=f'"{kind}"',
-            )
-        )
-    trigger = data_change_trigger or DEFAULT_DATA_CHANGE_TRIGGER
-    if trigger not in DATA_CHANGE_TRIGGERS:
-        raise ValueError(
-            message(
-                "notAllowedValue",
-                tool="subscribe_opcua_nodes",
-                argument="data_change_trigger",
-                allowed=", ".join(f'"{name}"' for name in DATA_CHANGE_TRIGGERS),
-                value=f'"{trigger}"',
-            )
-        )
-    if kind == "none":
-        return Filter(deadband_type="none", deadband_value=0.0, trigger=trigger)
-    if deadband_value is None:
-        raise ValueError(message("deadbandNeedsValue", deadband_type=kind))
-    return Filter(
-        deadband_type=kind,
-        deadband_value=_number(deadband_value, 0.0),
-        trigger=trigger,
-    )
 
 
 def _number(value: Any, fallback: float) -> float:

@@ -36,6 +36,7 @@ from .datetimes import parse_iso_datetime
 from .errors import message
 from .limits import MAX_BYTE_STRING_BYTES, LimitExceeded
 from .numeric import MAX_SAFE_INTEGER, exact_integer, js_number, json_text, numeric_text
+from .unicode_text import has_unpaired_surrogate
 
 _INTEGER_RANGES = {
     ua.VariantType.SByte: (-(2**7), 2**7 - 1),
@@ -143,6 +144,8 @@ def _floating(raw: Any, variant_type: ua.VariantType) -> float:
 def _string_only(raw: Any, variant_type: ua.VariantType) -> str:
     if not isinstance(raw, str):
         raise ValueError(f"{variant_type.name} values must be a JSON string")
+    if has_unpaired_surrogate(raw):
+        raise ValueError(f"{variant_type.name} values must not contain unpaired Unicode surrogates")
     return raw
 
 

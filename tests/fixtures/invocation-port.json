@@ -1,0 +1,245 @@
+{
+  "cases": [
+    {
+      "name": "write_opcua_nodes is never resent",
+      "tool": "write_opcua_nodes",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "write_opcua_nodes",
+        "reason": "native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "call_opcua_method is never resent",
+      "tool": "call_opcua_method",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "call_opcua_method",
+        "reason": "native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "acknowledge_alarm is never resent",
+      "tool": "acknowledge_alarm",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "acknowledge_alarm",
+        "reason": "native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "act_on_alarm is never resent",
+      "tool": "act_on_alarm",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "act_on_alarm",
+        "reason": "native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "read retries once on the fresh session",
+      "tool": "read_opcua_nodes",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session",
+        "authorize:2",
+        "allowed:2",
+        "capabilities:2",
+        "dispatch:2"
+      ],
+      "attempt": 2,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "name": "failed second attempt is never retried again",
+      "tool": "read_opcua_nodes",
+      "secondFailure": true,
+      "raw": "second failure",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session",
+        "authorize:2",
+        "allowed:2",
+        "capabilities:2",
+        "dispatch:2"
+      ],
+      "attempt": 2
+    },
+    {
+      "name": "reconnect-only subscriptions do not recreate twice",
+      "tool": "subscribe_opcua_nodes",
+      "raw": "native timeout",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "rebuild failure uses the offline frame",
+      "tool": "read_opcua_nodes",
+      "crash": "reconnect:old-session",
+      "error": "notConnected",
+      "fields": {
+        "url": "opc.tcp://test:4840",
+        "reason": "native timeout"
+      },
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "changed policy refuses the second attempt",
+      "tool": "read_opcua_nodes",
+      "crash": "authorize:2",
+      "raw": "test refusal",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session",
+        "authorize:2",
+        "denied:2"
+      ],
+      "attempt": 2,
+      "denied": true
+    },
+    {
+      "name": "failed durable permission prevents resend",
+      "tool": "read_opcua_nodes",
+      "crash": "allowed:2",
+      "raw": "test refusal",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session",
+        "authorize:2",
+        "allowed:2"
+      ],
+      "attempt": 2,
+      "denied": true
+    },
+    {
+      "name": "new session loses required capability",
+      "tool": "read_opcua_nodes",
+      "crash": "capabilities:2",
+      "raw": "test refusal",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1",
+        "log:resend",
+        "reconnect:old-session",
+        "authorize:2",
+        "allowed:2",
+        "capabilities:2"
+      ],
+      "attempt": 2
+    },
+    {
+      "name": "nonconnection failures never reconnect",
+      "tool": "read_opcua_nodes",
+      "dead": false,
+      "raw": "native timeout",
+      "calls": [
+        "connect",
+        "session",
+        "capabilities:1",
+        "dispatch:1"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "offline connect never reaches capabilities or dispatch",
+      "tool": "read_opcua_nodes",
+      "crash": "connect",
+      "error": "notConnected",
+      "fields": {
+        "url": "opc.tcp://test:4840",
+        "reason": "native timeout"
+      },
+      "calls": [
+        "connect"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "status only waits within the warmup window",
+      "tool": "get_server_status",
+      "calls": [
+        "warm-up",
+        "dispatch:1"
+      ],
+      "attempt": 1,
+      "result": {
+        "ok": true
+      }
+    }
+  ]
+}

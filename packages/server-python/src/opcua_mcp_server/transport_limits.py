@@ -87,8 +87,8 @@ def install_receive_guard() -> bool:
     """Bound inbound chunks before buffering and during reassembly. True if this call installed it.
 
     Idempotent, and safe to call before any connection exists. Installed at
-    import of the connection layer rather than per client, because the list being
-    bounded belongs to the library's class, not to ours.
+    construction of the legacy rollback client, before any network request.
+    Maintained clients use their own bounded protocol without patching this class.
     """
     global _installed
     with _install_lock:

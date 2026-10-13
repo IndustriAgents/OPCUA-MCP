@@ -1,0 +1,27 @@
+{
+  "draft": "https://json-schema.org/draft/2020-12/schema",
+  "keywords": [
+    "$comment",
+    "$schema",
+    "additionalProperties",
+    "const",
+    "description",
+    "enum",
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "items",
+    "maxItems",
+    "maxLength",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minimum",
+    "multipleOf",
+    "pattern",
+    "properties",
+    "required",
+    "title",
+    "type",
+    "uniqueItems"
+  ]
+}

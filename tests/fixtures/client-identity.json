@@ -1,0 +1,13 @@
+{
+  "applicationName": "OPC UA MCP Client",
+  "sessionTimeoutMs": 12345,
+  "secureChannelLifetimeMs": 12345,
+  "certificate": "tests/fixtures/client-identity.pem",
+  "certificateUri": "urn:plant:mcp-client",
+  "cases": [
+    {"name":"no override", "configured":null, "certificateUri":"urn:plant:mcp-client", "problem":null},
+    {"name":"matching override", "configured":"urn:plant:mcp-client", "certificateUri":"urn:plant:mcp-client", "problem":null},
+    {"name":"no SAN URI", "configured":"urn:plant:mcp-client", "certificateUri":null, "problem":null},
+    {"name":"conflicting override", "configured":"urn:plant:other", "certificateUri":"urn:plant:mcp-client", "problem":"OPCUA_APPLICATION_URI=urn:plant:other does not match the subjectAltName URI of OPCUA_CLIENT_CERT (urn:plant:mcp-client). Unset OPCUA_APPLICATION_URI or use the certificate's URI; refusing to connect with conflicting application identities."}
+  ]
+}

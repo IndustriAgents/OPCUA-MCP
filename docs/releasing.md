@@ -32,6 +32,33 @@ be corrected. Their tool and configuration tables are generated (step 1 below),
 so those at least cannot ship stale; the prose around them still needs reading
 before a release.
 
+## Compatibility evidence for each release
+
+The shared conformance action runs lint/typecheck/generation checks, Node unit
+tests, and Python unit/E2E tests in required mode. CI, publishing and release
+verification all exercise Python 3.10 / Node 22, Python 3.13 / Node 22, and
+Python 3.13 / Node 24. Failed or skipped tests, absent groups, a missing matrix
+leg or mixed source commits prevent release evidence from being produced.
+
+Each job uploads `conformance-<python>-<node>` with raw pytest group counts,
+Node JUnit evidence and a per-run `runtime-compatibility.json`. The release
+workflow combines all legs into one `runtime-compatibility.json` asset with:
+
+- Exact source commit, package and runtime versions, test counts and evidence digests.
+- Contract, shared fixture and lockfile digests, plus declared runtime differences.
+- Dated independent-server reports, explicitly retained as historical evidence.
+
+Repository mocks establish internal conformance for that commit. Historical
+server results qualify only the product/version/configuration/commit they record;
+they do not certify the new release against those servers. The report is data,
+so it has no package SBOM. It is covered by `SHA256SUMS`, its Sigstore signature
+and GitHub build provenance like the other release assets. Verify it with the
+[download verification commands](install.md#verifying-a-download).
+
+The format is versioned by `schemaVersion`. Run `scripts/compatibility_report.py
+--help` for the generator; aggregation requires every supported matrix leg and
+checks that the aggregation checkout matches the tested source and inputs.
+
 ## Security-doc review
 
 A release whose changes touch authentication, authorisation, the audit trail or

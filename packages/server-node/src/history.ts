@@ -7,17 +7,16 @@
  * looked at it before, so a read the server cut short was reported as the whole
  * range.
  *
- * Nor did either give it back. A continuation point is state the server keeps
- * for this session until it is released or the session ends, and a server holds
- * only so many (MaxHistoryContinuationPoints) — so every read left one behind
- * until later reads started failing with BadNoContinuationPoints. This server
- * never resumes from one: `completeness.continuation` is stateless arguments
- * instead, which cannot go stale and survives a reconnect. So each is released
- * as soon as it has been noticed.
+ * Raw reads release their points and offer stateless start-time arguments.
+ * Aggregates consume points within the same call, preserving the original
+ * interval anchor. No native point is exposed or kept across calls/reconnects.
  */
 
 import {
   ClientSession,
+  DataValue,
+  HistoryReadResult,
+  ReadProcessedDetails,
   HistoryReadRequest,
   ReadRawModifiedDetails,
   HistoryReadValueId,
@@ -26,6 +25,9 @@ import {
 } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
+import { ContractRefusal, message } from "./errors.js";
+import { MAX_HISTORY_VALUES } from "./limits.js";
+import { historyData } from "./records.js";
 
 /** Raw stored readings, without the library's implicit bounding values. */
 export function rawDetails(start: Date | undefined, end: Date | undefined, count: number) {
@@ -73,5 +75,88 @@ export async function releaseContinuationPoint(
     );
   } catch {
     // See above: best-effort by design.
+  }
+}
+
+/** Match readAggregateValue's existing defaults, also for continuation/release. */
+export function aggregateDetails(start: Date, end: Date, aggregateType: number, interval: number) {
+  return new ReadProcessedDetails({
+    startTime: start,
+    endTime: end,
+    aggregateType: [aggregateType],
+    processingInterval: interval,
+    aggregateConfiguration: {
+      percentDataBad: 100,
+      percentDataGood: 100,
+      treatUncertainAsBad: true,
+      useServerCapabilitiesDefaults: true,
+      useSlopedExtrapolation: false,
+    },
+  });
+}
+
+/** Resume on the same session using the original processed-history details. */
+export async function readContinuation(
+  session: ClientSession,
+  nodeId: string,
+  point: Buffer,
+  details: HistoryReadRequest["historyReadDetails"]
+): Promise<HistoryReadResult> {
+  const response = await session.historyRead(
+    new HistoryReadRequest({
+      historyReadDetails: details,
+      timestampsToReturn: TimestampsToReturn.Both,
+      releaseContinuationPoints: false,
+      nodesToRead: [
+        new HistoryReadValueId({ nodeId: resolveNodeId(nodeId), continuationPoint: point }),
+      ],
+    })
+  );
+  if (response.results?.length !== 1) {
+    throw new Error("Read aggregate failed: expected one history result");
+  }
+  return response.results[0];
+}
+
+/** Drain a bounded aggregate query; never return an unfinished range.
+ * Each continuation page must add a value, bounding requests by maxValues.
+ * Failures/cancellation release the currently held point best-effort.
+ */
+export async function aggregatePages(
+  first: HistoryReadResult,
+  readNext: (point: Buffer) => Promise<HistoryReadResult>,
+  release: (point: Buffer) => Promise<void>,
+  maxValues = MAX_HISTORY_VALUES
+): Promise<DataValue[]> {
+  let held: Buffer | null | undefined = first.continuationPoint;
+  let result = first;
+  const values: DataValue[] = [];
+  try {
+    while (true) {
+      const point = result.continuationPoint;
+      if (continues(point)) held = point;
+      const page = historyData<DataValue>(result, "Read aggregate", "dataValues");
+      if (values.length + page.length > maxValues) {
+        throw new ContractRefusal(message("aggregatePageLimit", { limit: maxValues }));
+      }
+      values.push(...page);
+      if (!continues(point)) {
+        held = null;
+        return values;
+      }
+      if (page.length === 0) throw new ContractRefusal(message("aggregateNoProgress"));
+      if (values.length === maxValues) {
+        throw new ContractRefusal(message("aggregatePageLimit", { limit: maxValues }));
+      }
+      result = await readNext(point!);
+    }
+  } finally {
+    if (continues(held)) {
+      try {
+        await release(held!);
+      } catch {
+        /* Preserve the primary failure. */
+      }
+    }
   }
 }

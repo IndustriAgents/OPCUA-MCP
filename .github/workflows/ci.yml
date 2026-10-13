@@ -42,6 +42,9 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages
 
+      - name: Standard schemas and generated contract types
+        run: uv run --no-sync python scripts/contract_codegen.py --check
+
       - name: Ruff lint (Python)
         run: uv run ruff check .
 
@@ -55,6 +58,11 @@ jobs:
       - name: Prettier check (TypeScript)
         working-directory: packages/server-node
         run: npm run format:check
+
+      - name: Extracted-module complexity limits
+        run: |
+          uv run --no-sync ruff check --select C901 packages/server-python/src/opcua_mcp_server/server.py packages/server-python/src/opcua_mcp_server/application packages/server-python/src/opcua_mcp_server/adapters packages/server-python/src/opcua_mcp_server/protocol packages/server-python/src/opcua_mcp_server/infrastructure
+          npm run lint:complexity --prefix packages/server-node
 
       - name: Typecheck (TypeScript)
         working-directory: packages/server-node
@@ -115,6 +123,28 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           node-version: ${{ matrix.node-version }}
+
+  legacy-backend:
+    name: Legacy rollback — Python ${{ matrix.python-version }} / Node 22
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      OPCUA_PYTHON_BACKEND: legacy
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Legacy rollback conformance
+        uses: ./.github/actions/conformance
+        with:
+          python-version: ${{ matrix.python-version }}
+          node-version: "22"
+          evidence-suffix: -legacy
 
   # Builds every artifact a user can actually download — npm tarball, Python
   # wheel, the `.mcpb` bundle and both single-file executables — installs them

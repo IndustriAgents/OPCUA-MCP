@@ -322,6 +322,7 @@ export interface RecordFields {
   opcua_user_identity: OpcuaUserIdentity | null;
   profile: string;
   control: string | null;
+  server_authentication_method?: "trust-store";
   tool: string;
   decision: string;
   targets: Record<string, unknown>;
@@ -363,6 +364,9 @@ export function buildRecord(fields: RecordFields): Record<string, unknown> {
     // The control gate (#134): `secured`, the lab override in force, or
     // `blocked`.
     control: fields.control,
+    ...(fields.server_authentication_method
+      ? { server_authentication_method: fields.server_authentication_method }
+      : {}),
     tool: fields.tool,
     decision: fields.decision,
     ...fields.targets,

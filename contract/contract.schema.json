@@ -1,0 +1,1096 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "const": "./contract.schema.json"
+    },
+    "$comment": {
+      "type": "string"
+    },
+    "resultShapes": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "defaultNotifierNodeId": {
+          "type": "string"
+        },
+        "baseEventTypeNodeId": {
+          "type": "string"
+        },
+        "conditionTypeNodeId": {
+          "type": "string"
+        },
+        "conditionRefreshMethodNodeId": {
+          "type": "string"
+        },
+        "acknowledgeMethodNodeId": {
+          "type": "string"
+        },
+        "shelvingStateBrowseName": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "acknowledge": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            },
+            "confirm": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            },
+            "comment": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            },
+            "shelve": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            },
+            "shelveFor": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            },
+            "unshelve": {
+              "type": "object",
+              "properties": {
+                "browseName": {
+                  "type": "string"
+                },
+                "methodNodeId": {
+                  "type": "string"
+                },
+                "on": {
+                  "type": "string"
+                },
+                "takes": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "browseName",
+                "methodNodeId",
+                "on",
+                "takes",
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "acknowledge",
+            "confirm",
+            "comment",
+            "shelve",
+            "shelveFor",
+            "unshelve"
+          ],
+          "additionalProperties": false
+        },
+        "refreshStartEventTypeNodeId": {
+          "type": "string"
+        },
+        "refreshEndEventTypeNodeId": {
+          "type": "string"
+        },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "severityMin": {
+              "type": "number"
+            },
+            "bufferSize": {
+              "type": "number"
+            },
+            "readLimit": {
+              "type": "number"
+            },
+            "refreshTimeoutSeconds": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "severityMin",
+            "bufferSize",
+            "readLimit",
+            "refreshTimeoutSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "subscriptionRequest": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "publishingIntervalMs": {
+              "type": "number"
+            },
+            "queueSize": {
+              "type": "number"
+            },
+            "maxKeepAliveCount": {
+              "type": "number"
+            },
+            "lifetimeCount": {
+              "type": "number"
+            },
+            "maxNotificationsPerPublish": {
+              "type": "number"
+            },
+            "priority": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "publishingIntervalMs",
+            "queueSize",
+            "maxKeepAliveCount",
+            "lifetimeCount",
+            "maxNotificationsPerPublish",
+            "priority"
+          ],
+          "additionalProperties": false
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "defaultNotifierNodeId",
+        "baseEventTypeNodeId",
+        "conditionTypeNodeId",
+        "conditionRefreshMethodNodeId",
+        "acknowledgeMethodNodeId",
+        "shelvingStateBrowseName",
+        "actions",
+        "refreshStartEventTypeNodeId",
+        "refreshEndEventTypeNodeId",
+        "defaults",
+        "subscriptionRequest",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "subscriptions": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "defaultPublishingIntervalMs": {
+          "type": "number"
+        },
+        "minPublishingIntervalMs": {
+          "type": "number"
+        },
+        "defaultBufferSize": {
+          "type": "number"
+        },
+        "minBufferSize": {
+          "type": "number"
+        },
+        "maxBufferSize": {
+          "type": "number"
+        },
+        "deadbandTypes": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "none": {
+              "type": "string"
+            },
+            "absolute": {
+              "type": "string"
+            },
+            "percent": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "none",
+            "absolute",
+            "percent"
+          ],
+          "additionalProperties": false
+        },
+        "dataChangeTriggers": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "statusValue": {
+              "type": "string"
+            },
+            "statusValueTimestamp": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "statusValue",
+            "statusValueTimestamp"
+          ],
+          "additionalProperties": false
+        },
+        "defaultDataChangeTrigger": {
+          "type": "string"
+        },
+        "request": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "maxKeepAliveCount": {
+              "type": "number"
+            },
+            "lifetimeCount": {
+              "type": "number"
+            },
+            "maxNotificationsPerPublish": {
+              "type": "number"
+            },
+            "priority": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "maxKeepAliveCount",
+            "lifetimeCount",
+            "maxNotificationsPerPublish",
+            "priority"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "defaultPublishingIntervalMs",
+        "minPublishingIntervalMs",
+        "defaultBufferSize",
+        "minBufferSize",
+        "maxBufferSize",
+        "deadbandTypes",
+        "dataChangeTriggers",
+        "defaultDataChangeTrigger",
+        "request"
+      ],
+      "additionalProperties": false
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "rawReturnBounds": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rawReturnBounds"
+      ],
+      "additionalProperties": false
+    },
+    "transport": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "maxChunkCount": {
+          "type": "number"
+        },
+        "maxChunkSize": {
+          "type": "number"
+        },
+        "maxMessageSize": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxChunkCount",
+        "maxChunkSize",
+        "maxMessageSize"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "maxNodesPerRead": {
+          "type": "number"
+        },
+        "maxNodesPerWrite": {
+          "type": "number"
+        },
+        "maxMethodArguments": {
+          "type": "number"
+        },
+        "maxHistoryValues": {
+          "type": "number"
+        },
+        "maxSubscriptions": {
+          "type": "number"
+        },
+        "maxEventBufferSize": {
+          "type": "number"
+        },
+        "maxRequestBytes": {
+          "type": "number"
+        },
+        "maxStringBytes": {
+          "type": "number"
+        },
+        "maxByteStringBytes": {
+          "type": "number"
+        },
+        "maxArrayItems": {
+          "type": "number"
+        },
+        "maxNestingDepth": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxNodesPerRead",
+        "maxNodesPerWrite",
+        "maxMethodArguments",
+        "maxHistoryValues",
+        "maxSubscriptions",
+        "maxEventBufferSize",
+        "maxRequestBytes",
+        "maxStringBytes",
+        "maxByteStringBytes",
+        "maxArrayItems",
+        "maxNestingDepth"
+      ],
+      "additionalProperties": false
+    },
+    "operationLimits": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "maxNodesPerRead": {
+          "type": "string"
+        },
+        "maxNodesPerWrite": {
+          "type": "string"
+        },
+        "maxNodesPerBrowse": {
+          "type": "string"
+        },
+        "maxNodesPerTranslateBrowsePathsToNodeIds": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "maxNodesPerRead",
+        "maxNodesPerWrite",
+        "maxNodesPerBrowse",
+        "maxNodesPerTranslateBrowsePathsToNodeIds"
+      ],
+      "additionalProperties": false
+    },
+    "completeness": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "reasons": {
+          "type": "object",
+          "properties": {
+            "requestLimit": {
+              "type": "string"
+            },
+            "contractLimit": {
+              "type": "string"
+            },
+            "serverLimit": {
+              "type": "string"
+            },
+            "bufferOverflow": {
+              "type": "string"
+            },
+            "unbrowsable": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "requestLimit",
+            "contractLimit",
+            "serverLimit",
+            "bufferOverflow",
+            "unbrowsable"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "reasons"
+      ],
+      "additionalProperties": false
+    },
+    "traversal": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "rootNodeId": {
+          "type": "string"
+        },
+        "defaultDepth": {
+          "type": "number"
+        },
+        "maxDepth": {
+          "type": "number"
+        },
+        "defaultMaxNodes": {
+          "type": "number"
+        },
+        "maxNodes": {
+          "type": "number"
+        },
+        "skipBrowseName": {
+          "type": "string"
+        },
+        "hasTypeDefinitionNodeId": {
+          "type": "string"
+        },
+        "maxTypeDefinitionsPerRequest": {
+          "type": "number"
+        },
+        "$typeDefinitionComment": {
+          "type": "string"
+        },
+        "$skipComment": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rootNodeId",
+        "defaultDepth",
+        "maxDepth",
+        "defaultMaxNodes",
+        "maxNodes",
+        "skipBrowseName",
+        "hasTypeDefinitionNodeId",
+        "maxTypeDefinitionsPerRequest"
+      ],
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "serverStatusNodeId": {
+          "type": "string"
+        },
+        "namespaceArrayNodeId": {
+          "type": "string"
+        },
+        "serverDiagnosticsSummaryNodeId": {
+          "type": "string"
+        },
+        "diagnosticsFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "serverStatusNodeId",
+        "namespaceArrayNodeId",
+        "serverDiagnosticsSummaryNodeId",
+        "diagnosticsFields"
+      ],
+      "additionalProperties": false
+    },
+    "retryPolicies": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "resend": {
+          "type": "string"
+        },
+        "reconnectOnly": {
+          "type": "string"
+        },
+        "uncertainOutcome": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resend",
+        "reconnectOnly",
+        "uncertainOutcome"
+      ],
+      "additionalProperties": false
+    },
+    "deadSession": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "statusCodeNames": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "names"
+          ],
+          "additionalProperties": false
+        },
+        "socketErrors": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "codes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "codes"
+          ],
+          "additionalProperties": false
+        },
+        "phrases": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "texts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "texts"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "statusCodeNames",
+        "socketErrors",
+        "phrases"
+      ],
+      "additionalProperties": false
+    },
+    "analog": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "engineeringUnitsBrowseName": {
+          "type": "string"
+        },
+        "euRangeBrowseName": {
+          "type": "string"
+        },
+        "instrumentRangeBrowseName": {
+          "type": "string"
+        },
+        "enforceEuRangeOnWrite": {
+          "type": "boolean"
+        },
+        "maxPropertiesPerRequest": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "engineeringUnitsBrowseName",
+        "euRangeBrowseName",
+        "instrumentRangeBrowseName",
+        "enforceEuRangeOnWrite",
+        "maxPropertiesPerRequest"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "history": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "remediation": {
+              "type": "string"
+            },
+            "nodeId": {
+              "type": "string"
+            },
+            "browseName": {
+              "type": "string"
+            },
+            "check": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "remediation",
+            "nodeId",
+            "browseName",
+            "check"
+          ],
+          "additionalProperties": false
+        },
+        "historyEvents": {
+          "type": "object",
+          "properties": {
+            "$comment": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "remediation": {
+              "type": "string"
+            },
+            "nodeId": {
+              "type": "string"
+            },
+            "browseName": {
+              "type": "string"
+            },
+            "check": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "remediation",
+            "nodeId",
+            "browseName",
+            "check"
+          ],
+          "additionalProperties": false
+        },
+        "aggregate": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "remediation": {
+              "type": "string"
+            },
+            "nodeId": {
+              "type": "string"
+            },
+            "browseName": {
+              "type": "string"
+            },
+            "check": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "remediation",
+            "nodeId",
+            "browseName",
+            "check"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "history",
+        "historyEvents",
+        "aggregate"
+      ],
+      "additionalProperties": false
+    },
+    "errors": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "notices": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "droppedEvents": {
+          "type": "string"
+        },
+        "historyTruncated": {
+          "type": "string"
+        },
+        "eventHistoryTruncated": {
+          "type": "string"
+        },
+        "serverTruncated": {
+          "type": "string"
+        },
+        "eventsResubscribed": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "droppedEvents",
+        "historyTruncated",
+        "eventHistoryTruncated",
+        "serverTruncated",
+        "eventsResubscribed"
+      ],
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "$comment": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "body": {
+            "type": "object",
+            "properties": {
+              "$comment": {
+                "type": "string"
+              },
+              "recordsKey": {
+                "type": "string"
+              },
+              "resultShape": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "recordsKey",
+              "resultShape"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "uri",
+          "name",
+          "description",
+          "mimeType",
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "accessClass": {
+            "enum": [
+              "alarm-action",
+              "control",
+              "monitor",
+              "read"
+            ]
+          },
+          "annotations": {
+            "type": "object",
+            "properties": {
+              "readOnlyHint": {
+                "type": "boolean"
+              },
+              "destructiveHint": {
+                "type": "boolean"
+              },
+              "idempotentHint": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "readOnlyHint",
+              "destructiveHint",
+              "idempotentHint"
+            ],
+            "additionalProperties": false
+          },
+          "retryPolicy": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {}
+          },
+          "resultShape": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "inputSchema": {
+            "$ref": "https://json-schema.org/draft/2020-12/schema"
+          },
+          "reportsCompleteness": {
+            "type": "boolean"
+          },
+          "argumentCapabilities": {
+            "type": "object"
+          },
+          "guard": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "accessClass",
+          "annotations",
+          "retryPolicy",
+          "capabilities",
+          "description",
+          "inputSchema"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "resultShapes",
+    "events",
+    "subscriptions",
+    "history",
+    "transport",
+    "limits",
+    "operationLimits",
+    "completeness",
+    "traversal",
+    "diagnostics",
+    "retryPolicies",
+    "deadSession",
+    "analog",
+    "capabilities",
+    "errors",
+    "notices",
+    "resources",
+    "tools"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OPC UA MCP contract metadata"
+}

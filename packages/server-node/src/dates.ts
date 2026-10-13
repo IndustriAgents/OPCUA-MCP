@@ -1,5 +1,7 @@
 // Conversion between the ISO-8601 strings MCP delivers and Date objects.
 
+import { ToolFailure } from "./errors.js";
+
 /** The accepted grammar: an RFC 3339 date-time. The date and time are always
  * both there; seconds and a 1-9 digit fraction are optional; the separator is
  * `T`, `t` or a space; the zone is `Z`/`z` or `+HH:MM`/`-HH:MM`.
@@ -23,7 +25,7 @@ const MIN_MS = -11_644_473_600_000; // 1601-01-01T00:00:00Z
 const MAX_MS = 253_402_300_799_999; // 9999-12-31T23:59:59.999Z
 
 function invalid(value: string): Error {
-  return new Error(`Invalid date/time: "${value}". Use ISO 8601, e.g. 2026-04-23T17:40:00Z`);
+  return new ToolFailure(`Invalid date/time: "${value}". Use ISO 8601, e.g. 2026-04-23T17:40:00Z`);
 }
 
 function daysInMonth(year: number, month: number): number {
@@ -77,7 +79,7 @@ export function toDate(value: string | Date | undefined | null): Date | undefine
   const millisecond = Number((match[7] ?? "").padEnd(3, "0").slice(0, 3));
   const zone = match[8];
   if (zone === undefined) {
-    throw new Error(
+    throw new ToolFailure(
       `Invalid date/time: "${value}" has no timezone, so the instant it names ` +
         "depends on where it is read. Add Z for UTC or an offset such as +02:00, " +
         "e.g. 2026-04-23T17:40:00Z"
@@ -108,7 +110,7 @@ export function toDate(value: string | Date | undefined | null): Date | undefine
     ((hour * 60 + minute - offsetMinutes) * 60 + second) * 1000 +
     millisecond;
   if (instant < MIN_MS || instant > MAX_MS) {
-    throw new Error(
+    throw new ToolFailure(
       `Invalid date/time: "${value}" is outside what an OPC UA DateTime can hold ` +
         "(1601-01-01T00:00:00Z to 9999-12-31T23:59:59Z)"
     );

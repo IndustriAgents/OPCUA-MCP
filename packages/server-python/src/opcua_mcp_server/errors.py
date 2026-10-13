@@ -40,3 +40,22 @@ def message(key: str, **fields: Any) -> str:
 
 
 __all__ = ["TEMPLATES", "message"]
+
+
+class ApplicationRefusal(ValueError):
+    """An anticipated refusal, safe to expose through any protocol adapter."""
+
+
+class AdapterFailure(RuntimeError):
+    """A failed native operation; retain the cause for retry classification."""
+
+    def __init__(self, operation: str, text: str, cause: Exception):
+        super().__init__(text)
+        self.operation = operation
+        self.__cause__ = cause
+
+
+def describe_error(error: BaseException) -> str:
+    """The message to report for a failed connection, in the library's words."""
+    text = str(error)
+    return text or type(error).__name__

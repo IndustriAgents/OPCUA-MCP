@@ -1,0 +1,6 @@
+{
+  "categories": { "correctness": "off" },
+  "rules": {
+    "complexity": ["error", { "max": 25, "variant": "modified" }]
+  }
+}

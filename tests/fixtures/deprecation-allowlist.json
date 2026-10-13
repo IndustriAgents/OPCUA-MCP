@@ -8,7 +8,7 @@
       "message": "datetime\\.datetime\\.utc(now|fromtimestamp)\\(\\) is deprecated",
       "issue": "#144",
       "owner": "@midhunxavier",
-      "remove_when": "The Python runtime no longer depends on python-opcua (#144 moves it to a maintained async stack). python-opcua is unmaintained, so no upstream release will fix this; the warnings appear on Python 3.12 and later."
+      "remove_when": "The one-release legacy rollback backend and legacy secure/independent qualification fixtures no longer use python-opcua. The default wire client is maintained asyncua after #144. python-opcua is unmaintained, so no upstream release will fix this; the warnings appear on Python 3.12 and later."
     }
   ]
 }

@@ -1,0 +1,119 @@
+{
+  "cases": [
+    {
+      "name": "single page",
+      "pages": [{ "values": [1, 2] }],
+      "expected": [1, 2],
+      "reads": [],
+      "released": []
+    },
+    {
+      "name": "three native pages",
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "values": [2], "point": "b" },
+        { "values": [3] }
+      ],
+      "expected": [1, 2, 3],
+      "reads": ["a", "b"],
+      "released": []
+    },
+    {
+      "name": "opaque point reused with progress",
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "values": [2], "point": "a" },
+        { "values": [3] }
+      ],
+      "expected": [1, 2, 3],
+      "reads": ["a", "a"],
+      "released": []
+    },
+    {
+      "name": "GoodNoData terminal",
+      "pages": [{ "values": [1], "point": "a" }, { "status": "GoodNoData" }],
+      "expected": [1],
+      "reads": ["a"],
+      "released": []
+    },
+    {
+      "name": "empty continuation refused",
+      "pages": [{ "values": [], "point": "a" }],
+      "error": "aggregateNoProgress",
+      "reads": [],
+      "released": ["a"]
+    },
+    {
+      "name": "new empty point released",
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "values": [], "point": "b" }
+      ],
+      "error": "aggregateNoProgress",
+      "reads": ["a"],
+      "released": ["b"]
+    },
+    {
+      "name": "exact cap complete",
+      "limit": 2,
+      "pages": [{ "values": [1], "point": "a" }, { "values": [2] }],
+      "expected": [1, 2],
+      "reads": ["a"],
+      "released": []
+    },
+    {
+      "name": "cap with more refused",
+      "limit": 2,
+      "pages": [{ "values": [1, 2], "point": "a" }],
+      "error": "aggregatePageLimit",
+      "reads": [],
+      "released": ["a"]
+    },
+    {
+      "name": "over cap refused",
+      "limit": 2,
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "values": [2, 3], "point": "b" }
+      ],
+      "error": "aggregatePageLimit",
+      "reads": ["a"],
+      "released": ["b"]
+    },
+    {
+      "name": "bad stale point explicit",
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "status": "BadContinuationPointInvalid" }
+      ],
+      "errorText": "Read aggregate failed with status: BadContinuationPointInvalid",
+      "reads": ["a"],
+      "released": ["a"]
+    },
+    {
+      "name": "transport failure released",
+      "pages": [
+        { "values": [1], "point": "a" },
+        { "throw": "connection reset" }
+      ],
+      "errorText": "connection reset",
+      "reads": ["a"],
+      "released": ["a"]
+    },
+    {
+      "name": "release failure preserves primary",
+      "releaseThrows": true,
+      "pages": [{ "values": [], "point": "a" }],
+      "error": "aggregateNoProgress",
+      "reads": [],
+      "released": ["a"]
+    },
+    {
+      "name": "bad first page released",
+      "pages": [{ "status": "BadNoData", "point": "a" }],
+      "errorText": "Read aggregate failed with status: BadNoData",
+      "reads": [],
+      "released": ["a"]
+    }
+  ]
+}

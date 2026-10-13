@@ -27,8 +27,9 @@ import {
   resolveNodeId,
 } from "node-opcua-client";
 
+import { convertForVariant } from "./variant-codec.js";
 import { CONTRACT } from "./contract.js";
-import { message } from "./errors.js";
+import { ToolFailure, message } from "./errors.js";
 import { continues, releaseContinuationPoint } from "./history.js";
 import { historyData, variantToJson } from "./records.js";
 import { notice } from "./notices.js";
@@ -492,7 +493,7 @@ export async function listActiveAlarms(
 
     const statusCode = await callConditionRefresh(session, subscription.subscriptionId);
     if (!isGood(statusCode)) {
-      throw new Error(
+      throw new ToolFailure(
         `ConditionRefresh failed with status: ${statusCode.toString()}. ` +
           "The server may not implement OPC UA Alarms & Conditions."
       );
@@ -500,7 +501,7 @@ export async function listActiveAlarms(
 
     await finished;
     if (!ended) {
-      throw new Error(refreshTimedOutMessage(timeoutSeconds, conditions.length));
+      throw new ToolFailure(refreshTimedOutMessage(timeoutSeconds, conditions.length));
     }
     return conditions;
   } finally {
@@ -567,6 +568,8 @@ export async function alarmAction(
   durationMs: number | null = null
 ) {
   const spec = ACTIONS[action];
+  const decodedId =
+    spec.takes === "eventIdAndComment" ? convertForVariant(eventId, DataType.ByteString) : null;
   // Which object the method hangs off. The acknowledge family are methods of the
   // condition's own type; the shelving ones are methods of
   // ShelvedStateMachineType and hang off the condition's ShelvingState component
@@ -580,7 +583,7 @@ export async function alarmAction(
   let inputArguments: Variant[] = [];
   if (spec.takes === "eventIdAndComment") {
     inputArguments = [
-      new Variant({ dataType: DataType.ByteString, value: Buffer.from(eventId, "base64") }),
+      new Variant({ dataType: DataType.ByteString, value: decodedId }),
       new Variant({
         dataType: DataType.LocalizedText,
         value: new LocalizedText({ text: comment }),
@@ -636,7 +639,7 @@ async function actionMethodId(
 async function shelvingStateId(session: ClientSession, conditionId: string): Promise<string> {
   const found = await childByBrowseName(session, conditionId, EVENTS.shelvingStateBrowseName);
   if (found) return found;
-  throw new Error(message("shelvingNotSupported", { condition_id: conditionId }));
+  throw new ToolFailure(message("shelvingNotSupported", { condition_id: conditionId }));
 }
 
 /** One forward reference of `parentId` by browse name, or null. */

@@ -19,7 +19,7 @@ from typing import Any
 from .contract import CONTRACT
 from .errors import message
 from .node_ids import namespace_uri_form, resolve_node_id
-from .numeric import parse_numeric_string
+from .numeric import js_number, json_text, parse_numeric_string
 
 _POLICY_CHECK = CONTRACT["policyCheck"]
 #: The writable_subtrees walk's node cap: a rule's default, and the most it may ask for.
@@ -228,7 +228,7 @@ def _non_empty(value: Any) -> bool:
 
 def _json(value: Any) -> str:
     """A value as ``JSON.stringify`` spells it, for a message both runtimes share."""
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return json_text(value)
 
 
 @dataclass(frozen=True)
@@ -527,8 +527,8 @@ class ServerIdentity:
     #: A SecurityPolicy other than None: mode Sign or SignAndEncrypt.
     channel_secured: bool
     server_authenticated: bool
-    #: ``pin`` or ``none``. A trust-store method would be a third value; neither
-    #: client library offers one both runtimes can use, so there is none yet.
+    #: ``pin``, ``trust-store`` or ``none``. Connections enforce configured
+    #: authentication before a live session can carry control.
     authentication_method: str
 
 
@@ -539,10 +539,11 @@ def server_identity(env: Mapping[str, str]) -> ServerIdentity:
     # security.py, but this must not read it as authentication if it ever gets
     # here — with no channel security the server presents no certificate at all.
     pinned = secured and _value(env, "OPCUA_SERVER_CERT") is not None
+    trusted = secured and _value(env, "OPCUA_SERVER_TRUST_STORE") is not None
     return ServerIdentity(
         channel_secured=secured,
-        server_authenticated=pinned,
-        authentication_method="pin" if pinned else "none",
+        server_authenticated=pinned or trusted,
+        authentication_method="pin" if pinned else "trust-store" if trusted else "none",
     )
 
 
@@ -818,9 +819,7 @@ def format_number(value: float) -> str:
         return "infinity"
     if value == float("-inf"):
         return "-infinity"
-    if float(value).is_integer() and abs(value) < 1e16:
-        return str(int(value))
-    return repr(float(value))
+    return js_number(value)
 
 
 def _same_json_value(value: Any, candidate: Any) -> bool:

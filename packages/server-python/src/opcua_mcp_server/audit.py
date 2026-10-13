@@ -303,6 +303,7 @@ def build_record(
     decision: str,
     targets: Mapping[str, Any],
     reason: str | None = None,
+    server_authentication_method: str | None = None,
 ) -> dict[str, Any]:
     """One audit record, in the canonical field order.
 
@@ -338,6 +339,11 @@ def build_record(
         # The control gate (#134): `secured`, the lab override in force, or
         # `blocked`.
         "control": control,
+        **(
+            {"server_authentication_method": "trust-store"}
+            if server_authentication_method == "trust-store"
+            else {}
+        ),
         "tool": tool,
         "decision": decision,
         **targets,

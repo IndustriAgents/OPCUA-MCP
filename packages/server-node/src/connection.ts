@@ -27,7 +27,17 @@
 // relative to their own `__dirname` at *import* time to find their package.json,
 // which no longer exists once bundled, so the `.mcpb` died on connect. Importing
 // the client package keeps the compiler honest about what this server may use.
-import { OPCUAClient, ClientSession, StatusCodes, AggregateFunction } from "node-opcua-client";
+import {
+  OPCUAClient,
+  ClientSession,
+  StatusCodes,
+  AggregateFunction,
+  MessageSecurityMode,
+  SecurityPolicy,
+} from "node-opcua-client";
+
+import { TrustStore, trustRefusal } from "./trust-store.js";
+import { CLIENT_APPLICATION_NAME } from "./client-identity.js";
 
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
@@ -329,7 +339,7 @@ export class OpcuaConnection {
 
       const reconnect = this.reconnectSettings;
       client = OPCUAClient.create({
-        applicationName: "OPC UA MCP Client",
+        applicationName: CLIENT_APPLICATION_NAME,
         // The retries of *one round*, never -1. node-opcua reads `maxRetry` for
         // the initial connect, and -1 there is a `connect()` that never settles
         // while the endpoint is unreachable — which, awaited before the MCP
@@ -344,12 +354,23 @@ export class OpcuaConnection {
         // is built on from moving under us in a future release.
         keepSessionAlive: true,
         requestedSessionTimeout: reconnect.sessionTimeout,
+        // Same request as Python; the server may revise either lifetime.
+        defaultSecureTokenLifetime: reconnect.sessionTimeout,
         // What this client will let the server send it. node-opcua enforces both
         // itself; the Python runtime has to patch its library to do the same, and
         // the point of taking the numbers from the contract is that the two are
         // safe against the same thing. See transport-limits.ts.
         transportSettings: transportSettings(),
         ...clientSecurityOptions(security),
+        ...(security.serverTrustStore
+          ? {
+              clientCertificateManager: new TrustStore(security.serverTrustStore, {
+                applicationUri: security.serverApplicationUri!,
+                advertisedUri: security.serverApplicationUri!,
+                endpoint: this.endpoint,
+              }),
+            }
+          : {}),
         // The spelling node-opcua reads now; `endpoint_must_exist` still worked
         // but logged a deprecation warning on every connect.
         endpointMustExist: false,
@@ -358,6 +379,19 @@ export class OpcuaConnection {
 
       this.opening = client;
       await client.connect(this.endpoint);
+      if (security.serverTrustStore) {
+        // Native repair can reuse a cached certificate without rechecking CRLs.
+        // Preserve configured initial backoff, then require application-owned
+        // rebuilds (fresh discovery, trust and URI binding) after a channel loss.
+        client.connectionStrategy.maxRetry = 0;
+        const endpoint = client.findEndpointForSecurity(
+          MessageSecurityMode[security.mode],
+          SecurityPolicy[security.policy]
+        );
+        if (endpoint?.server.applicationUri !== security.serverApplicationUri) {
+          throw new Error(trustRefusal("BadCertificateUriInvalid"));
+        }
+      }
       if (this.closed) throw new Error(CLOSED_MESSAGE);
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
@@ -449,9 +483,13 @@ export class OpcuaConnection {
 
     client.on("connection_lost", () => {
       if (!isCurrent()) return;
-      this.state = "reconnecting";
+      this.state = client.reconnectOnFailure !== false ? "reconnecting" : "disconnected";
       this.lastError = "connection lost";
-      console.error("OPC UA connection lost — node-opcua is trying to repair it");
+      console.error(
+        client.reconnectOnFailure
+          ? "OPC UA connection lost — node-opcua is trying to repair it"
+          : "OPC UA connection lost — waiting for application reconnect"
+      );
     });
 
     client.on("backoff", (retry: number, delay: number) => {
@@ -683,10 +721,8 @@ export class OpcuaConnection {
    *
    * A different node and a different answer from `accessHistoryDataCapability`:
    * Part 11 §5.4 lets a server keep values without keeping events, and most do.
-   * The node is commonly absent rather than present-and-false — python-opcua's
-   * server has no ns=0;i=11194 at all — which reads the same way here, and
-   * should: a server that cannot say it keeps event history is one whose event
-   * history nobody should go looking for.
+   * An absent capability node and a false value both mean that this server
+   * does not advertise an event archive.
    */
   async accessHistoryEventsCapability(on?: ClientSession): Promise<Probe> {
     return await this.booleanCapability("historyEvents", on);
@@ -742,7 +778,15 @@ export class OpcuaConnection {
           // Map the string BrowseName to the AggregateFunction
           if (reference.browseName.name) {
             const name = reference.browseName.name.toString();
-            if (name in AggregateFunction) {
+            const identifier = Object.hasOwn(AggregateFunction, name)
+              ? AggregateFunction[name as keyof typeof AggregateFunction]
+              : undefined;
+            if (
+              typeof identifier === "number" &&
+              reference.nodeId.namespace === 0 &&
+              reference.nodeId.value === identifier &&
+              !functions.includes(name)
+            ) {
               functions.push(name);
             }
           }

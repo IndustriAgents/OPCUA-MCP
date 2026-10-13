@@ -12,6 +12,11 @@
     "maxEventBufferSize": 10000
   },
   "requests": [
+    {"name": "unpaired high surrogate is refused before validation", "tool": "write_opcua_nodes", "arguments": {"nodes": [{"node_id": "ns=2;i=41", "value": "\ud800"}]}, "error": "write_opcua_nodes argument nodes[0].value contains an unpaired Unicode surrogate. Nothing was sent to the OPC UA server. Use valid Unicode text."},
+    {"name": "unpaired low surrogate is refused before validation", "tool": "write_opcua_nodes", "arguments": {"nodes": [{"node_id": "ns=2;i=41", "value": "\udfff"}]}, "error": "write_opcua_nodes argument nodes[0].value contains an unpaired Unicode surrogate. Nothing was sent to the OPC UA server. Use valid Unicode text."},
+    {"name": "unpaired surrogate in a property name is not echoed", "tool": "write_opcua_nodes", "arguments": {"\ud800": 1}, "error": "write_opcua_nodes argument arguments contains an unpaired Unicode surrogate. Nothing was sent to the OPC UA server. Use valid Unicode text."},
+    {"name": "nested invalid property key is refused", "tool": "write_opcua_nodes", "arguments": {"nodes": [{"node_id": "ns=2;i=41", "value": {"\udfff": 1}}]}, "error": "write_opcua_nodes argument nodes[0].value contains an unpaired Unicode surrogate. Nothing was sent to the OPC UA server. Use valid Unicode text."},
+    {"name": "valid supplementary Unicode remains accepted", "tool": "write_opcua_nodes", "arguments": {"nodes": [{"node_id": "ns=2;i=41", "value": "caf\u00e9 \ud83d\ude42", "data_type": "String"}]}, "error": null},
     {
       "name": "a string exactly at the limit is accepted",
       "tool": "write_opcua_nodes",

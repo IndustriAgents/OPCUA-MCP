@@ -1,0 +1,290 @@
+{
+  "now": "2026-04-23T12:00:00.000Z",
+  "cases": [
+    {
+      "name": "subscribe reports applied buffer 0",
+      "operation": "subscribe",
+      "nodeId": "i=85",
+      "severity": 400,
+      "requested": 0,
+      "replaced": true,
+      "calls": [
+        {
+          "name": "subscribe",
+          "node_id": "i=85",
+          "severity": 400,
+          "size": 100
+        }
+      ],
+      "expected": {
+        "node_id": "ns=0;i=85",
+        "severity_min": 400,
+        "buffer_size": 100,
+        "replaced": true
+      }
+    },
+    {
+      "name": "subscribe reports applied buffer 50000",
+      "operation": "subscribe",
+      "nodeId": "i=85",
+      "severity": 400,
+      "requested": 50000,
+      "replaced": true,
+      "calls": [
+        {
+          "name": "subscribe",
+          "node_id": "i=85",
+          "severity": 400,
+          "size": 10000
+        }
+      ],
+      "expected": {
+        "node_id": "ns=0;i=85",
+        "severity_min": 400,
+        "buffer_size": 10000,
+        "replaced": true
+      }
+    },
+    {
+      "name": "subscription service failure preserves its cause",
+      "operation": "subscribe",
+      "nodeId": "i=85",
+      "severity": 400,
+      "requested": 10,
+      "crash": "subscribe",
+      "error": "eventSubscribeFailed",
+      "fields": {
+        "node_id": "i=85",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "subscribe",
+          "node_id": "i=85",
+          "severity": 400,
+          "size": 10
+        }
+      ]
+    },
+    {
+      "name": "missing live buffer is a refusal",
+      "operation": "drain",
+      "nodeId": "i=85",
+      "limit": 2,
+      "drain": null,
+      "error": "notSubscribedToEvents",
+      "fields": {
+        "node_id": "i=85"
+      },
+      "calls": [
+        {
+          "name": "drain",
+          "node_id": "i=85",
+          "limit": 2
+        }
+      ]
+    },
+    {
+      "name": "empty live drain remains complete",
+      "operation": "drain",
+      "nodeId": "i=85",
+      "limit": 2,
+      "drain": {
+        "records": [],
+        "remaining": 0,
+        "dropped": 0,
+        "size": 10,
+        "resubscribed": false
+      },
+      "calls": [
+        {
+          "name": "drain",
+          "node_id": "i=85",
+          "limit": 2
+        }
+      ],
+      "expected": {
+        "records": [],
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 0,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        },
+        "notices": []
+      }
+    },
+    {
+      "name": "drain reports overflow before reconnect gap",
+      "operation": "drain",
+      "nodeId": "i=85",
+      "limit": 2,
+      "drain": {
+        "records": [
+          {
+            "event_id": "AQ==",
+            "message": "café 🙂",
+            "severity": 600
+          },
+          {
+            "event_id": "Ag==",
+            "message": "温度",
+            "severity": 500
+          }
+        ],
+        "remaining": 3,
+        "dropped": 5,
+        "size": 10,
+        "resubscribed": true
+      },
+      "calls": [
+        {
+          "name": "drain",
+          "node_id": "i=85",
+          "limit": 2
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "event_id": "AQ==",
+            "message": "café 🙂",
+            "severity": 600
+          },
+          {
+            "event_id": "Ag==",
+            "message": "温度",
+            "severity": 500
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "requestLimit",
+            "bufferOverflow"
+          ],
+          "returned": 2,
+          "truncated": true,
+          "limit": 2,
+          "dropped": 5,
+          "remaining": true,
+          "continuation": {}
+        },
+        "notices": [
+          "Note: 5 older event(s) were dropped before this read — the buffer of 10 filled up. Raise buffer_size or read more often.",
+          "Note: the connection to the OPC UA server was re-established and this event subscription was re-created on the new session, so events raised while it was down were not received. read_event_history can recover them from a server that stores its events."
+        ]
+      }
+    },
+    {
+      "name": "history cap counts fetched events before severity filtering",
+      "operation": "history",
+      "request": {
+        "nodeId": "i=85",
+        "numValues": 50,
+        "severityMin": 400
+      },
+      "page": {
+        "records": [
+          {
+            "event_id": "AQ==",
+            "message": "café 🙂",
+            "severity": 600
+          },
+          {
+            "event_id": "Ag==",
+            "message": "温度",
+            "severity": 500
+          }
+        ],
+        "fetched": 50,
+        "continued": false,
+        "lastTime": "2026-04-23T11:55:00.000Z"
+      },
+      "calls": [
+        {
+          "name": "history",
+          "node_id": "i=85",
+          "start": "2026-04-23T11:00:00.000Z",
+          "end": "2026-04-23T12:00:00.000Z",
+          "wanted": 50,
+          "severity": 400
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "event_id": "AQ==",
+            "message": "café 🙂",
+            "severity": 600
+          },
+          {
+            "event_id": "Ag==",
+            "message": "温度",
+            "severity": 500
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "requestLimit"
+          ],
+          "returned": 2,
+          "truncated": true,
+          "limit": 50,
+          "dropped": 0,
+          "remaining": null,
+          "continuation": {
+            "start_time": "2026-04-23T11:55:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "event history failure is framed once",
+      "operation": "history",
+      "request": {
+        "nodeId": "i=85",
+        "numValues": 50,
+        "severityMin": 400
+      },
+      "page": {
+        "records": [
+          {
+            "event_id": "AQ==",
+            "message": "café 🙂",
+            "severity": 600
+          },
+          {
+            "event_id": "Ag==",
+            "message": "温度",
+            "severity": 500
+          }
+        ],
+        "fetched": 50,
+        "continued": false,
+        "lastTime": "2026-04-23T11:55:00.000Z"
+      },
+      "crash": "history",
+      "error": "eventHistoryFailed",
+      "fields": {
+        "node_id": "i=85",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "history",
+          "node_id": "i=85",
+          "start": "2026-04-23T11:00:00.000Z",
+          "end": "2026-04-23T12:00:00.000Z",
+          "wanted": 50,
+          "severity": 400
+        }
+      ]
+    }
+  ]
+}

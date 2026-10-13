@@ -1,0 +1,82 @@
+{
+  "objectNodeId": "i=85",
+  "methodNodeId": "ns=2;i=20",
+  "cases": [
+    {
+      "name": "declared types and a scalar fallback",
+      "declared": [
+        {
+          "dataType": "Boolean",
+          "isArray": false
+        },
+        {
+          "dataType": "Double",
+          "isArray": true
+        }
+      ],
+      "arguments": [true, ["1.25", "2.5"], "café"],
+      "typed": [
+        {
+          "value": true,
+          "dataType": "Boolean",
+          "isArray": false
+        },
+        {
+          "value": ["1.25", "2.5"],
+          "dataType": "Double",
+          "isArray": true
+        },
+        {
+          "value": "café",
+          "dataType": null,
+          "isArray": false
+        }
+      ],
+      "status": "GoodClamped",
+      "outputs": [[1, 2], "°C"]
+    },
+    {
+      "name": "nullable optional arguments are empty",
+      "declared": [],
+      "arguments": null,
+      "typed": [],
+      "status": "Good",
+      "outputs": []
+    },
+    {
+      "name": "no declared metadata keeps scalar fallback",
+      "declared": [],
+      "arguments": [2.5],
+      "typed": [
+        {
+          "value": 2.5,
+          "dataType": null,
+          "isArray": false
+        }
+      ],
+      "status": "Good",
+      "outputs": [2.5]
+    },
+    {
+      "name": "metadata failure prevents a call",
+      "declared": [],
+      "arguments": [],
+      "metadataError": "cannot inspect",
+      "error": "Failed to call method ns=2;i=20 on object i=85: cannot inspect"
+    },
+    {
+      "name": "a failed operation is invoked once",
+      "declared": [],
+      "arguments": [],
+      "callError": "native timeout",
+      "error": "Failed to call method ns=2;i=20 on object i=85: native timeout"
+    },
+    {
+      "name": "anticipated encoding refusal keeps its frame",
+      "declared": [],
+      "arguments": [],
+      "refusal": "argument exceeds the encoded-size budget",
+      "error": "argument exceeds the encoded-size budget"
+    }
+  ]
+}

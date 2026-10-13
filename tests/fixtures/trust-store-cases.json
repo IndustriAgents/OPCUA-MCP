@@ -1,0 +1,527 @@
+{
+  "now": "2026-10-04T00:00:00Z",
+  "peerCertificateBytes": 1048576,
+  "cases": [
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": null,
+      "id": "valid"
+    },
+    {
+      "certificate": "renewed-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": null,
+      "id": "renewal"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-revoked-leaf.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevoked",
+      "id": "revoked-leaf"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-revoked-issuer.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateIssuerRevoked",
+      "id": "revoked-issuer"
+    },
+    {
+      "certificate": "expired-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateTimeInvalid",
+      "id": "expired-leaf"
+    },
+    {
+      "certificate": "pending-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateTimeInvalid",
+      "id": "pending-leaf"
+    },
+    {
+      "certificate": "wrong-uri-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUriInvalid",
+      "id": "wrong-uri"
+    },
+    {
+      "certificate": "missing-uri-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUriInvalid",
+      "id": "missing-uri"
+    },
+    {
+      "certificate": "wrong-host-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateHostNameInvalid",
+      "id": "wrong-host"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:another-server",
+      "expected": "BadCertificateUriInvalid",
+      "id": "advertised-uri-mismatch"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:wrong",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUriInvalid",
+      "id": "expected-uri-mismatch"
+    },
+    {
+      "certificate": "rogue-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "unknown-ca"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "empty-trust"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [],
+      "crls": [
+        "root-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "missing-issuer"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevocationUnknown",
+      "id": "missing-crl"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevocationUnknown",
+      "id": "missing-root-crl"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevocationUnknown",
+      "id": "empty-crls"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-expired.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevocationUnknown",
+      "id": "expired-crl"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-future.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateRevocationUnknown",
+      "id": "future-crl"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-forged.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateInvalid",
+      "id": "forged-crl"
+    },
+    {
+      "certificate": "limited-server.pem",
+      "anchors": [
+        "root-limited.pem"
+      ],
+      "issuers": [
+        "limited-issuer.pem"
+      ],
+      "crls": [
+        "root-limited-current.crl",
+        "limited-issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateInvalid",
+      "id": "path-length"
+    },
+    {
+      "certificate": "critical-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateInvalid",
+      "id": "unknown-critical-extension"
+    },
+    {
+      "certificate": "forged-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "forged-chain"
+    },
+    {
+      "certificate": "constrained-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "constrained-issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "constrained-issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateInvalid",
+      "id": "name-constraints"
+    },
+    {
+      "certificate": "cycle-server.pem",
+      "anchors": [
+        "root.pem"
+      ],
+      "issuers": [
+        "cycle-a.pem",
+        "cycle-b.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "cycle-a-current.crl",
+        "cycle-b-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateUntrusted",
+      "id": "cyclic-issuer-chain"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem",
+        "unused-expired-root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateIssuerTimeInvalid",
+      "id": "unused-expired-root"
+    },
+    {
+      "certificate": "server.pem",
+      "anchors": [
+        "root.pem",
+        "unused-revoked-root.pem"
+      ],
+      "issuers": [
+        "issuer.pem"
+      ],
+      "crls": [
+        "root-current.crl",
+        "issuer-current.crl",
+        "root-unused-revoked-current.crl"
+      ],
+      "endpoint": "opc.tcp://localhost:4840",
+      "applicationUri": "urn:opcua-mcp:trust-fixture",
+      "advertisedUri": "urn:opcua-mcp:trust-fixture",
+      "expected": "BadCertificateIssuerRevoked",
+      "id": "unused-revoked-root"
+    }
+  ],
+  "configuration": [
+    {
+      "id": "trust-on-insecure",
+      "env": {
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE requires a security policy other than None"
+    },
+    {
+      "id": "trust-pin-conflict",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust",
+        "OPCUA_SERVER_CERT": "/pki/server.pem"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE cannot be combined with OPCUA_SERVER_CERT"
+    },
+    {
+      "id": "missing-expected-uri",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_TRUST_STORE": "/pki/trust"
+      },
+      "error": "OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI"
+    },
+    {
+      "id": "uri-without-trust",
+      "env": {
+        "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+        "OPCUA_CLIENT_CERT": "/pki/client.pem",
+        "OPCUA_CLIENT_KEY": "/pki/client.key",
+        "OPCUA_SERVER_APPLICATION_URI": "urn:server"
+      },
+      "error": "OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE"
+    }
+  ]
+}

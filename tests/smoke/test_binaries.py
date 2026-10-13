@@ -255,7 +255,10 @@ def _exchange(binary, env: dict, cwd, messages: list[dict]) -> tuple[dict[int, d
     return responses, returncode
 
 
-async def test_binary_reads_refuses_control_and_exits_cleanly(binary, opcua_server, tmp_path):
+@pytest.mark.parametrize("python_backend", ["asyncua", "legacy"])
+async def test_binary_reads_refuses_control_and_exits_cleanly(
+    binary, opcua_server, tmp_path, python_backend
+):
     """A release candidate must do real work, keep its safety default, and stop.
 
     `--version` and a tool list prove the executable starts; they do not prove
@@ -263,7 +266,7 @@ async def test_binary_reads_refuses_control_and_exits_cleanly(binary, opcua_serv
     control tools, or that it exits when the client does rather than lingering
     as an orphan holding an OPC UA session open.
     """
-    env = {**os.environ, "OPCUA_SERVER_URL": opcua_server}
+    env = {**os.environ, "OPCUA_SERVER_URL": opcua_server, "OPCUA_PYTHON_BACKEND": python_backend}
     for name in ("OPCUA_PROFILE", "OPCUA_ALLOW_INSECURE_CONTROL"):
         env.pop(name, None)
 

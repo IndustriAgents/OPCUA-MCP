@@ -117,7 +117,7 @@ def test_a_condition_event_maps_to_the_canonical_record():
         "event_type": "ns=0;i=9341",
         "source_node": "ns=1;i=1001",
         "source_name": "Temperature",
-        "time": "2026-09-09T13:36:01.468000Z",
+        "time": "2026-09-09T13:36:01.468Z",
         "message": "Condition is High",
         "severity": 700,
         "condition_id": "ns=1;i=1002",

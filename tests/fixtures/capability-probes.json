@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "name": "valid standard aggregates",
+      "references": [
+        { "name": "Average", "nodeId": "ns=0;i=2342" },
+        { "name": "Minimum", "nodeId": "ns=0;i=2346" }
+      ],
+      "expected": ["Average", "Minimum"]
+    },
+    {
+      "name": "impostor standard name",
+      "references": [
+        { "name": "Average", "nodeId": "ns=2;i=2342" },
+        { "name": "Average", "nodeId": "ns=0;i=9999" }
+      ],
+      "expected": []
+    },
+    {
+      "name": "prototype names",
+      "references": [
+        { "name": "constructor", "nodeId": "ns=0;i=2342" },
+        { "name": "toString", "nodeId": "ns=0;i=2342" },
+        { "name": "__proto__", "nodeId": "ns=0;i=2342" }
+      ],
+      "expected": []
+    },
+    {
+      "name": "numeric enum reverse lookup",
+      "references": [{ "name": "2342", "nodeId": "ns=0;i=2342" }],
+      "expected": []
+    },
+    {
+      "name": "duplicates and unknown vendor aggregates",
+      "references": [
+        { "name": "Average", "nodeId": "ns=0;i=2342" },
+        { "name": "Average", "nodeId": "ns=0;i=2342" },
+        { "name": "VendorMean", "nodeId": "ns=2;i=4000" }
+      ],
+      "expected": ["Average"]
+    },
+    { "name": "empty folder", "references": [], "expected": [] }
+  ]
+}

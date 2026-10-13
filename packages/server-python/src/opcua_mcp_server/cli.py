@@ -9,11 +9,18 @@ path.
 
 from __future__ import annotations
 
+import sys
+
 from .install import dispatch
 
 
 def main() -> None:
     """Entry point for the ``opcua-mcp-server`` console script."""
+    # Match Node byte output even through pipes on Windows or a non-UTF-8 locale.
+    for stream in (sys.stdout, sys.stderr):
+        configure = getattr(stream, "reconfigure", None)
+        if configure is not None:
+            configure(encoding="utf-8", newline="\n")
     code = dispatch()
     if code is not None:
         raise SystemExit(code)

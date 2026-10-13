@@ -29,6 +29,9 @@ REPO_ROOT = PKG_ROOT.parents[1]
 datas = [
     (str(REPO_ROOT / "contract" / "tools.json"), "opcua_mcp_server"),
     (str(REPO_ROOT / "contract" / "config.json"), "opcua_mcp_server"),
+    (str(REPO_ROOT / "contract" / "contract.schema.json"), "opcua_mcp_server"),
+    (str(REPO_ROOT / "contract" / "schemas.json"), "opcua_mcp_server"),
+    (str(REPO_ROOT / "contract" / "schema-profile.json"), "opcua_mcp_server"),
 ]
 
 # Match the Node build's artifact naming exactly, so a release page lists the two

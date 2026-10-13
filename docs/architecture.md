@@ -11,6 +11,16 @@ flowchart LR
     B -->|OPC UA binary / TCP| C
 ```
 
+## Deployment boundary
+
+The supported MCP transport is local stdio: one process, one client context, one
+configured OPC UA endpoint. The plant endpoint may be remote. Instance-scoped
+state does not establish multi-client authorization or make sessions safe to
+pool across callers. Remote transport, endpoint selection and shared service
+operation require acceptance and implementation of the
+[identity and isolation RFC](rfc/0001-remote-identity-isolation.md), tracked in
+[#148](https://github.com/IndustriAgents/OPCUA-MCP/issues/148).
+
 ## Two runtimes, one tool surface
 
 The repo ships the same MCP server twice — once in Python, once in
@@ -353,7 +363,7 @@ Some tools only work against servers that support them:
 | Capability | Probe | Needed by |
 |---|---|---|
 | `history` | Read `AccessHistoryDataCapability` (`ns=0;i=11193`) is true | `read_opcua_history` |
-| `historyEvents` | Read `AccessHistoryEventsCapability` (`ns=0;i=11194`) is true | `read_event_history` |
+| `historyEvents` | Read `AccessHistoryEventsCapability` (`ns=0;i=11242`) is true | `read_event_history` |
 | `aggregate` | Browse `AggregateFunctions` (`ns=0;i=2997`) is non-empty | `read_opcua_history`, and its `aggregate_function` argument |
 
 Until #140 each runtime filtered `tools/list` by these: a tool the server could
@@ -903,3 +913,6 @@ way. For what the secured path does and does not verify — notably that the
 server certificate is checked only when `OPCUA_SERVER_CERT` pins it — see
 [SECURITY.md](../SECURITY.md), and for
 certificate generation and trust setup [certificates.md](certificates.md).
+
+The staged [feature module extraction](feature-modules.md) defines the read
+port and enforces dependency direction while the remaining feature slices move.

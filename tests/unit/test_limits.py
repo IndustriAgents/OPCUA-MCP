@@ -52,10 +52,22 @@ def test_the_limits_are_the_ones_both_runtimes_enforce():
 
     # And the tool bodies reach the numbers only through those two modules, so
     # there is exactly one place either runtime resolves a bound.
-    assert "from .limits import" in PYTHON_SRC, "server.py does not use the limits module"
-    assert 'from "./limits.js"' in NODE_SRC, "tools.ts does not use the limits module"
-    assert 'CONTRACT["limits"]' not in PYTHON_SRC, "server.py reads the contract's limits directly"
-    assert "CONTRACT.limits" not in NODE_SRC, "tools.ts reads the contract's limits directly"
+    python_root = ROOT / "packages/server-python/src/opcua_mcp_server"
+    node_root = ROOT / "packages/server-node/src"
+    python_features = "\n".join(
+        file.read_text(encoding="utf-8")
+        for directory in [python_root / "application", python_root / "protocol"]
+        for file in directory.glob("*.py")
+    )
+    node_features = "\n".join(
+        file.read_text(encoding="utf-8")
+        for directory in [node_root / "application", node_root / "protocol"]
+        for file in directory.glob("*.ts")
+    )
+    assert "limits import" in python_features, "Python features bypass the limits module"
+    assert 'limits.js"' in node_features, "Node features bypass the limits module"
+    assert 'CONTRACT["limits"]' not in python_features, "Python features duplicate limit ownership"
+    assert "CONTRACT.limits" not in node_features, "Node features duplicate limit ownership"
 
 
 @pytest.mark.parametrize(

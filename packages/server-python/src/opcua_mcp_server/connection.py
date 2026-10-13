@@ -55,19 +55,11 @@ from opcua import Client, ua
 
 from .config import ReconnectConfig, reconnect_config, reconnect_delays
 from .contract import CONTRACT, NAMESPACE_ARRAY_NODE_ID
-from .errors import message
+from .errors import describe_error, message
 from .policy import ToolPolicy, tool_policy
 from .security import create_client, describe_security, security_config, security_warnings
-from .transport_limits import install_receive_guard
 
 T = TypeVar("T")
-
-# Bound what a server may send before any client exists. python-opcua reassembles
-# a chunked message into a list with nothing counting it, so a server that never
-# terminates the message exhausts this process (CVE-2022-25304, no fixed version,
-# unmaintained library). See transport_limits.py for what the guard does and why
-# it is a patch.
-install_receive_guard()
 
 _DEAD_SESSION = CONTRACT["deadSession"]
 
@@ -551,12 +543,6 @@ def still_connecting_message(url: str, reason: str | None) -> str:
     one. The Node server's ``stillConnectingMessage`` words it the same.
     """
     return message("stillConnecting", url=url, reason=reason or "not yet known")
-
-
-def describe_error(error: BaseException) -> str:
-    """The message to report for a failed connection, in the library's words."""
-    text = str(error)
-    return text or type(error).__name__
 
 
 __all__ = [

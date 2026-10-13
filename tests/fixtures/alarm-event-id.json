@@ -1,0 +1,31 @@
+{
+  "cases": [
+    { "name": "valid padded", "eventId": "AQIDBA==", "hex": "01020304" },
+    { "name": "valid unpadded quartet", "eventId": "AQID", "hex": "010203" },
+    {
+      "name": "empty decoded id still reaches server validation",
+      "eventId": "",
+      "hex": ""
+    },
+    {
+      "name": "invalid characters",
+      "eventId": "!!!!",
+      "error": "ByteString values must be standard base64"
+    },
+    {
+      "name": "missing padding",
+      "eventId": "AQI",
+      "error": "ByteString values must be standard base64"
+    },
+    {
+      "name": "embedded whitespace",
+      "eventId": "AQ ID",
+      "error": "ByteString values must be standard base64"
+    },
+    {
+      "name": "URL-safe alphabet",
+      "eventId": "_w==",
+      "error": "ByteString values must be standard base64"
+    }
+  ]
+}

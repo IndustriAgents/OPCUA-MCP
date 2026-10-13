@@ -17,6 +17,10 @@
 
 ![OPC UA MCP Server in Claude Desktop](docs/assets/screenshot.png)
 
+One local MCP stdio process connects one client context to one OPC UA endpoint.
+Use a separate process for each endpoint. Remote MCP and shared multi-client
+operation are gated by the [identity and isolation RFC](docs/rfc/0001-remote-identity-isolation.md).
+
 ## Features
 
 - 🔌 **Any OPC UA server** — PLC, SCADA gateway or historian. Nothing to install on the plant side.
@@ -339,3 +343,7 @@ you are authorised to use, and keep writes and method calls to a simulator or la
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Tool inputs and structured results use JSON Schema draft 2020-12 with generated
+TypeScript/Python types and CI drift checks. See
+[contract generation](docs/contract-generation.md) for the authoring workflow.

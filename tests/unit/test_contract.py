@@ -476,15 +476,16 @@ def test_error_template_is_used_by_both_runtimes(key):
     """Every template is reached from both servers, or it is dead wording.
 
     A template only one runtime uses is the divergence this block was added to
-    remove, reintroduced one key at a time.
+    remove, reintroduced one key at a time. Include extracted application and
+    adapter modules rather than only the top-level server files.
     """
     python_sources = " ".join(
         path.read_text(encoding="utf-8")
-        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").glob("*.py")
+        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").rglob("*.py")
     )
     node_sources = " ".join(
         path.read_text(encoding="utf-8")
-        for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
+        for path in (ROOT / "packages" / "server-node" / "src").rglob("*.ts")
     )
     assert f'"{key}"' in python_sources, f"errors.{key} is never used by the Python server"
     assert f'"{key}"' in node_sources, f"errors.{key} is never used by the Node server"
@@ -552,11 +553,11 @@ def test_no_runtime_still_carries_its_own_copy_of_a_message():
     """
     sources = [
         (path, _python_string_literals(path))
-        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").glob("*.py")
+        for path in (ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server").rglob("*.py")
         if path.name != "errors.py"
     ] + [
         (path, _typescript_string_literals(path))
-        for path in (ROOT / "packages" / "server-node" / "src").glob("*.ts")
+        for path in (ROOT / "packages" / "server-node" / "src").rglob("*.ts")
         if path.name != "errors.ts"
     ]
 

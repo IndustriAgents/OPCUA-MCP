@@ -8,7 +8,7 @@
       "registry": "PyPI",
       "minimum": "3.10",
       "mcpSdk": "mcp 2.x (MCPServer)",
-      "opcuaLibrary": "opcua (python-opcua, FreeOpcUa)"
+      "opcuaLibrary": "asyncua (maintained default); opcua legacy rollback"
     },
     "node": {
       "package": "opcua-mcp-server",
@@ -26,7 +26,7 @@
       "python": "None, Basic128Rsa15, Basic256 and Basic256Sha256. Asking for an AES policy is refused at startup with a message naming the Node runtime, never downgraded.",
       "node": "The same four, plus Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss.",
       "observable": true,
-      "rationale": "python-opcua does not implement the AES suites. An extra policy adds a capability without weakening the shared baseline, which ADR 0001 allows; a silent downgrade would not be, hence the refusal.",
+      "rationale": "The shared Python security baseline retains its four existing policies for both maintained and rollback clients; AES suites remain unqualified on Python. An extra policy adds a capability without weakening the shared baseline, which ADR 0001 allows; a silent downgrade would not be, hence the refusal.",
       "tracking": ["#144"],
       "evidence": [
         "packages/server-python/src/opcua_mcp_server/security.py",
@@ -46,7 +46,7 @@
       "python": "A certificate or key file is read as PEM only when it is named *.pem, and as DER otherwise, so a PEM key called client.key fails to load.",
       "node": "The file contents are sniffed; PEM and DER load under any name.",
       "observable": true,
-      "rationale": "python-opcua applies the extension rule when it loads the file for the handshake, and the Python runtime follows the same rule everywhere so the two never disagree about one file. A stricter input rule on one runtime is allowed by ADR 0001; docs/certificates.md tells users to name every file *.pem, which works on both.",
+      "rationale": "Both maintained and rollback Python SDKs apply the extension rule when it loads the file for the handshake, and the Python runtime follows the same rule everywhere so the two never disagree about one file. A stricter input rule on one runtime is allowed by ADR 0001; docs/certificates.md tells users to name every file *.pem, which works on both.",
       "tracking": ["#144"],
       "evidence": [
         "packages/server-python/src/opcua_mcp_server/security.py",
@@ -110,7 +110,10 @@
       "node": "Installs opcua-mcp-server and the alias opcua-mcp, the same entry point.",
       "observable": true,
       "rationale": "Kept through the 0.2.0 rename for existing npm users (docs/ROADMAP-0.2.0.md). The documented command, and what --install writes, is opcua-mcp-server on both.",
-      "evidence": ["packages/server-node/package.json", "packages/server-python/pyproject.toml"],
+      "evidence": [
+        "packages/server-node/package.json",
+        "packages/server-python/pyproject.toml"
+      ],
       "facts": {
         "nodeOnlyCommands": ["opcua-mcp"]
       }
@@ -119,10 +122,10 @@
       "id": "reconnect-mechanism",
       "area": "connection",
       "summary": "A dropped connection is repaired in the background on Node and on the next call on Python.",
-      "python": "python-opcua has no reconnection. The connection layer builds a fresh client and a new session when a tool call next needs one, and re-creates the data-change and event subscriptions on it; the audit record's session id changes across the outage.",
-      "node": "node-opcua repairs the channel itself, in the background and without waiting for a call, and re-activates the same session with its subscriptions; the audit record's session id is unchanged by such a repair. Only when the library gives up does the connection layer rebuild, as Python does.",
+      "python": "The maintained client disables autonomous reconnect/watchdogs. The application connection layer builds a fresh client and a new session when a tool call next needs one, and re-creates the data-change and event subscriptions on it; the audit record's session id changes across the outage.",
+      "node": "node-opcua repairs the channel itself, in the background and without waiting for a call, and re-activates the same session with its subscriptions; the audit record's session id is unchanged by such a repair. In CA-trust mode automatic repair is disabled after initial connection, so the application rebuilds and revalidates CRLs/discovery before session activation. Otherwise, only when the library gives up does the connection layer rebuild, as Python does.",
       "observable": true,
-      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* — a timeout counted as a dead session on Python only — that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
+      "rationale": "The libraries differ; the contract does not. The OPCUA_RECONNECT_* settings mean the same on both and produce the same waits (tests/unit/test_reconnect.py), the retry policy per tool is the contract's, and tests/e2e/test_resilience_e2e.py asserts both recover without a restart. Only the mechanism is declared here. Where the two recover to different *results* \u2014 a timeout counted as a dead session on Python only \u2014 that is a bug tracked in #157, and startup blocking under infinite retry is #136.",
       "tracking": ["#144"],
       "evidence": [
         "packages/server-python/src/opcua_mcp_server/connection.py",
@@ -133,13 +136,14 @@
     {
       "id": "transport-limit-enforcement",
       "area": "security",
-      "summary": "The inbound message and chunk limits are enforced by the library on Node and by a local patch on Python.",
-      "python": "python-opcua neither advertises nor enforces a limit, so the runtime advertises the contract's MaxChunkCount and MaxMessageSize in the Hello and wraps SecureConnection._receive to enforce them (CVE-2022-25304, no upstream fix).",
+      "summary": "The same receive bounds are enforced by native Node limits and instance-owned Python framing.",
+      "python": "The maintained Python client owns a bounded protocol per instance, advertising contract limits and checking headers, chunk count and cumulative bytes before native reassembly. Only the legacy rollback factory installs the python-opcua guard.",
       "node": "The same numbers are handed to node-opcua, which advertises and enforces them itself.",
       "observable": false,
-      "rationale": "Same bound, from contract/tools.json -> transport, on both; only the mechanism differs. The patch is the declared mitigation for an unmaintained library, and tests/unit/test_transport_limits.py drives the attack through python-opcua's real reassembly so a library change cannot silently disable it.",
+      "rationale": "Same bound, from contract/tools.json -> transport, on both; only the mechanism differs. Native frame tests qualify the maintained receive boundary; legacy reassembly tests retain the rollback mitigation. No library class is patched by the maintained path.",
       "tracking": ["#144"],
       "evidence": [
+        "packages/server-python/src/opcua_mcp_server/adapters/asyncua_transport.py",
         "packages/server-python/src/opcua_mcp_server/transport_limits.py",
         "packages/server-node/src/transport-limits.ts",
         "tests/unit/test_transport_limits.py"
@@ -148,11 +152,11 @@
     {
       "id": "opcua-library-maintenance",
       "area": "dependencies",
-      "summary": "The Python runtime's OPC UA library is unmaintained; the Node runtime's is maintained.",
-      "python": "python-opcua (opcua 0.98.x): no further releases, CVE-2022-25304 patched locally, and deprecation warnings from the library on current Python versions.",
+      "summary": "Both runtimes use maintained wire clients; Python retains an explicit legacy rollback backend.",
+      "python": "asyncua is the default wire client with bounded local transport. opcua 0.98.x remains for internal DTOs and one-release explicit rollback, whose transport guard and upstream deprecation debt remain tracked.",
       "node": "node-opcua-client, actively released and updated here by Dependabot.",
       "observable": true,
-      "rationale": "Both runtimes meet the same security baseline today, with the gap closed by local patches that are themselves declared. The residual risk of an unmaintained parser of untrusted network traffic is stated in SECURITY.md, which points users on untrusted networks at the Node runtime until the migration lands.",
+      "rationale": "The default Python wire parser is maintained. Keeping a one-release rollback path makes uncovered vendor incompatibilities reversible; internal legacy DTOs do not parse network responses on the maintained path.",
       "tracking": ["#144"],
       "evidence": ["packages/server-python/pyproject.toml", "SECURITY.md"]
     },
@@ -164,13 +168,16 @@
       "node": "node-opcua creates a per-user PKI folder (node-opcua-default-nodejs/PKI under the user's config directory) on first connect, generates a self-signed default application certificate and key there when none is configured, and files the server certificates it has seen.",
       "observable": true,
       "rationale": "Library behaviour. The generated certificate is never used for a secured channel, because any policy other than None refuses to start without OPCUA_CLIENT_CERT, and the stored server certificates are not a trust decision: pinning is OPCUA_SERVER_CERT on both runtimes.",
-      "evidence": ["packages/server-node/src/security.ts", "docs/certificates.md"]
+      "evidence": [
+        "packages/server-node/src/security.ts",
+        "docs/certificates.md"
+      ]
     },
     {
       "id": "user-key-handling",
       "area": "security",
       "summary": "The X.509 user key is held differently in memory.",
-      "python": "python-opcua loads OPCUA_USER_KEY into the process and signs the server's challenge with it.",
+      "python": "The Python client loads OPCUA_USER_KEY into the process and signs the server's challenge with it.",
       "node": "The key is wrapped in node-opcua's keyOperations provider and signs the challenge without becoming a string in the process.",
       "observable": false,
       "rationale": "Same identity, same token, same refusals; a difference in hardening inside the process, in the Node runtime's favour, that python-opcua offers no way to match.",
@@ -184,10 +191,10 @@
       "id": "library-reason-text",
       "area": "errors",
       "summary": "The {reason} inside an error, and get_server_status's error field, are worded by each client library.",
-      "python": "python-opcua's exception text, for example a status code rendered by that library or a formatted traceback line from its handshake.",
+      "python": "The selected Python SDK's exception text, for example a status code rendered by that library or a formatted traceback line from its handshake.",
       "node": "node-opcua's error message for the same failure.",
       "observable": true,
-      "rationale": "Every error frame comes from contract/tools.json -> errors and is compared in full by tests/e2e/test_runtime_differential.py. The reason is what the OPC UA library says went wrong; rewording it would lose information, and the decisions that depend on it (dead session, retry) key on status codes and errno values rather than on this text. This covers the library's own words only: a frame this project doubles, a reason one runtime raises and the other never does, or a crash one SDK hides are bugs, tracked in #157.",
+      "rationale": "Every error frame comes from contract/tools.json -> errors and is compared in full by tests/e2e/test_runtime_differential.py. The reason is what the OPC UA library says went wrong; rewording it would lose information, and the decisions that depend on it (dead session, retry) key on status codes and errno values rather than on this text. This covers anticipated library failures only. Unexpected feature failures expose the contract's tool-name frame on both runtimes, including their audit failure records, as asserted by tests/fixtures/unexpected-tool-errors.json. A doubled frame or a reason one runtime raises and the other never does is still a parity bug.",
       "evidence": [
         "contract/tools.json",
         "tests/e2e/test_runtime_differential.py",
@@ -198,7 +205,7 @@
       "id": "concurrency-model",
       "area": "performance",
       "summary": "Latency, throughput and memory are not the same, and are not promised to be.",
-      "python": "python-opcua is synchronous and blocking, so tool bodies and connection work run on worker threads (the MCP SDK's thread pool for sync tools, asyncio.to_thread elsewhere) behind the async MCP server.",
+      "python": "The maintained SDK runs on an owned private loop behind synchronous adapter services; application calls bridge through worker threads. The legacy rollback SDK is synchronous.",
       "node": "node-opcua is asynchronous on the Node event loop.",
       "observable": true,
       "rationale": "ADR 0001 promises the same bounds (contract limits, transport limits, reconnect waits), not the same speed. No suite measures performance on either runtime.",
@@ -221,6 +228,55 @@
         "packages/server-node/src/audit.ts",
         "SECURITY.md"
       ]
+    },
+    {
+      "id": "timestamp-precision",
+      "area": "protocol",
+      "summary": "Native OPC UA timestamps retain microseconds on Python and milliseconds on Node.",
+      "python": "A decoded datetime with a submillisecond component keeps all six fractional digits; whole seconds and millisecond-aligned values use exactly three digits.",
+      "node": "JavaScript Date retains milliseconds and renders exactly three fractional digits.",
+      "observable": true,
+      "rationale": "Preserve the precision the client library actually provides rather than discarding native Python microseconds. ADR 0001 permits an extra capability. Request timestamps are independently truncated to milliseconds on both runtimes so history windows and writes still target the same instant.",
+      "evidence": [
+        "packages/server-python/src/opcua_mcp_server/datetimes.py",
+        "packages/server-node/src/records.ts",
+        "tests/fixtures/result-text.json",
+        "tests/unit/test_result_text.py",
+        "packages/server-node/test/result-text.test.mjs"
+      ]
+    },
+    {
+      "id": "certificate-less-application-uri",
+      "area": "connection",
+      "summary": "Without a configured client certificate, library default ApplicationUris differ.",
+      "python": "python-opcua announces urn:freeopcua:client unless OPCUA_APPLICATION_URI is set. It generates no application certificate.",
+      "node": "node-opcua announces the SAN URI of its generated or persisted default application certificate, or its hostname-based fallback when that certificate has no URI.",
+      "observable": true,
+      "rationale": "Retain the identity bound to Node\u2019s persisted PKI certificate rather than announcing a different URI from its SAN. This is part of the declared extra PKI capability. Secured channels require an explicitly configured certificate on both runtimes; that certificate\u2019s URI is used identically and conflicting overrides are refused.",
+      "evidence": [
+        "packages/server-node/src/security.ts",
+        "packages/server-python/src/opcua_mcp_server/security.py",
+        "docs/certificates.md"
+      ],
+      "tracking": ["#144"]
+    },
+    {
+      "id": "python-client-backend",
+      "area": "configuration",
+      "summary": "Only Python offers a one-release legacy rollback selector.",
+      "python": "OPCUA_PYTHON_BACKEND accepts asyncua (default) or legacy (one-release rollback).",
+      "node": "Uses node-opcua-client and does not read the Python-only backend setting.",
+      "observable": true,
+      "rationale": "The maintained library migration is specific to Python. A one-release fallback makes uncovered vendor incompatibilities reversible without changing the MCP tool contract.",
+      "tracking": ["#144"],
+      "evidence": [
+        "packages/server-python/src/opcua_mcp_server/python_backend.py",
+        "packages/server-python/src/opcua_mcp_server/adapters/asyncua_services.py",
+        "contract/config.json"
+      ],
+      "facts": {
+        "configSettings": ["OPCUA_PYTHON_BACKEND"]
+      }
     }
   ]
 }

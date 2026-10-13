@@ -105,3 +105,19 @@ def test_a_group_outside_the_selected_scope_is_not_enforced(suite, monkeypatch):
     result = _run(suite, monkeypatch, required=True)
     assert result.ret == 0
     assert "binaries" not in result.stdout.str()
+
+
+def test_machine_evidence_reports_failure_without_claiming_a_pass(suite, monkeypatch):
+    import json
+
+    path = suite.path / "evidence.json"
+    monkeypatch.setenv("OPCUA_SUITE_REPORT", str(path))
+    suite.makepyfile(test_core="def test_core(): pass")
+    result = _run(suite, monkeypatch, required=True)
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    assert result.ret != 0
+    assert evidence["required"] is True
+    assert evidence["exitStatus"] != 0
+    assert evidence["groups"]["core"] == {"passed": 1}
+    assert evidence["groups"]["alarms"] == {}
+    assert evidence["problems"]

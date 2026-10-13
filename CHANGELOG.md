@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add administrator CA trust stores with signed offline CRLs, URI/endpoint binding,
+  bounded read-only material and matching authenticated-control diagnostics on
+  both runtimes. Recheck CA revocation before application-owned reconnect, and
+  identify the CA method in control audit records. Python requires the maintained
+  backend (#167).
+
+- Move the bundled Python mock to asyncua, preserving node IDs, histories and
+  control callbacks with instance-owned mock attribute handling. Correct the
+  shared event-history capability node to the standard `ns=0;i=11242`; the old
+  `i=11194` probe missed event archives on independent servers (#144).
+
+- Add explicit Python maintained-client qualification and legacy rollback selection; the default backend is asyncua and legacy is the one-release rollback path (#144).
+
+- Qualify instance-owned maintained OPC UA services through the existing application ports, preserving typed writes, derived method metadata and numeric failure classification (#144).
+
+- Qualify asyncua native value encodings and internal UA request DTOs against the existing contract at the MCP contract boundary (#144).
+
 ### Added — validation and policy driven by the OPC UA information model
 - **Writes check the target's own attributes before anything is sent.** Both
   runtimes read each node's NodeClass, AccessLevel, UserAccessLevel, DataType,
@@ -58,11 +75,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seven new shared tables under `tests/fixtures/` hold both runtimes to the same
   rules and sentences.
 
+### Changed — separate runtime, protocol and audit ownership (#141)
+- Move connection/cache/subscription lifecycle, protocol startup/shutdown and
+  audit construction into instance-owned modules. Cap central and extracted
+  modules at 400 lines and functions at complexity 25 in CI and release gates.
+
+### Added — maintained adapter transport foundation (#144)
+- Add an instance-scoped asyncua receive adapter with fixed local chunk, count
+  and cumulative message caps. Peer acknowledgements can narrow these caps;
+  hostile split headers fail before body buffering. The production client
+  remains python-opcua until feature, security and reconnect parity qualify.
+
+### Changed — extract protocol handlers and presenters (#141)
+- Move MCP tool signatures, contract dispatch and result/schema framing into
+  small protocol modules. Preserve external names, default arguments, result
+  records and instance-owned state; enforce native SDK import and size limits.
+
+### Changed — extract contract-directed invocation and recovery (#141)
+- Share the connected-attempt and recovery policy behind injected services.
+  Preserve one read resend with fresh policy/audit/capability checks, one control
+  send with uncertainty reporting, and the reconnect-only subscription rules.
+
+### Changed — extract the common execution envelope (#141)
+- Route every tool through native-free authorization/audit orchestration with
+  injected protocol and invocation hooks. Preserve fail-closed audit permission,
+  physical-attempt numbering, retry denials and safe error normalization.
+
+### Changed — extract diagnostic application ports (#141)
+- Separate fast offline status and capability snapshots from native status reads
+  and connection recovery. Preserve public records, native failure causes and
+  capability generations after reconnect.
+
+### Changed — extract subscription application ports (#141)
+- Separate filter relationships, capacity, batch preflight and completeness from
+  native monitored-item operations. Preserve offline lists, cancellation order,
+  per-instance buffers and original native failure causes.
+
+### Changed — extract alarm application ports (#141)
+- Separate alarm duration checks, cached-condition lookup and result framing
+  from native refresh/action methods. Preserve caller-specific shapes, Good
+  subcodes, one service attempt and lazy session selection on refusals.
+
+### Changed — extract event application ports (#141)
+- Separate event subscription settings, buffer drains, notices and history
+  completeness from native services in both runtimes. Per-instance buffers,
+  native failure causes and public records retain their behavior.
+
+### Changed — extract the value-history application port (#141)
+- Separate date windows, aggregate validation and completeness from native
+  history requests and continuation handling in both runtimes. Native points
+  remain scoped to a single call; public records and refusal frames are stable.
+
+### Changed — extract the write application port (#141)
+- Move whole-batch write bounds, inference ordering and result correlation behind
+  async ports in both runtimes. Native adapters own prepared Variants and issue
+  one Write service; refusals and uncertain-outcome rules retain their behavior.
+
+### Refactored — method calls through normalized async ports (#141)
+- Method orchestration now consumes JSON-facing argument metadata; native
+  adapters resolve datatype ancestry, encode variants and make one call.
+- Keep nullable optional arguments, scalar fallbacks, output array boundaries,
+  encoded-size refusals and original causes for control recovery.
+
+### Refactored — browse use cases and native ports (#141)
+- Address-space traversal now runs behind async browse ports in both runtimes.
+  Preserve breadth-first order, path resolution, budgets, filtering, cycles,
+  best-effort enrichment and incomplete results for unreadable descendants.
+- Native browse services and codecs live in adapters; fake-tree fixtures and
+  dependency/size checks enforce the extracted boundary.
+
+### Changed — extract the read application port (#141, first slice)
+- Current-value reads now use an injected async port, with native adapters that
+  retain exception causes and preserve sequential batching, codecs and metadata.
+  Fake-port fixtures and import/size checks enforce the new boundary. Other
+  features and the common execution pipeline remain in their existing modules.
+
+### Fixed — preserve the calling alarm tool’s contract (#157)
+- `act_on_alarm(action="acknowledge")` now includes `action` and uses the alarm
+  action failure frame on Node, matching Python and its advertised result schema.
+  The dedicated acknowledgement tool retains its own shape and failure frame;
+  both still issue one native call.
+
+### Fixed — refuse malformed Unicode before control encoding (#157)
+- Both runtimes refuse unpaired Unicode surrogates in String, LocalizedText,
+  QualifiedName and NodeId values, including arrays and inferred method arguments.
+  Valid supplementary characters remain unchanged. Python JSON result and refusal
+  text escapes lone surrogates consistently with Node.
+- Refuse malformed Unicode values and property names at the request boundary,
+  before validation or OPC UA work, with one shared error frame. Nonnumeric
+  max-change refusals now use the same compact JSON text, including Unicode.
+
+### Fixed — hide unexpected tool crash messages consistently (#157 B19)
+- Unexpected feature failures expose only the contract’s tool-name frame on both
+  runtimes, including control audit failures. Anticipated failures are explicitly
+  typed on Node and retain their wording; native connection causes still drive
+  retry and uncertain-outcome decisions.
+
+### Fixed — identical CLI help and usage errors (#157 E34)
+- Both runtimes use the same exact-flag grammar and schema-derived help. Unknown
+  flags, missing operands and invalid clients produce identical usage errors.
+- Reject values attached to `--help` and `--version`; malformed CLI arguments
+  cannot start the server or write a client configuration.
+
+### Fixed — aggregate, alarm and browse parity (#157 B12/B19/B20/B21)
+- Aggregate discovery requires the standard node ID and name, excludes prototype
+  names and duplicates, and reports unsupported aggregate functions consistently.
+- Validate alarm EventIds as standard base64 before any OPC UA service call.
+- Preserve a known standard datatype when a browsed value cannot be read; custom
+  datatype identifiers are no longer mislabeled as builtins by their number alone.
+
+### Fixed — canonical result text and refusal numbers (#157 B15–17)
+- Both runtimes render JSON text with sorted object keys, two-space indentation,
+  literal Unicode and the same numeric spelling, while retaining structured
+  results and completeness notices. Whole and millisecond-aligned timestamps
+  now render identically; native Python microsecond precision is explicitly
+  declared instead of discarded. Refusal values use the shared JSON spelling.
+
+### Fixed — consistent OPC UA client identity and channel requests (#157 C23)
+- Both runtimes announce `OPC UA MCP Client` and request the configured session
+  timeout as their secure-channel lifetime; servers may revise those requests.
+- Reject an application URI override that contradicts the client certificate
+  before connecting, instead of Python announcing it and Node ignoring it.
+- Declare the certificate-less default URI difference caused by Node’s generated
+  application certificate; configured certificate identities remain identical.
+
 ### Fixed — recover consistently from service timeouts (#157 B14)
 - Node now recognizes transaction timeouts, socket error codes and wrapped
   error causes. Tool wrappers retain the cause, and both runtimes bound cyclic
   cause traversal. Reads retry once; control calls report an uncertain outcome
   and are never resent. Empty Node error messages report the error name.
+### Fixed — finish server-paged aggregate history (#137)
+- Both runtimes consume native continuation points with the original query,
+  preserving interval boundaries. A stalled or oversized aggregate fails
+  explicitly instead of returning an unfinished range; held points are released.
+### Changed — standard schemas and generated runtime types (#138)
+- Declare JSON Schema draft 2020-12 for tool inputs and results; validate the
+  metadata and reject unsupported schema keywords in CI. Generate both runtimes’
+  input/result types and tool-name registries, with deterministic drift checks.
+- Replace custom input validators with Ajv and jsonschema, translating failures
+  into stable project codes and messages. Optional null defaults are now explicit
+  in the advertised schemas. Result parity checks use the standard validator.
 
 ### Security — enforce all Python receive bounds (#175)
 - Reject chunks over `maxChunkSize` before reading their bodies and reject
@@ -85,6 +237,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field names and values, including nested structures and arrays, on both runtimes.
   LocalizedText fields retain Locale and Text. Opaque or unsupported structures
   carry `{"$opcua":"undecodableExtensionObject"}` instead of a library debug string.
+### Added — per-release first-class runtime evidence (#143)
+- Publish a compatibility report with exact tested versions, source/input digests,
+  group counts and declared differences. Release/publish gates exercise every
+  supported runtime matrix leg, with lint and Node unit checks as well as E2E.
+  The report is checksum-signed and attested; dated vendor evidence stays explicit.
 
 ### Changed — the tool catalogue no longer moves with the plant (#140)
 - **`tools/list` advertises every tool the contract defines, with the same

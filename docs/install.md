@@ -1,5 +1,11 @@
 # Installing
 
+All routes run locally over MCP stdio, with one client context and one OPC UA
+endpoint per process. Configure separate MCP entries for separate endpoints.
+Remote MCP service operation requires the
+[identity and isolation RFC](rfc/0001-remote-identity-isolation.md) to be accepted
+and implemented.
+
 Four ways in, roughly in order of how little you need already installed.
 
 | | You need | Best for |

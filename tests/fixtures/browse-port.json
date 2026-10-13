@@ -1,0 +1,187 @@
+{
+  "graph": {
+    "ns=2;i=1": [
+      {
+        "nodeId": "ns=0;i=2253",
+        "namespaceIndex": 0,
+        "name": "Server",
+        "nodeClass": "Object"
+      },
+      {
+        "nodeId": "ns=2;i=2",
+        "namespaceIndex": 2,
+        "name": "Sensors",
+        "nodeClass": "Object"
+      },
+      {
+        "nodeId": "ns=2;i=3",
+        "namespaceIndex": 2,
+        "name": "Pump",
+        "nodeClass": "Variable"
+      }
+    ],
+    "ns=2;i=2": [
+      {
+        "nodeId": "ns=2;i=4",
+        "namespaceIndex": 2,
+        "name": "Température",
+        "nodeClass": "Variable"
+      },
+      {
+        "nodeId": "ns=2;i=3",
+        "namespaceIndex": 2,
+        "name": "Pump",
+        "nodeClass": "Variable"
+      },
+      {
+        "nodeId": "ns=2;i=1",
+        "namespaceIndex": 2,
+        "name": "Plant",
+        "nodeClass": "Object"
+      }
+    ],
+    "ns=0;i=84": [
+      {
+        "nodeId": "ns=0;i=85",
+        "namespaceIndex": 0,
+        "name": "Objects",
+        "nodeClass": "Object"
+      }
+    ],
+    "ns=0;i=85": [
+      {
+        "nodeId": "ns=2;i=1",
+        "namespaceIndex": 2,
+        "name": "Plant",
+        "nodeClass": "Object"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "breadth first order, skipped Server and cycles",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2
+      },
+      "nodeIds": ["ns=2;i=2", "ns=2;i=3", "ns=2;i=4"],
+      "inspected": 4,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "class filter keeps descending",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2,
+        "nodeClass": "Variable"
+      },
+      "nodeIds": ["ns=2;i=3", "ns=2;i=4"],
+      "inspected": 4,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "name filter and Unicode enrichment",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2,
+        "nameFilter": "temp",
+        "includeValues": true
+      },
+      "nodeIds": ["ns=2;i=4"],
+      "inspected": 4,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "one level",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 1
+      },
+      "nodeIds": ["ns=2;i=2", "ns=2;i=3"],
+      "inspected": 3,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "describe only",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 0
+      },
+      "nodeIds": ["ns=2;i=1"],
+      "inspected": 1,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "a qualified relative path",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "browsePath": "2:Sensors",
+        "depth": 0
+      },
+      "nodeIds": ["ns=2;i=2"],
+      "inspected": 1,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "an absolute path",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "browsePath": "/Objects/2:Plant/Sensors",
+        "depth": 0
+      },
+      "nodeIds": ["ns=2;i=2"],
+      "inspected": 1,
+      "truncated": false,
+      "reasons": []
+    },
+    {
+      "name": "filtered child failure remains a gap",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2,
+        "nodeClass": "Variable"
+      },
+      "nodeIds": ["ns=2;i=3"],
+      "inspected": 3,
+      "truncated": false,
+      "reasons": ["unbrowsable"],
+      "blocked": ["ns=2;i=2"]
+    },
+    {
+      "name": "skipped references count against the budget",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2,
+        "maxNodes": 2
+      },
+      "nodeIds": ["ns=2;i=2"],
+      "inspected": 2,
+      "truncated": true,
+      "reasons": ["requestLimit"]
+    },
+    {
+      "name": "root failure",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "depth": 2
+      },
+      "blocked": ["ns=2;i=1"],
+      "error": "Failed to browse ns=2;i=1: blocked"
+    },
+    {
+      "name": "missing path is a direct refusal",
+      "request": {
+        "nodeId": "ns=2;i=1",
+        "browsePath": "Missing",
+        "depth": 0
+      },
+      "error": "browse_path \"Missing\" does not resolve: no child \"Missing\" under ns=2;i=1"
+    }
+  ]
+}

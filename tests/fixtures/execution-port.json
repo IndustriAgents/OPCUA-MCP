@@ -1,0 +1,209 @@
+{
+  "cases": [
+    {
+      "name": "write_opcua_nodes uses the common control path",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          {
+            "node_id": "ns=2;i=5",
+            "value": 1.5
+          }
+        ]
+      },
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "completed:1",
+        "normalize-result"
+      ],
+      "result": {
+        "ran": "write_opcua_nodes"
+      }
+    },
+    {
+      "name": "call_opcua_method uses the common control path",
+      "tool": "call_opcua_method",
+      "arguments": {
+        "object_node_id": "ns=2;i=5",
+        "method_node_id": "ns=2;i=6"
+      },
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "completed:1",
+        "normalize-result"
+      ],
+      "result": {
+        "ran": "call_opcua_method"
+      }
+    },
+    {
+      "name": "acknowledge_alarm uses the common control path",
+      "tool": "acknowledge_alarm",
+      "arguments": {
+        "event_id": "AQ=="
+      },
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "completed:1",
+        "normalize-result"
+      ],
+      "result": {
+        "ran": "acknowledge_alarm"
+      }
+    },
+    {
+      "name": "act_on_alarm uses the common control path",
+      "tool": "act_on_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "action": "acknowledge"
+      },
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "completed:1",
+        "normalize-result"
+      ],
+      "result": {
+        "ran": "act_on_alarm"
+      }
+    },
+    {
+      "name": "authorize failure does not bypass audit",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          {
+            "node_id": "ns=2;i=5",
+            "value": 1.5
+          }
+        ]
+      },
+      "crash": "authorize",
+      "error": "test refusal",
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "denied:1"
+      ]
+    },
+    {
+      "name": "allowed failure does not bypass audit",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          {
+            "node_id": "ns=2;i=5",
+            "value": 1.5
+          }
+        ]
+      },
+      "crash": "allowed",
+      "error": "test refusal",
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1"
+      ]
+    },
+    {
+      "name": "run failure does not bypass audit",
+      "tool": "write_opcua_nodes",
+      "arguments": {
+        "nodes": [
+          {
+            "node_id": "ns=2;i=5",
+            "value": 1.5
+          }
+        ]
+      },
+      "crash": "run",
+      "error": "safe operation failure",
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "normalize-failure",
+        "failed:1"
+      ]
+    },
+    {
+      "name": "second physical attempt is audited as attempt two",
+      "tool": "read_opcua_nodes",
+      "arguments": {
+        "node_ids": [
+          "ns=2;i=5"
+        ]
+      },
+      "attempt": 2,
+      "crash": "run",
+      "error": "safe operation failure",
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "normalize-failure",
+        "failed:2"
+      ]
+    },
+    {
+      "name": "a recovery denial is not also a failed operation",
+      "tool": "read_opcua_nodes",
+      "arguments": {
+        "node_ids": [
+          "ns=2;i=5"
+        ]
+      },
+      "attempt": 2,
+      "denied": true,
+      "crash": "run",
+      "error": "safe operation failure",
+      "calls": [
+        "id",
+        "wait",
+        "authorize",
+        "allowed:1",
+        "run",
+        "denied:2",
+        "normalize-failure"
+      ]
+    },
+    {
+      "name": "status skips the unbounded connection wait",
+      "tool": "get_server_status",
+      "arguments": {},
+      "calls": [
+        "id",
+        "authorize",
+        "allowed:1",
+        "run",
+        "completed:1",
+        "normalize-result"
+      ],
+      "result": {
+        "ran": "get_server_status"
+      }
+    }
+  ]
+}

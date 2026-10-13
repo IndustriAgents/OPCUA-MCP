@@ -201,7 +201,7 @@ def wheel_venv(tmp_path_factory):
     # `uv venv` rather than stdlib `venv`: uv-managed interpreters ship without a
     # working `ensurepip`, so `venv.create(with_pip=True)` aborts on them.
     env_dir = tmp_path_factory.mktemp("wheel-venv") / "venv"
-    _run(["uv", "venv", str(env_dir)], cwd=dist)
+    _run(["uv", "venv", "--python", sys.executable, str(env_dir)], cwd=dist)
     bindir = env_dir / ("Scripts" if sys.platform == "win32" else "bin")
     python = bindir / ("python.exe" if sys.platform == "win32" else "python")
     _run(["uv", "pip", "install", "--python", str(python), str(wheels[0])], cwd=dist)
@@ -309,7 +309,10 @@ def test_wheel_console_script_installed(wheel_venv):
     assert script.exists(), "console script `opcua-mcp-server` not installed by the wheel"
 
 
-async def test_wheel_installed_server_lists_tools(wheel_venv, opcua_server, tmp_path):
+@pytest.mark.parametrize("python_backend", ["asyncua", "legacy"])
+async def test_wheel_installed_server_lists_tools(
+    wheel_venv, opcua_server, tmp_path, python_backend
+):
     """The installed console script must start and serve tools/list over MCP."""
     script = wheel_venv / (
         "opcua-mcp-server.exe" if sys.platform == "win32" else "opcua-mcp-server"
@@ -322,10 +325,19 @@ async def test_wheel_installed_server_lists_tools(wheel_venv, opcua_server, tmp_
             "OPCUA_SERVER_URL": opcua_server,
             "OPCUA_PROFILE": "full",
             "OPCUA_ALLOW_INSECURE_CONTROL": "true",
+            "OPCUA_PYTHON_BACKEND": python_backend,
         },
         cwd=str(tmp_path),
     )
-    assert await _list_tools(params) >= CORE_TOOLS
+    async with (
+        stdio_client(params) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        assert {tool.name for tool in (await session.list_tools()).tools} >= CORE_TOOLS
+        result = await session.call_tool("read_opcua_nodes", {"node_ids": ["ns=2;i=3"]})
+        assert not result.is_error, result
+        assert "ns=2;i=3" in json.dumps(result.structured_content)
 
 
 # --- MCP bundle (.mcpb) --------------------------------------------------------
@@ -427,6 +439,7 @@ def test_mcpb_exposes_every_applicable_setting(packed_mcpb):
             assert user_config[field]["default"] is setting["default"], field
 
     assert user_config["opcua_profile"]["default"] == "observe"
+    assert user_config["opcua_server_trust_store"]["type"] == "directory"
 
 
 async def test_mcpb_server_starts_with_every_optional_setting_blank(packed_mcpb, opcua_server):

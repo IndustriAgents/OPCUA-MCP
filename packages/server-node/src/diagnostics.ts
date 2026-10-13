@@ -9,16 +9,19 @@ import { ClientSession, ServerState } from "node-opcua-client";
 
 import { CONTRACT } from "./contract.js";
 import type { ServerIdentityRecord } from "./policy.js";
-
-/** What the OPC UA server says it is (`serverStatus.build_info`). */
-export interface BuildInfoRecord {
-  product_name: string;
-  product_uri: string;
-  manufacturer_name: string;
-  software_version: string;
-  build_number: string;
-  build_date: string | null;
-}
+import type {
+  BuildInfoRecord,
+  DiagnosticsRecord,
+  NamespaceRecord,
+  ServerStatusRecord,
+} from "./application/diagnostics.js";
+export { disconnectedStatus } from "./application/diagnostics.js";
+export type {
+  BuildInfoRecord,
+  DiagnosticsRecord,
+  NamespaceRecord,
+  ServerStatusRecord,
+} from "./application/diagnostics.js";
 
 /** The record's field order, from the contract.
  *
@@ -37,57 +40,6 @@ const SUMMARY_PROPERTIES: Record<string, string> = Object.fromEntries(
     return [field, head + rest.map((part) => part[0].toUpperCase() + part.slice(1)).join("")];
   })
 );
-
-/** The server's own ServerDiagnosticsSummary (`serverStatus.diagnostics`). */
-export type DiagnosticsRecord = Record<string, number>;
-
-/** One namespace of the server's NamespaceArray. */
-export interface NamespaceRecord {
-  index: number;
-  uri: string;
-}
-
-/** The record `get_server_status` returns (`resultShapes.serverStatus`). */
-export interface ServerStatusRecord {
-  connected: boolean;
-  endpoint_url: string;
-  security: string;
-  server_identity: ServerIdentityRecord;
-  server_state: string | null;
-  current_time: string | null;
-  start_time: string | null;
-  build_info: BuildInfoRecord | null;
-  diagnostics: DiagnosticsRecord | null;
-  namespaces: NamespaceRecord[];
-  error: string | null;
-}
-
-/** The report for a connection that is not up: configuration, and why.
- *
- * `server_identity` is reported here too: it comes from configuration, and "why
- * are the control tools missing?" is as likely a question while the connection
- * is down as while it is up.
- */
-export function disconnectedStatus(
-  endpointUrl: string,
-  security: string,
-  serverIdentity: ServerIdentityRecord,
-  error: string | null
-): ServerStatusRecord {
-  return {
-    connected: false,
-    endpoint_url: endpointUrl,
-    security,
-    server_identity: serverIdentity,
-    server_state: null,
-    current_time: null,
-    start_time: null,
-    build_info: null,
-    diagnostics: null,
-    namespaces: [],
-    error,
-  };
-}
 
 /** A DateTime as ISO-8601 UTC, mirroring the Python server's `format_iso_utc`. */
 function toIsoUtc(value: unknown): string | null {

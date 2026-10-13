@@ -28,12 +28,16 @@ possible, because that is what a missing dependency takes away.
 
 from __future__ import annotations
 
+import json
 import os
+import platform
 from collections import Counter, defaultdict
 from collections.abc import Callable
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from opcua_mcp_server.python_backend import python_backend
 
 ENV_VAR = "OPCUA_TESTS_REQUIRED"
 
@@ -88,6 +92,7 @@ REQUIRED_GROUPS: dict[str, Group] = {
         "e2e/",
         lambda item: (
             _uses("secure_opcua_server")(item)
+            or _uses("ca_server")(item)
             or _in("test_security_startup.py", "test_policy_e2e.py")(item)
         ),
     ),
@@ -181,6 +186,26 @@ class RequiredSuite:
                 )
         if self.problems and session.exitstatus == 0:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        if path := os.environ.get("OPCUA_SUITE_REPORT"):
+            report = {
+                "schemaVersion": 1,
+                "required": self.required,
+                "pythonVersion": platform.python_version(),
+                "pythonBackend": python_backend(),
+                "exitStatus": int(session.exitstatus),
+                "outcomes": dict(Counter(self.outcomes.values())),
+                "groups": {
+                    group: dict(
+                        Counter(self.outcomes.get(n, "not run") for n in self.groups.get(group, ()))
+                    )
+                    for group, (scope, _) in self.definitions.items()
+                    if scope in self.scopes
+                },
+                "problems": self.problems,
+            }
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     def pytest_terminal_summary(self, terminalreporter) -> None:
         if not self.groups:

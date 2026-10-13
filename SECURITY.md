@@ -22,16 +22,16 @@ OPCUA_USERNAME=mcp-operator
 OPCUA_PASSWORD=…
 ```
 
-**Set `OPCUA_SERVER_CERT`.** Without it the server's certificate is whatever the
+**Set `OPCUA_SERVER_CERT` or configure a CA trust store.** Without either, the server's certificate is whatever the
 endpoint presented, so the channel is encrypted *to whoever answered* — DNS, ARP,
 a compromised switch or a mistyped endpoint all reach that. Both servers say so
-on stderr when it is unset, on an otherwise fully secured connection, because
+on stderr when neither is configured, on an otherwise fully secured connection, because
 `policy=Basic256Sha256 mode=SignAndEncrypt` reads like the connection is safe and
 the one thing it does not establish is who is on the other end.
 
 Encrypted and authenticated are two properties, and **control needs both**.
 Reading over an encrypted but unverified channel works; writes, method calls and
-alarm actions are offered only once the server is pinned — see
+alarm actions are offered only once the server is authenticated — see
 [Control needs a verified server](#control-needs-a-verified-server). A pinned
 certificate outside its validity window refuses to connect rather than carrying
 on unverified.
@@ -46,7 +46,9 @@ picking one would leave the operator believing the other was in force.
 
 The ApplicationUri the session announces is taken from the `subjectAltName` of
 the client certificate, which is what servers check it against;
-`OPCUA_APPLICATION_URI` overrides that, for a certificate that carries no URI.
+`OPCUA_APPLICATION_URI` supplies it for a certificate that carries no URI. A
+configured URI that conflicts with the certificate is refused before connecting
+on both runtimes.
 Generating a certificate servers accept, and getting it into a server's trust
 list, is [docs/certificates.md](docs/certificates.md).
 
@@ -56,16 +58,19 @@ exist — is rejected at startup rather than at the first tool call.
 
 What this does **not** do, and you should still plan for:
 
-- **Trust-list validation of the server certificate.** `OPCUA_SERVER_CERT` pins
-  one expected certificate, which is the strongest option here and the one to
-  use; what is *not* implemented is a CA trust store with revocation checking,
-  so a deployment rotating server certificates has to update the pinned file
-  (python-opcua has no server-certificate validation to build a trust store on,
-  and both runtimes keep one behaviour). A pin is an exact match, so revoking a
-  certificate means replacing the pin. Leaving `OPCUA_SERVER_CERT` unset leaves
-  the certificate unverified — reads still work, control does not.
-  The other direction is checked by the server: it decides whether to trust the
-  client certificate you configure.
+- **Trust updates on existing sessions.** `OPCUA_SERVER_CERT` pins an exact
+  certificate; replacing that pin changes the identity accepted on reconnect.
+  `OPCUA_SERVER_TRUST_STORE` plus `OPCUA_SERVER_APPLICATION_URI` validates a CA
+  chain, signed current CRLs, endpoint SAN and advertised server URI before
+  session activation. It requires the maintained Python backend and a secured
+  channel. Material reloads on connection validation, rather than periodically
+  terminating live sessions; force reconnection when revocation must apply
+  immediately. Missing or invalid revocation material refuses connection. Peer
+  leaf certificates are limited to 1 MiB DER before path verification; every
+  configured CA must be current and unrevoked, including unused authorities.
+  [The certificate guide](docs/certificates.md#authenticating-a-server-through-a-ca-trust-store)
+  specifies the supported certificate profile and bounds. The OPC UA server
+  independently decides whether to trust the configured client certificate.
 - **Protecting credentials on an unsecured channel.** `OPCUA_USERNAME` /
   `OPCUA_PASSWORD` without a security policy is authentication, not
   confidentiality: both client libraries send the password in clear text when
@@ -313,8 +318,8 @@ holds both runtimes to it.
 
 `operator` and `full` offer control tools — writes, method calls, alarm actions —
 only over a channel whose far end is known: a security policy other than `None`
-(mode `Sign` or `SignAndEncrypt`) **and** the server's certificate pinned with
-`OPCUA_SERVER_CERT`. An encrypted channel alone is not enough, because both
+(mode `Sign` or `SignAndEncrypt`) **and** the server's certificate verified with
+`OPCUA_SERVER_CERT` or the configured CA trust store. An encrypted channel alone is not enough, because both
 client libraries encrypt happily to whatever certificate the endpoint presents,
 and an attacker able to answer for the endpoint would otherwise have been handed
 the control tools along with the encryption. (Up to 0.5.1 it was enough; #134.)
@@ -324,8 +329,8 @@ Two lab-only overrides, each covering exactly one missing property:
 | Channel | Server certificate | Control | Override that opens it |
 |---|---|---|---|
 | `SecurityPolicy=None` | — | refused | `OPCUA_ALLOW_INSECURE_CONTROL=true` → `control=INSECURE-OVERRIDE` |
-| `Sign` / `SignAndEncrypt` | not pinned | refused | `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` → `control=UNVERIFIED-OVERRIDE` |
-| `Sign` / `SignAndEncrypt` | pinned | offered | — (`control=secured`) |
+| `Sign` / `SignAndEncrypt` | unverified | refused | `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` → `control=UNVERIFIED-OVERRIDE` |
+| `Sign` / `SignAndEncrypt` | pinned or CA-verified | offered | — (`control=secured`) |
 
 Neither override stands in for the other: encryption and peer authentication are
 independent, and consenting to the lack of one for a lab is not consenting to the
@@ -582,7 +587,7 @@ anywhere in the audit path.
 
 ### CVE-2022-25304 — unbounded chunk reassembly in `python-opcua`
 
-**Status: mitigated in this project; no upstream fix exists or is expected.**
+**Status: the default client is maintained asyncua; the explicit one-release legacy rollback remains locally mitigated. No upstream python-opcua fix exists or is expected.**
 
 An OPC UA message may be split across chunks, and `python-opcua` reassembles them
 by appending each one to a list with nothing counting it
@@ -592,6 +597,12 @@ client is out of memory.
 
 Dependabot reports no patched version, and there will not be one: `python-opcua`
 is unmaintained, and the advisory names its successor `asyncua` as well.
+
+The maintained Python adapter validates split headers and cumulative message/chunk
+bounds before forwarding frames to the native parser, without global patches.
+`tests/unit/test_asyncua_transport.py` drives hostile native frames and Ack limit
+negotiation through this path. Legacy DTOs are retained internally; the legacy
+wire parser is used only when `OPCUA_PYTHON_BACKEND=legacy` is explicitly selected.
 
 What this project does about it, in both runtimes and from the same numbers
 (`contract/tools.json` → `transport`):
@@ -617,8 +628,8 @@ fails a test rather than silently disabling the guard.
 OPC UA stack safe against everything, and the honest mitigation for a hostile
 network remains the one in [Connection security](#connection-security-important):
 authenticate the server, encrypt the channel, and do not point either runtime at
-an endpoint you do not trust. The Node runtime is on a maintained client library
-and is the better choice where that matters.
+an endpoint you do not trust. Both default runtimes use maintained clients. The legacy Python rollback remains
+an explicit compatibility fallback, with its guard and residual dependency risk.
 
 ## Release integrity
 
@@ -721,3 +732,8 @@ Please include:
 
 We aim to acknowledge reports within a few days and will coordinate a fix and
 disclosure timeline with you.
+
+Unexpected exceptions during tool feature execution expose only the tool name
+to the MCP client and the control audit failure record. Anticipated OPC UA
+failures retain their actionable reason text. Native exception causes remain
+internal so recovery classification and control no-resend rules still apply.

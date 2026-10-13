@@ -127,7 +127,7 @@ export function describeSetting(setting, { listChoices, renderedDefault }) {
  * Numbers are `string` fields, as the hand-written manifest had them: an unset
  * optional field reaches the server as a blank string, which both runtimes read
  * as "use the default", so the form can leave the default to the runtime rather
- * than restating it. Only a path that must already exist is a `file` picker —
+ * than restating it. An existing CA trust store uses a directory picker; other existing paths use a file picker —
  * the audit file is one the server creates, which a picker cannot choose.
  */
 export function mcpbField(setting) {
@@ -135,7 +135,9 @@ export function mcpbField(setting) {
     setting.type === "boolean"
       ? "boolean"
       : setting.type === "path" && setting.mustExist
-        ? "file"
+        ? setting.contents === "trust-store"
+          ? "directory"
+          : "file"
         : "string";
   // A default is shown in the form only where it cannot be left to the runtime:
   // a checkbox always submits a value, and a required field must start filled.

@@ -1,7 +1,8 @@
 """Build hook that stages the shared contract files inside the wheel.
 
-Two files, both from `/contract`: `tools.json` (the tool surface) and
-`config.json` (the configuration schema, #133). Everything below applies to both.
+Files from `/contract`: tool/configuration metadata, the draft-2020-12
+metaschema, normalized schema catalogue and authoring profile. They all use
+the same staging path below.
 
 The canonical contract lives at the repo root (`/contract/tools.json`), outside
 this package. A static `force-include` pointing at `../../` works when building
@@ -27,6 +28,9 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 STAGED = {
     "tools.json": "opcua_mcp_server/tools.json",
     "config.json": "opcua_mcp_server/config.json",
+    "contract.schema.json": "opcua_mcp_server/contract.schema.json",
+    "schemas.json": "opcua_mcp_server/schemas.json",
+    "schema-profile.json": "opcua_mcp_server/schema-profile.json",
 }
 
 

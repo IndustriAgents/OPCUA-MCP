@@ -33,3 +33,7 @@ if (!version) throw new Error("package.json has no version");
 const versionDest = join(outDir, "version.json");
 writeFileSync(versionDest, `${JSON.stringify({ version }, null, 2)}\n`);
 console.error(`wrote version ${version} -> ${versionDest}`);
+
+for (const name of ["contract.schema.json", "schemas.json", "schema-profile.json"]) {
+  copyFileSync(join(pkgRoot, "..", "..", "contract", name), join(outDir, name));
+}

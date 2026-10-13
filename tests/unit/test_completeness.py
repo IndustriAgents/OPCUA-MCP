@@ -145,8 +145,16 @@ def test_every_reason_is_explained():
 def test_both_runtimes_advertise_it_from_the_contract():
     """The outputSchema is built in two places; both must read the contract."""
     python = (
-        ROOT / "packages" / "server-python" / "src" / "opcua_mcp_server" / "server.py"
+        ROOT
+        / "packages"
+        / "server-python"
+        / "src"
+        / "opcua_mcp_server"
+        / "protocol"
+        / "catalogue.py"
     ).read_text(encoding="utf-8")
-    node = (ROOT / "packages" / "server-node" / "src" / "tools.ts").read_text(encoding="utf-8")
+    node = (ROOT / "packages" / "server-node" / "src" / "protocol" / "results.ts").read_text(
+        encoding="utf-8"
+    )
     assert 'CONTRACT["completeness"]' in python and "reportsCompleteness" in python
     assert "CONTRACT.completeness.schema" in node and "reportsCompleteness" in node

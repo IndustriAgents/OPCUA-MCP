@@ -41,6 +41,16 @@ describe("generated configuration metadata", () => {
     }
   });
 
+  it("uses a directory picker for the administrator CA/CRL store", () => {
+    const setting = SCHEMA.settings.find((item) => item.env === "OPCUA_SERVER_TRUST_STORE");
+    assert.equal(setting.contents, "trust-store");
+    assert.equal(mcpbField(setting).type, "directory");
+    assert.equal(
+      mcpbField(SCHEMA.settings.find((item) => item.env === "OPCUA_SERVER_CERT")).type,
+      "file"
+    );
+  });
+
   it("masks every sensitive setting and embeds no secret value", () => {
     for (const setting of SCHEMA.settings) {
       const field = mcpbField(setting);

@@ -879,7 +879,7 @@ the cap, `num_values` or the server stopped the read, and gives the `start_time`
 to continue from.
 
 Served only when the server advertises `AccessHistoryEventsCapability`
-(`ns=0;i=11194`), and refused with `capability_not_supported` otherwise — listed
+(`ns=0;i=11242`), and refused with `capability_not_supported` otherwise — listed
 either way. That is a different node and a different answer from the one
 `read_opcua_history` needs: OPC UA Part 11 §5.4 lets a server keep values
 without keeping events, and most do.
@@ -972,3 +972,11 @@ the neighbouring `events.fields`. Both servers are held to it by
 You don't call these tools by hand in normal use — you ask Claude. The JSON above
 is what Claude sends under the hood. See `../tests/` for an automated suite that
 exercises every tool against both servers.
+
+Aggregate history consumes the OPC UA server’s continuation points within one
+call, using the original time range and processing interval on every page.
+It returns the completed range (at most 5000 values) or an explicit error if
+the server stops making progress, rejects continuation, or exceeds the cap.
+No partial aggregate page is presented as a successful result. Points held
+at failure or cancellation are released best-effort; none are retained
+across MCP calls or reconnects. Raw history keeps its stateless continuation.

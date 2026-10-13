@@ -10,6 +10,7 @@
  * returns. It now means "as many as allowed".
  */
 
+import { hasUnpairedSurrogate } from "./unicode-text.js";
 import { CONTRACT } from "./contract.js";
 import { ContractRefusal, message } from "./errors.js";
 
@@ -83,6 +84,9 @@ export function checkRequestBounds(tool: string, args: unknown): void {
 
 function walk(tool: string, value: unknown, path: string, depth: number): void {
   if (typeof value === "string") {
+    if (hasUnpairedSurrogate(value)) {
+      throw new ContractRefusal(message("invalidUnicode", { tool, argument: path || "arguments" }));
+    }
     const size = utf8Bytes(value);
     if (size > MAX_STRING_BYTES) {
       throw new ContractRefusal(
@@ -120,6 +124,9 @@ function walk(tool: string, value: unknown, path: string, depth: number): void {
     return;
   }
   for (const [key, item] of Object.entries(value)) {
+    if (hasUnpairedSurrogate(key)) {
+      throw new ContractRefusal(message("invalidUnicode", { tool, argument: path || "arguments" }));
+    }
     walk(tool, item, path ? `${path}.${key}` : key, depth + 1);
   }
 }

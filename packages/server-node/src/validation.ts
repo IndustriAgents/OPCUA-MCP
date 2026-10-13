@@ -1,54 +1,16 @@
-/** Check a call's arguments against the contract's own input schema.
- *
- * `validation.py` is the Python half and must accept and reject exactly the same
- * calls, because the schema being checked is the same document.
- *
- * This is deliberately *not* a JSON Schema implementation. The contract uses a
- * handful of keywords and a validator that covers only those is one that can be
- * read in full and mirrored in another language without a dependency on either
- * side. A keyword appearing in the contract that is not handled here would be
- * silently ignored, so the supported set is asserted against the contract by
- * tests/unit/test_contract.py.
- *
- * Three of them were added later, and each closes a hole the six original ones
- * left (issue #114):
- *
- * - `additionalProperties`: no input schema forbade extras, so
- *   `{"node_clas": "Variable"}` was accepted and browsed with the default class.
- *   A misspelled *optional* argument changed behaviour instead of producing a
- *   refusal the model could correct from — and models misspell optional
- *   arguments. The refusal names the tool's real arguments, because "no such
- *   argument" without the list is a riddle.
- * - `enum`: `node_class` and `data_type` are fixed sets, and both used to fail
- *   downstream and unhelpfully — an unknown node class silently matched nothing
- *   and returned an empty list, which is indistinguishable from a subtree that
- *   really is empty.
- * - `minimum`: every numeric argument is floored at zero. A negative is never
- *   meaningful for any of them and was silently clamped, which is how a caller
- *   computing an offset wrongly gets a plausible answer and never finds out. The
- *   *ceilings* stay clamps rather than refusals: they are documented caps on how
- *   much work one call may ask for, and the result says when one was hit.
- *
- * And one for issue #139: `maxItems`. `write_opcua_nodes` declared a `minItems`
- * and no ceiling, so a batch of any length reached the plant; the per-call counts
- * in `contract/tools.json` -> `limits` are now written into the schemas, where a
- * model reads them, and enforced here, where the call is refused before anything
- * is sent. The request-wide bounds — size, string length, array length, nesting
- * — are `checkRequestBounds` in `limits.ts`, which runs before this does.
- *
- * Why check at all: this runtime had no validation whatsoever. The low-level MCP
- * `Server` does not check `arguments` against the advertised `inputSchema`, and
- * `dispatch` cast straight off the wire (`args.node_ids as string[]`), so a
- * malformed call reached node-opcua as whatever the client sent. The Python
- * runtime validated against a *different* schema — the one MCPServer derives
- * from the function signature — which knows that `nodes` is a list of objects
- * and nothing about what belongs in one. Both now answer to the contract, and
- * word the refusal identically.
- */
-
+/** Draft 2020-12 validity comes from Ajv; only error ordering/wording lives here. */
+import { Ajv2020 } from "ajv/dist/2020.js";
+import type { ErrorObject, AnySchema, ValidateFunction } from "ajv";
 import { message } from "./errors.js";
 
-/** How each declared type is named in a refusal. */
+const ajv = new Ajv2020({
+  strict: true,
+  strictTypes: false,
+  allErrors: true,
+  allowUnionTypes: true,
+  ownProperties: true,
+});
+const compiled = new WeakMap<object, ValidateFunction>();
 const TYPE_NAMES: Record<string, string> = {
   string: "a string",
   integer: "an integer",
@@ -56,161 +18,152 @@ const TYPE_NAMES: Record<string, string> = {
   boolean: "a boolean",
   object: "an object",
   array: "an array",
+  null: "null",
 };
-
-/** Whether `value` is of the declared JSON type.
- *
- * `integer` accepts any whole number, which is all JavaScript can offer — and so
- * is what the Python half must accept too, hence its whole-valued-float rule.
- */
-function matches(value: unknown, declared: string): boolean {
-  switch (declared) {
-    case "boolean":
-      return typeof value === "boolean";
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value);
-    case "number":
-      return typeof value === "number" && Number.isFinite(value);
-    case "string":
-      return typeof value === "string";
-    case "array":
-      return Array.isArray(value);
-    case "object":
-      return typeof value === "object" && value !== null && !Array.isArray(value);
-    default:
-      // A type the contract declares and this validator does not know. Accepting
-      // is the safe direction: the alternative is refusing a call the contract
-      // allows.
-      return true;
+export type Schema = {
+  type?: string | string[];
+  items?: Schema;
+  properties?: Record<string, Schema>;
+  required?: string[];
+  enum?: unknown[];
+  minimum?: number;
+  minItems?: number;
+  maxItems?: number;
+  additionalProperties?: boolean | Schema;
+  [key: string]: unknown;
+};
+function expected(schema: Schema): string {
+  if (Array.isArray(schema.type)) {
+    const nonNull = schema.type.filter((t) => t !== "null");
+    if (nonNull.length === 1) return expected({ ...schema, type: nonNull[0] });
+    return schema.type
+      .filter((t) => t !== "null")
+      .map((t) => TYPE_NAMES[t] ?? t)
+      .join(" or ");
   }
+  if (schema.type === "array") {
+    if (schema.items?.type === "string") return "an array of strings";
+    if (schema.items?.type === "object") return "an array of objects";
+  }
+  return TYPE_NAMES[String(schema.type)] ?? String(schema.type);
 }
-
-/** How a declared type is worded in a refusal: "an array of strings". */
-function expected(schema: any): string {
-  const declared = schema?.type;
-  if (Array.isArray(declared)) {
-    return declared.map((entry: string) => TYPE_NAMES[entry] ?? entry).join(" or ");
-  }
-  if (declared === "array") {
-    const itemType = schema?.items?.type;
-    if (itemType === "string") return "an array of strings";
-    if (itemType === "object") return "an array of objects";
-    return "an array";
-  }
-  return TYPE_NAMES[declared] ?? String(declared);
-}
-
-/** Throw if `args` do not satisfy the contract schema for `tool`.
- *
- * The message is a contract one, so the Python runtime refuses the same call
- * with the same sentence.
- */
-export function validateArguments(tool: string, schema: any, args: unknown): void {
-  if (typeof args !== "object" || args === null || Array.isArray(args)) {
-    throw new Error(message("wrongType", { tool, argument: "arguments", expected: "an object" }));
-  }
-  checkObject(tool, schema, args as Record<string, unknown>, "");
-}
-
-function checkObject(
-  tool: string,
-  schema: any,
-  value: Record<string, unknown>,
-  prefix: string
-): void {
-  const properties: Record<string, unknown> = schema?.properties ?? {};
-  if (schema?.additionalProperties === false) {
-    // Before the per-property checks, so a typo is reported as the typo it is
-    // rather than as whatever the misspelled name happens to resemble.
-    for (const name of Object.keys(value)) {
-      // Own properties only. `in` walks the prototype, so `constructor`,
-      // `toString` and `__proto__` passed as argument names were accepted as
-      // though the schema declared them; Python's dict lookup never did (#157).
-      if (!Object.hasOwn(properties, name)) {
-        throw new Error(
-          message("unknownArgument", {
-            tool,
-            argument: `${prefix}${name}`,
-            allowed: Object.keys(properties).join(", ") || "no arguments",
-          })
-        );
-      }
+function locate(schema: Schema, args: unknown, pointer: string) {
+  const parts = pointer
+    ? pointer
+        .slice(1)
+        .split("/")
+        .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"))
+    : [];
+  let value = args,
+    parent = schema,
+    path = "";
+  const order: number[] = [];
+  for (const part of parts) {
+    parent = schema;
+    if (Array.isArray(value)) {
+      order.push(6, Number(part));
+      path += `[${part}]`;
+      schema = schema.items ?? {};
+      value = value[Number(part)];
+    } else {
+      const keys = Object.keys(schema.properties ?? {});
+      order.push(6, keys.indexOf(part));
+      path += (path ? "." : "") + part;
+      schema = schema.properties?.[part] ?? {};
+      value = (value as Record<string, unknown>)[part];
     }
   }
-
-  for (const name of schema?.required ?? []) {
-    if (value[name] === undefined || value[name] === null) {
-      throw new Error(message("missingArgument", { tool, argument: `${prefix}${name}` }));
-    }
-  }
-
-  for (const [name, subschema] of Object.entries(properties)) {
-    // Absent is not wrong: `required` above has already refused the ones that had
-    // to be there, and everything else carries a default.
-    if (value[name] === undefined || value[name] === null) continue;
-    checkValue(tool, subschema, value[name], `${prefix}${name}`);
+  return { schema, parent, value, path, order, parts };
+}
+export class ValidationRefusal extends Error {
+  constructor(
+    readonly code: string,
+    readonly argument: string,
+    text: string
+  ) {
+    super(text);
   }
 }
-
-function checkValue(tool: string, schema: any, value: unknown, path: string): void {
-  const declared = schema?.type;
-  // `value` in a write entry deliberately declares no type: what may be written
-  // is decided by the target node, not by this schema.
-  if (declared === undefined) return;
-
-  if (typeof declared === "string" && !matches(value, declared)) {
-    throw new Error(message("wrongType", { tool, argument: path, expected: expected(schema) }));
+function normalize(tool: string, root: Schema, args: unknown, error: ErrorObject) {
+  const { schema, parent, value, path, order, parts } = locate(root, args, error.instancePath);
+  const params: Record<string, string | number> = { tool, argument: path };
+  let code = "schemaConstraint",
+    rank = 3;
+  const keyword = error.keyword;
+  if (keyword === "type") {
+    code = "wrongType";
+    rank = 0;
+    if (value === null && parts.length && parent.required?.includes(parts.at(-1)!)) {
+      code = "missingArgument";
+      rank = 5;
+      order.splice(-2);
+    } else params.expected = expected(schema);
+  } else if (keyword === "required") {
+    code = "missingArgument";
+    rank = 5;
+    params.argument = path + (path ? "." : "") + error.params.missingProperty;
+  } else if (keyword === "additionalProperties") {
+    code = "unknownArgument";
+    rank = 4;
+    params.argument = path + (path ? "." : "") + error.params.additionalProperty;
+    params.allowed = Object.keys(schema.properties ?? {}).join(", ") || "no arguments";
+  } else if (keyword === "enum") {
+    code = "notAllowedValue";
+    rank = 1;
+    params.allowed = (schema.enum ?? [])
+      .filter((v) => v !== null)
+      .map((v) => JSON.stringify(v))
+      .join(", ");
+    params.value = JSON.stringify(value) ?? "undefined";
+  } else if (keyword === "minimum") {
+    code = "belowMinimum";
+    rank = 2;
+    params.minimum = schema.minimum!;
+    params.value = JSON.stringify(value) ?? "undefined";
+  } else if (keyword === "minItems" && schema.minItems === 1) code = "emptyArray";
+  else if (keyword === "maxItems") {
+    code = "tooManyItems";
+    params.limit = schema.maxItems!;
+    params.count = (value as unknown[]).length;
   }
-
-  if (schema.enum !== undefined && !schema.enum.includes(value)) {
-    throw new Error(
-      message("notAllowedValue", {
-        tool,
-        argument: path,
-        allowed: schema.enum.map((item: unknown) => JSON.stringify(item)).join(", "),
-        value: JSON.stringify(value) ?? String(value),
-      })
+  if (keyword === "uniqueItems") rank = 7;
+  if (code === "schemaConstraint") {
+    params.constraint = keyword;
+    if (!path) params.argument = "arguments";
+  }
+  if (code === "missingArgument") {
+    const requiredSchema = keyword === "type" ? parent : schema;
+    const requiredName = keyword === "type" ? parts.at(-1)! : error.params.missingProperty;
+    order.push(rank, requiredSchema.required!.indexOf(requiredName));
+  } else order.push(rank);
+  return { order, code, params };
+}
+function compare(a: number[], b: number[]) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+export function validateArguments(tool: string, schema: Schema, args: unknown): void {
+  if (typeof args !== "object" || args === null || Array.isArray(args))
+    throw new ValidationRefusal(
+      "wrongType",
+      "arguments",
+      message("wrongType", { tool, argument: "arguments", expected: "an object" })
     );
+  let validate = compiled.get(schema);
+  if (!validate) {
+    validate = ajv.compile(schema as AnySchema);
+    compiled.set(schema, validate);
   }
-
-  if (schema.minimum !== undefined && (value as number) < schema.minimum) {
-    throw new Error(
-      message("belowMinimum", {
-        tool,
-        argument: path,
-        minimum: schema.minimum,
-        value: JSON.stringify(value) ?? String(value),
-      })
+  if (validate(args)) return;
+  const first = (validate.errors ?? [])
+    .map((e) => normalize(tool, schema, args, e))
+    .sort((a, b) => compare(a.order, b.order))[0];
+  if (first)
+    throw new ValidationRefusal(
+      first.code,
+      String(first.params.argument),
+      message(first.code, first.params)
     );
-  }
-
-  if (declared === "array") {
-    const list = value as unknown[];
-    if (schema.minItems !== undefined && list.length < schema.minItems) {
-      // The one rule with its own sentence, because it is the one a model trips
-      // over: an empty list is a well-formed array and a meaningless request,
-      // and "must be a non-empty array" says what to do about it.
-      throw new Error(message("emptyArray", { tool, argument: path }));
-    }
-    if (schema.maxItems !== undefined && list.length > schema.maxItems) {
-      throw new Error(
-        message("tooManyItems", {
-          tool,
-          argument: path,
-          limit: schema.maxItems,
-          count: list.length,
-        })
-      );
-    }
-    // `items: {}` is truthy here and falsy in Python; compare against undefined
-    // on both sides so the two halves take the same route, not merely reach the
-    // same answer.
-    if (schema.items !== undefined) {
-      list.forEach((element, index) =>
-        checkValue(tool, schema.items, element, `${path}[${index}]`)
-      );
-    }
-  } else if (declared === "object") {
-    checkObject(tool, schema, value as Record<string, unknown>, `${path}.`);
-  }
 }

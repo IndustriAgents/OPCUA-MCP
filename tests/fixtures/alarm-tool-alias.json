@@ -1,0 +1,102 @@
+{
+  "cases": [
+    {
+      "name": "acknowledge_alarm acknowledge Good subcode",
+      "tool": "acknowledge_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂"
+      },
+      "status": "GoodClamped",
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "status": "GoodClamped"
+      }
+    },
+    {
+      "name": "acknowledge_alarm acknowledge failure",
+      "tool": "acknowledge_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂"
+      },
+      "status": "GoodClamped",
+      "error": "acknowledgeFailed",
+      "fields": {
+        "condition_id": "ns=2;i=7",
+        "reason": "native refused"
+      }
+    },
+    {
+      "name": "act_on_alarm acknowledge Good subcode",
+      "tool": "act_on_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂",
+        "action": "acknowledge"
+      },
+      "status": "GoodClamped",
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "status": "GoodClamped",
+        "action": "acknowledge"
+      }
+    },
+    {
+      "name": "act_on_alarm acknowledge failure",
+      "tool": "act_on_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂",
+        "action": "acknowledge"
+      },
+      "status": "GoodClamped",
+      "error": "alarmActionFailed",
+      "fields": {
+        "condition_id": "ns=2;i=7",
+        "reason": "native refused",
+        "action": "acknowledge"
+      }
+    },
+    {
+      "name": "act_on_alarm comment Good subcode",
+      "tool": "act_on_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂",
+        "action": "comment"
+      },
+      "status": "GoodClamped",
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "status": "GoodClamped",
+        "action": "comment"
+      }
+    },
+    {
+      "name": "act_on_alarm comment failure",
+      "tool": "act_on_alarm",
+      "arguments": {
+        "event_id": "AQ==",
+        "condition_id": "ns=2;i=7",
+        "comment": "café 🙂",
+        "action": "comment"
+      },
+      "status": "GoodClamped",
+      "error": "alarmActionFailed",
+      "fields": {
+        "condition_id": "ns=2;i=7",
+        "reason": "native refused",
+        "action": "comment"
+      }
+    }
+  ]
+}

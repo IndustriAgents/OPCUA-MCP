@@ -1,0 +1,260 @@
+{
+  "cases": [
+    {
+      "name": "acknowledge acknowledgement=True",
+      "event_id": "AQ==",
+      "action": "acknowledge",
+      "comment": "café 🙂",
+      "duration": null,
+      "condition_id": null,
+      "acknowledgement": true,
+      "cached": "i=85",
+      "status": {
+        "status": "GoodClamped",
+        "good": true
+      },
+      "calls": [
+        {
+          "name": "condition",
+          "event_id": "AQ=="
+        },
+        {
+          "name": "action",
+          "condition_id": "i=85",
+          "event_id": "AQ==",
+          "action": "acknowledge",
+          "comment": "café 🙂",
+          "duration": null
+        }
+      ],
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=0;i=85",
+        "status": "GoodClamped"
+      }
+    },
+    {
+      "name": "acknowledge acknowledgement=False",
+      "event_id": "AQ==",
+      "action": "acknowledge",
+      "comment": "café 🙂",
+      "duration": null,
+      "condition_id": "i=85",
+      "acknowledgement": false,
+      "cached": "i=85",
+      "status": {
+        "status": "GoodClamped",
+        "good": true
+      },
+      "calls": [
+        {
+          "name": "action",
+          "condition_id": "i=85",
+          "event_id": "AQ==",
+          "action": "acknowledge",
+          "comment": "café 🙂",
+          "duration": null
+        }
+      ],
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=0;i=85",
+        "status": "GoodClamped",
+        "action": "acknowledge"
+      }
+    },
+    {
+      "name": "comment acknowledgement=False",
+      "event_id": "AQ==",
+      "action": "comment",
+      "comment": "café 🙂",
+      "duration": null,
+      "condition_id": "i=85",
+      "acknowledgement": false,
+      "cached": "i=85",
+      "status": {
+        "status": "GoodClamped",
+        "good": true
+      },
+      "calls": [
+        {
+          "name": "action",
+          "condition_id": "i=85",
+          "event_id": "AQ==",
+          "action": "comment",
+          "comment": "café 🙂",
+          "duration": null
+        }
+      ],
+      "expected": {
+        "event_id": "AQ==",
+        "condition_id": "ns=0;i=85",
+        "status": "GoodClamped",
+        "action": "comment"
+      }
+    },
+    {
+      "name": "shelveForNeedsDuration",
+      "event_id": "AQ==",
+      "action": "shelveFor",
+      "comment": "",
+      "duration": null,
+      "condition_id": null,
+      "acknowledgement": false,
+      "error": "shelveForNeedsDuration",
+      "fields": {},
+      "calls": []
+    },
+    {
+      "name": "shelveDurationNotAllowed",
+      "event_id": "AQ==",
+      "action": "confirm",
+      "comment": "",
+      "duration": 10,
+      "condition_id": null,
+      "acknowledgement": false,
+      "error": "shelveDurationNotAllowed",
+      "fields": {
+        "action": "confirm"
+      },
+      "calls": []
+    },
+    {
+      "name": "unknown EventId touches no service",
+      "event_id": "AQ==",
+      "action": "confirm",
+      "comment": "",
+      "duration": null,
+      "condition_id": null,
+      "acknowledgement": false,
+      "cached": null,
+      "error": "unknownEventId",
+      "fields": {
+        "event_id": "AQ=="
+      },
+      "calls": [
+        {
+          "name": "condition",
+          "event_id": "AQ=="
+        }
+      ]
+    },
+    {
+      "name": "one action timeout",
+      "event_id": "AQ==",
+      "action": "confirm",
+      "comment": "café 🙂",
+      "duration": null,
+      "condition_id": "i=85",
+      "acknowledgement": false,
+      "crash": "action",
+      "status": {
+        "status": "BadNotSupported",
+        "good": false
+      },
+      "error": "alarmActionFailed",
+      "fields": {
+        "action": "confirm",
+        "condition_id": "i=85",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "action",
+          "condition_id": "i=85",
+          "event_id": "AQ==",
+          "action": "confirm",
+          "comment": "café 🙂",
+          "duration": null
+        }
+      ]
+    },
+    {
+      "name": "one action Bad status",
+      "event_id": "AQ==",
+      "action": "confirm",
+      "comment": "café 🙂",
+      "duration": null,
+      "condition_id": "i=85",
+      "acknowledgement": false,
+      "crash": null,
+      "status": {
+        "status": "BadNotSupported",
+        "good": false
+      },
+      "error": "alarmActionFailed",
+      "fields": {
+        "action": "confirm",
+        "condition_id": "i=85",
+        "reason": "BadNotSupported"
+      },
+      "calls": [
+        {
+          "name": "action",
+          "condition_id": "i=85",
+          "event_id": "AQ==",
+          "action": "confirm",
+          "comment": "café 🙂",
+          "duration": null
+        }
+      ]
+    },
+    {
+      "name": "retained alarm refresh is remembered",
+      "operation": "list",
+      "node_id": "i=85",
+      "timeout": 3,
+      "records": [
+        {
+          "event_id": "AQ==",
+          "condition_id": "ns=0;i=85",
+          "message": "café 🙂"
+        }
+      ],
+      "expected": [
+        {
+          "event_id": "AQ==",
+          "condition_id": "ns=0;i=85",
+          "message": "café 🙂"
+        }
+      ],
+      "calls": [
+        {
+          "name": "list",
+          "node_id": "i=85",
+          "timeout": 3
+        },
+        {
+          "name": "remember",
+          "records": [
+            {
+              "event_id": "AQ==",
+              "condition_id": "ns=0;i=85",
+              "message": "café 🙂"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "failed refresh does not replace remembered alarms",
+      "operation": "list",
+      "node_id": "i=85",
+      "timeout": 3,
+      "records": [],
+      "crash": "list",
+      "error": "alarmsFailed",
+      "fields": {
+        "node_id": "i=85",
+        "reason": "native timeout"
+      },
+      "calls": [
+        {
+          "name": "list",
+          "node_id": "i=85",
+          "timeout": 3
+        }
+      ]
+    }
+  ]
+}

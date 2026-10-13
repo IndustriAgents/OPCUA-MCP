@@ -26,7 +26,8 @@ import tempfile
 
 import pytest
 from conftest import ROOT
-from mcp.server.mcpserver.exceptions import ToolError
+from opcua_mcp_server.adapters.opcua_write import check_eu_range, check_max_change
+from opcua_mcp_server.errors import ApplicationRefusal
 from opcua_mcp_server.node_metadata import (
     MAX_PER_REQUEST,
     AnalogInfo,
@@ -40,7 +41,6 @@ from opcua_mcp_server.policy import (
     pairs_at,
     parse_policy_config,
 )
-from opcua_mcp_server.server import check_eu_range, check_max_change
 
 FIXTURE = json.loads(
     (ROOT / "tests" / "fixtures" / "value-bounds.json").read_text(encoding="utf-8")
@@ -305,7 +305,7 @@ def test_a_value_the_plant_says_is_normal_is_allowed():
 
 def test_a_value_outside_the_servers_own_range_is_refused():
     """The bound nobody had to type into a policy file, and the better one for it."""
-    with pytest.raises(ToolError) as raised:
+    with pytest.raises(ApplicationRefusal) as raised:
         check_eu_range("ns=2;i=90", 200, ANALOG)
     assert str(raised.value) == (
         "200 is outside the range node ns=2;i=90 accepts (0 to 150 °C), set by the "
@@ -332,7 +332,7 @@ def test_a_move_inside_the_limit_is_allowed():
 
 
 def test_a_move_larger_than_the_limit_is_refused():
-    with pytest.raises(ToolError) as raised:
+    with pytest.raises(ApplicationRefusal) as raised:
         check_max_change("ns=2;i=90", 140, ValueBound(max_change=10), _DataValue(50.0))
     assert str(raised.value) == (
         "Moving node ns=2;i=90 from 50 to 140 is a change of 90, and the operator policy "
@@ -342,7 +342,7 @@ def test_a_move_larger_than_the_limit_is_refused():
 
 
 def test_a_move_is_measured_in_both_directions():
-    with pytest.raises(ToolError):
+    with pytest.raises(ApplicationRefusal):
         check_max_change("ns=2;i=90", 10, ValueBound(max_change=10), _DataValue(50.0))
 
 
@@ -353,9 +353,9 @@ def test_a_move_cannot_be_judged_without_knowing_where_the_node_is():
     is exactly what such a node refuses, which is the whole reason `data_type`
     exists on a write request.
     """
-    with pytest.raises(ToolError, match="it could not be read"):
+    with pytest.raises(ApplicationRefusal, match="it could not be read"):
         check_max_change("ns=2;i=90", 55, ValueBound(max_change=10), None)
-    with pytest.raises(ToolError, match="BadNotReadable"):
+    with pytest.raises(ApplicationRefusal, match="BadNotReadable"):
         check_max_change(
             "ns=2;i=90", 55, ValueBound(max_change=10), _DataValue(None, "BadNotReadable")
         )
@@ -363,7 +363,7 @@ def test_a_move_cannot_be_judged_without_knowing_where_the_node_is():
 
 def test_an_array_has_no_single_distance_to_have_moved():
     """Guessing one would be a rule nobody could predict from the policy file."""
-    with pytest.raises(ToolError, match="only accepts a number"):
+    with pytest.raises(ApplicationRefusal, match="only accepts a number"):
         check_max_change("ns=2;i=90", [51, 52], ValueBound(max_change=10), _DataValue(50.0))
 
 

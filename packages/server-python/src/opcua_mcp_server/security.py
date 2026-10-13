@@ -14,6 +14,7 @@ silent downgrade.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -25,7 +26,9 @@ from cryptography import x509
 from opcua import Client, ua
 from opcua.crypto import security_policies, uacrypto
 
-from .transport_limits import advertise_limits
+from .client_identity import CLIENT_APPLICATION_NAME, application_uri_problem
+from .python_backend import python_backend
+from .transport_limits import advertise_limits, install_receive_guard
 
 #: Policies this runtime can negotiate — the four both runtimes share.
 POLICIES = ("None", "Basic128Rsa15", "Basic256", "Basic256Sha256")
@@ -76,6 +79,8 @@ class SecurityConfig:
     user_cert: str | None = None
     #: Private key for ``user_cert``. Signs the server's challenge; never sent.
     user_key: str | None = None
+    server_trust_store: str | None = None
+    server_application_uri: str | None = None
 
 
 def _read(env: Mapping[str, str], name: str) -> str | None:
@@ -116,7 +121,7 @@ def parse_security_config(
             if node_only:
                 raise ValueError(
                     f'Security policy "{node_only}" is supported only by the Node runtime; '
-                    f"the Python runtime (python-opcua) supports: {', '.join(POLICIES)}"
+                    f"the Python runtime supports: {', '.join(POLICIES)}"
                 )
             raise ValueError(
                 f'Invalid OPCUA_SECURITY_POLICY: "{raw_policy}". Use one of: {", ".join(POLICIES)}'
@@ -169,6 +174,20 @@ def parse_security_config(
             "OPCUA_SERVER_CERT requires OPCUA_SECURITY_POLICY to be set to a policy other "
             "than None; with no channel security the server presents no certificate to verify"
         )
+
+    server_trust_store = _read(env, "OPCUA_SERVER_TRUST_STORE")
+    server_application_uri = _read(env, "OPCUA_SERVER_APPLICATION_URI")
+    if server_trust_store:
+        if policy == "None":
+            raise ValueError("OPCUA_SERVER_TRUST_STORE requires a security policy other than None")
+        if server_cert:
+            raise ValueError("OPCUA_SERVER_TRUST_STORE cannot be combined with OPCUA_SERVER_CERT")
+        if not server_application_uri:
+            raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI")
+        if not exists(server_trust_store):
+            raise ValueError(f"OPCUA_SERVER_TRUST_STORE does not exist: {server_trust_store}")
+    elif server_application_uri:
+        raise ValueError("OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE")
 
     # --- X.509 user authentication ----------------------------------------------
     user_cert = _read(env, "OPCUA_USER_CERT")
@@ -227,6 +246,8 @@ def parse_security_config(
         server_cert=server_cert,
         user_cert=user_cert,
         user_key=user_key,
+        server_trust_store=server_trust_store,
+        server_application_uri=server_application_uri,
     )
 
 
@@ -249,6 +270,8 @@ def describe_security(config: SecurityConfig) -> str:
     # is the one word that distinguishes "encrypted" from "encrypted to whoever
     # answered".
     pinned = "" if config.server_cert is None else " server-cert=pinned"
+    if config.server_trust_store:
+        pinned = " server-cert=trust-store"
     return f"policy={config.policy} mode={config.mode} user={user}{pinned}"
 
 
@@ -268,7 +291,7 @@ def security_warnings(config: SecurityConfig) -> list[str]:
         # endpoint all reach it. Said once, on a secured connection, because
         # this is the gap a reader of ``policy=Basic256Sha256`` is least likely
         # to suspect.
-        if config.server_cert is None:
+        if config.server_cert is None and config.server_trust_store is None:
             return [
                 "the OPC UA server's certificate is not being verified — set OPCUA_SERVER_CERT "
                 "to pin it. Encryption without it protects against passive eavesdropping, not "
@@ -383,25 +406,31 @@ def create_client(url: str) -> Client:
     fetches the server's certificate from its endpoint list here, so this does
     talk to the server. Call it off the event loop.
     """
-    client = Client(url)
+    backend = python_backend()
+    config = security_config()
+    if config.server_trust_store and backend != "asyncua":
+        raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua")
+    if backend == "asyncua":
+        from .adapters.asyncua_services import MaintainedClient
+
+        client = MaintainedClient(url)
+    else:
+        install_receive_guard()
+        client = Client(url)
+    client.application_name = CLIENT_APPLICATION_NAME
     # Before anything is sent: these go out in the Hello, and python-opcua's own
     # defaults are 0, which tells the server this client will accept a message of
     # any size in any number of chunks.
-    advertise_limits(client)
-    config = security_config()
+    if backend == "legacy":
+        advertise_limits(client)
 
     certificate_uri = (
         certificate_application_uri(config.client_cert) if config.client_cert else None
     )
+    if problem := application_uri_problem(config.application_uri, certificate_uri):
+        raise ValueError(problem)
     if config.application_uri is not None:
         client.application_uri = config.application_uri
-        if certificate_uri is not None and certificate_uri != config.application_uri:
-            _warn_once(
-                f"OPCUA_APPLICATION_URI={config.application_uri} does not match the "
-                f"subjectAltName URI of OPCUA_CLIENT_CERT ({certificate_uri}); a server that "
-                f"checks the two will reject the session with BadCertificateUriInvalid. Unset "
-                f"OPCUA_APPLICATION_URI to announce the certificate's own URI."
-            )
     elif certificate_uri is not None:
         # The certificate is the authority on this, and the operator has not
         # said otherwise. Matches what node-opcua does with the same files.
@@ -412,6 +441,24 @@ def create_client(url: str) -> Client:
         if problem is not None:
             raise ValueError(problem)
 
+    if config.server_trust_store:
+        from .trust_store import validator
+
+        client.aio_obj.certificate_validator = validator(
+            config.server_trust_store, config.server_application_uri, url
+        )
+    try:
+        _configure_client_security(client, config)
+    except Exception:
+        if backend == "asyncua":
+            with contextlib.suppress(Exception):
+                client.disconnect()
+        raise
+
+    return client
+
+
+def _configure_client_security(client, config):
     if config.policy != "None":
         policy = getattr(security_policies, f"SecurityPolicy{config.policy}")
         client.set_security(
@@ -434,5 +481,3 @@ def create_client(url: str) -> Client:
     elif config.username is not None:
         client.set_user(config.username)
         client.set_password(config.password or "")
-
-    return client

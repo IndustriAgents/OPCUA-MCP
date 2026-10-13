@@ -472,11 +472,17 @@ export function parseArgs(argv: string[], defaultUrl: string = SERVER_URL): Acti
 
     switch (arg) {
       case "-h":
-      case "--help":
+      case "--help": {
+        const bad = rejectsInline();
+        if (bad) return bad;
         return { kind: "help" };
+      }
       case "-v":
-      case "--version":
+      case "--version": {
+        const bad = rejectsInline();
+        if (bad) return bad;
         return { kind: "version" };
+      }
       case "--install": {
         const value = operand();
         if (value === undefined) {

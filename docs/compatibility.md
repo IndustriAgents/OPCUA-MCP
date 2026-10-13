@@ -14,6 +14,17 @@ here and they answer different questions:
 
 Neither is a vendor certification.
 
+## Per-release runtime evidence
+
+Every release publishes `runtime-compatibility.json`, tied to its source commit,
+with successful test counts for both first-class runtimes on every supported CI
+matrix leg, the shared contract/fixture/lockfile digests, and the declared runtime
+differences. The report and raw evidence also appear in CI's
+`conformance-<python>-<node>` artifacts. See
+[the report format and release gate](releasing.md#compatibility-evidence-for-each-release).
+Its repository/mock evidence and dated independent-server results answer
+different questions; passing the former does not refresh the latter.
+
 ## OPC UA servers
 
 ### Repository mocks
@@ -325,18 +336,21 @@ the ADR and expected to stay until a library change retires it (usually
 
 | ID | What differs | Could retire it |
 |---|---|---|
+| `python-client-backend` | Python uses the maintained client by default; `OPCUA_PYTHON_BACKEND=legacy` selects the one-release rollback path. Node uses node-opcua-client. | — |
 | `security-policies-aes` | `Aes128_Sha256_RsaOaep` and `Aes256_Sha256_RsaPss` are Node only; Python refuses them at startup, naming the Node runtime | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `certificate-file-encoding` | Python reads a certificate or key as PEM only when it is named `*.pem`; Node sniffs the contents. Name every file `*.pem` and both work | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `mcp-protocol-generation` | Python's `mcp` 2.x serves MCP protocol revisions up to 2026-07-28; Node's SDK 1.x up to 2025-11-25. Same tools and results either way; change notifications are offered on neither | — |
 | `mcpb-bundle` | The Claude Desktop `.mcpb` bundle is Node only | — |
 | `mcp-registry-listing` | The MCP Registry metadata (`server.json`) lists the npm package only | — |
 | `cli-command-alias` | npm also installs the command `opcua-mcp`; the documented `opcua-mcp-server` is on both | — |
-| `reconnect-mechanism` | node-opcua repairs a dropped channel in the background and keeps the same session; Python builds a new session when the next call needs one. Same settings, same waits, same recovery | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
-| `transport-limit-enforcement` | The same inbound message bounds, enforced by node-opcua on Node and by a local patch to python-opcua on Python (CVE-2022-25304) | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
-| `opcua-library-maintenance` | Python's OPC UA library is unmaintained; Node's is maintained. See [SECURITY.md](../SECURITY.md#cve-2022-25304--unbounded-chunk-reassembly-in-python-opcua) | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| `reconnect-mechanism` | node-opcua repairs a dropped channel in the background and keeps the same session; Python builds a new session when the next call needs one. CA-trust mode instead uses application-owned rebuilds to revalidate revocation before activation. Initial backoff settings are retained | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| `transport-limit-enforcement` | The same inbound message bounds, enforced by node-opcua on Node and by an instance-owned bounded protocol on maintained Python; only legacy rollback installs the python-opcua guard (CVE-2022-25304) | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| `opcua-library-maintenance` | Python and Node use maintained clients. Python retains legacy DTOs and an explicit rollback backend for one release. See [SECURITY.md](../SECURITY.md#cve-2022-25304--unbounded-chunk-reassembly-in-python-opcua) | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
+| `certificate-less-application-uri` | Without a configured client certificate, Python uses its default URI; Node uses its generated or persisted certificate’s SAN URI. Configured certificates and conflicting-override refusals match | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `client-pki-on-disk` | node-opcua keeps a PKI folder of its own, with a generated default certificate and the server certificates it has seen; Python writes nothing | — |
 | `user-key-handling` | The X.509 user key signs through a key provider on Node and is loaded into memory on Python | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `library-reason-text` | The `{reason}` inside an error, and `get_server_status`'s `error`, are in each client library's own words; the rest of every message is identical | — |
+| `timestamp-precision` | Native timestamp values keep Python microseconds when present; Node keeps milliseconds. Whole seconds and millisecond-aligned values render identically with three fractional digits. Input times target the same millisecond on both | — |
 | `concurrency-model` | Latency, throughput and memory differ and are not promised to match; the bounds and waits are | [#144](https://github.com/IndustriAgents/OPCUA-MCP/issues/144) |
 | `audit-file-rename-on-windows` | On Windows the Python server holds `OPCUA_AUDIT_FILE` so it cannot be renamed or deleted while running; use copy-and-truncate rotation there. Node allows rename rotation everywhere | — |
 

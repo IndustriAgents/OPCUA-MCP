@@ -74,7 +74,12 @@ export function guessVariant(value: unknown, index: number): Variant {
       value: convertForVariant(value, DataType.Double),
     });
   }
-  if (typeof value === "string") return new Variant({ dataType: DataType.String, value });
+  if (typeof value === "string") {
+    return new Variant({
+      dataType: DataType.String,
+      value: convertForVariant(value, DataType.String),
+    });
+  }
   throw new Error(
     `arguments[${index}] is ${kind(value)}, and the method publishes no ` +
       "InputArguments to say what type it expects; pass a boolean, a number or a string"

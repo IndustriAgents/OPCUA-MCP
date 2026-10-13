@@ -18,6 +18,7 @@
     { "name": "a Bad read has no value", "status": "BadNotReadable", "record": { "value": null, "data_type": null, "status": "BadNotReadable" } }
   ],
   "maxChange": [
+    {"name": "a nonnumeric Unicode array uses identical JSON refusal text", "status": "GoodClamped", "current": 50, "value": ["café", 1, 2], "limit": 10, "error": "Node ns=2;i=90 is bounded, so it only accepts a number; got [\"café\",1,2]. Nothing was written."},
     { "name": "a GoodLocalOverride current value is where the node is", "status": "GoodLocalOverride", "current": 50, "value": 55, "limit": 10, "error": null },
     { "name": "and is measured from", "status": "GoodClamped", "current": 50, "value": 140, "limit": 10, "error": "Moving node ns=2;i=90 from 50 to 140 is a change of 90, and the operator policy allows at most 10 in one write. Nothing was written. Make the move in steps if it is deliberate." },
     { "name": "an Uncertain current value cannot be measured from", "status": "UncertainLastUsableValue", "current": 50, "value": 55, "limit": 10, "error": "Node ns=2;i=90 has a max_change bound, which can only be checked against its current value — and reading it failed (UncertainLastUsableValue). Nothing was written." }

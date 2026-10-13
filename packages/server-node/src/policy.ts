@@ -395,9 +395,8 @@ export interface ServerIdentity {
   /** A SecurityPolicy other than None: mode Sign or SignAndEncrypt. */
   channelSecured: boolean;
   serverAuthenticated: boolean;
-  /** A trust-store method would be a third value; neither client library offers
-   *  one both runtimes can use, so there is none yet. */
-  authenticationMethod: "pin" | "none";
+  /** The configured authentication enforced before a live control session. */
+  authenticationMethod: "pin" | "trust-store" | "none";
 }
 
 /** The channel's identity guarantees, from the security variables. */
@@ -407,10 +406,11 @@ export function serverIdentity(env: NodeJS.ProcessEnv): ServerIdentity {
   // security.ts, but this must not read it as authentication if it ever gets
   // here — with no channel security the server presents no certificate at all.
   const pinned = secured && value(env, "OPCUA_SERVER_CERT") !== undefined;
+  const trusted = secured && value(env, "OPCUA_SERVER_TRUST_STORE") !== undefined;
   return {
     channelSecured: secured,
-    serverAuthenticated: pinned,
-    authenticationMethod: pinned ? "pin" : "none",
+    serverAuthenticated: pinned || trusted,
+    authenticationMethod: pinned ? "pin" : trusted ? "trust-store" : "none",
   };
 }
 
@@ -616,7 +616,7 @@ function nonEmpty(value: unknown): boolean {
 
 function validateToolNames(names: string[] | null | undefined): Set<string> | null {
   if (names === undefined || names === null) return null;
-  const known = new Set(CONTRACT.tools.map((tool) => tool.name));
+  const known = new Set<string>(CONTRACT.tools.map((tool) => tool.name));
   for (const name of names) {
     if (!known.has(name)) {
       throw new Error(`Unknown tool in allowed_tools: ${name}`);
@@ -736,7 +736,7 @@ export function controlRefusal(config: PolicyConfig): string | null {
 export interface ServerIdentityRecord {
   channel_secured: boolean;
   server_authenticated: boolean;
-  authentication_method: "pin" | "none";
+  authentication_method: "pin" | "trust-store" | "none";
   control: ControlGate;
 }
 

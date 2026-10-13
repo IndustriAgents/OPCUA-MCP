@@ -8,6 +8,8 @@ from typing import Any
 from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent
 
+from ..adapters.opcua_model import PythonOpcuaModelPort
+from ..application.model import Model
 from ..notices import notice
 from ..state import ServerState
 
@@ -15,6 +17,17 @@ from ..state import ServerState
 def _state(ctx: Context) -> ServerState:
     """This server's state, as a tool body reaches it."""
     return ctx.request_context.lifespan_context["state"]
+
+
+def _model(ctx: Context) -> Model:
+    """The information model of this call's session, and the policy it is checked against."""
+    state = _state(ctx)
+    port = PythonOpcuaModelPort(
+        ctx.request_context.lifespan_context["opcua_client"],
+        state.node_facts,
+        state.operation_limits,
+    )
+    return Model(port, state.policy)
 
 
 def _records_result(

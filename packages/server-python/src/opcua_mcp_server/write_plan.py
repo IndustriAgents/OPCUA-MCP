@@ -28,9 +28,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .access_level import CURRENT_WRITE, allows
 from .contract import CONTRACT
 from .errors import message
-from .node_facts import CURRENT_WRITE, allows
 from .numeric import json_text, numeric_text
 from .policy import as_number, format_number
 

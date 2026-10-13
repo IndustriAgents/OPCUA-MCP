@@ -12,8 +12,8 @@ import json
 
 import pytest
 from opcua_mcp_server.contract import CONTRACT
+from opcua_mcp_server.infrastructure.control_audit import _audit_targets, describe_targets
 from opcua_mcp_server.policy import ToolPolicy, parse_policy_config, values_at
-from opcua_mcp_server.server import _audit_targets, describe_targets
 
 SPECS = {tool["name"]: tool for tool in CONTRACT["tools"]}
 NAMESPACES = ["http://opcfoundation.org/UA/", "urn:one", "urn:plant"]

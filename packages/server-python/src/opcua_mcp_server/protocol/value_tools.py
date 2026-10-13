@@ -37,18 +37,25 @@ from ..policy import (
     server_identity_record,
 )
 from ..security import describe_security, security_config
-from .results import _history_result, _object_result, _state
+from .results import _history_result, _model, _object_result, _state
 
 _TRAVERSAL = CONTRACT["traversal"]
 
 
-async def read_opcua_nodes(node_ids: list[str], ctx: Context) -> list[dict]:
-    """Read the current value of one or more OPC UA nodes in a single request."""
+async def read_opcua_nodes(
+    node_ids: list[str], ctx: Context, include_write_access: bool = False
+) -> list[dict]:
+    """Read the current value of one or more OPC UA nodes in a single request.
+
+    ``include_write_access`` is typed here as well as in the contract because
+    MCPServer validates a call against this signature.
+    """
     client = ctx.request_context.lifespan_context["opcua_client"]
     state = _state(ctx)
     port = PythonOpcuaReadPort(client, state.node_metadata)
+    model = _model(ctx) if include_write_access else None
     try:
-        return await read_nodes(port, node_ids, read_chunk(state.operation_limits))
+        return await read_nodes(port, node_ids, read_chunk(state.operation_limits), model)
     except (AdapterFailure, ApplicationRefusal) as error:
         raise ToolError(str(error)) from error
 
@@ -78,6 +85,7 @@ async def read_opcua_history(
                 "processing_interval": processing_interval,
             },
             list(offered),
+            model=_model(ctx),
         )
         return _history_result(result["records"], result["completeness"], "historyTruncated")
     except (ApplicationRefusal, AdapterFailure, LimitExceeded) as error:
@@ -89,11 +97,15 @@ async def get_server_status(ctx: Context) -> CallToolResult:
     state = _state(ctx)
     connection = ctx.request_context.lifespan_context["opcua_connection"]
     port = PythonOpcuaDiagnosticsPort(connection, lambda: capability_status(state.capabilities))
-    return _object_result(
-        await get_server_status_use_case(
-            port, describe_security(security_config()), server_identity_record(state.policy.config)
-        )
+    status = await get_server_status_use_case(
+        port, describe_security(security_config()), server_identity_record(state.policy.config)
     )
+    # After the read, like the capabilities: the read may have re-established the
+    # session, and with it re-run the check. Only while there is a session — a
+    # report about a server this process cannot reach would describe one that
+    # is gone.
+    status["policy_check"] = state.policy_check if status.get("connected") else None
+    return _object_result(status)
 
 
 async def browse_opcua_nodes(
@@ -108,7 +120,9 @@ async def browse_opcua_nodes(
 ) -> CallToolResult:
     """Explore the address space: list children, walk a subtree, resolve a path, search."""
     client = ctx.request_context.lifespan_context["opcua_client"]
-    port = PythonOpcuaBrowsePort(client, _state(ctx).operation_limits)
+    state = _state(ctx)
+    port = PythonOpcuaBrowsePort(client, state.operation_limits)
+    policy = state.policy
     try:
         result = await browse_nodes(
             port,
@@ -119,6 +133,7 @@ async def browse_opcua_nodes(
             name_filter=name_filter,
             include_values=include_values,
             max_nodes=max_nodes,
+            hidden=policy.read_denied if policy.config.deny_read else None,
         )
         return _object_result(result["result"], result["completeness"])
     except (ApplicationRefusal, AdapterFailure) as error:
@@ -131,7 +146,7 @@ async def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[d
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     state = _state(ctx)
     port = PythonOpcuaWritePort(
-        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata
+        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata, state.node_facts
     )
     bounds = {}
     for index, node in enumerate(nodes):
@@ -147,6 +162,7 @@ async def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[d
             },
             bounds,
             state.policy.config.allow_out_of_range_writes,
+            _model(ctx),
         )
     except (ApplicationRefusal, AdapterFailure) as error:
         raise ToolError(str(error)) from error
@@ -161,6 +177,8 @@ async def call_opcua_method(
     """Call a method on an OPC UA object, with arguments of the types it declares."""
     port = PythonOpcuaMethodPort(ctx.request_context.lifespan_context["opcua_client"])
     try:
-        return _object_result(await call_method(port, object_node_id, method_node_id, arguments))
+        return _object_result(
+            await call_method(port, object_node_id, method_node_id, arguments, _model(ctx))
+        )
     except (ApplicationRefusal, AdapterFailure) as error:
         raise ToolError(str(error)) from error

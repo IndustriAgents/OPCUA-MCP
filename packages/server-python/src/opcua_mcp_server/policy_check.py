@@ -24,9 +24,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .access_level import CURRENT_WRITE, allows
 from .contract import CONTRACT
 from .errors import message
-from .node_facts import CURRENT_WRITE, allows
 from .numeric import json_text
 from .policy import _same_json_value, as_number, format_number
 from .write_plan import allowed_states

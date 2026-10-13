@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Protocol
 
+from ..access_level import HISTORY_READ, allows
 from ..completeness import history_completeness
 from ..datetimes import parse_iso_datetime
 from ..errors import AdapterFailure, ApplicationRefusal, describe_error, message
 from ..limits import MAX_HISTORY_VALUES, LimitExceeded, aggregate_intervals, history_values
 from ..policy import format_number
+from .model import Model
 
 
 class HistoryPort(Protocol):
@@ -27,9 +29,38 @@ def forward_from(start: datetime | None, end: datetime | None, last: str | None)
     return last if isinstance(last, str) else None
 
 
+async def history_failed(node_id: str, error: Exception, model: Model | None) -> AdapterFailure:
+    """``historyFailed``, with a hint when the node says it keeps no history.
+
+    A node whose AccessLevel lacks HistoryRead is one the server does not
+    promise to historize, and "BadHistoryOperationUnsupported" alone sends an
+    agent looking for a fault rather than for another way to get the data. Only
+    a hint, after the failure and never instead of the request: AccessLevel is
+    what a server advertises, and some keep history they do not advertise.
+    """
+    reason = describe_error(error)
+    if model is not None:
+        facts = (await model.port.facts([node_id])).get(node_id)
+        if (
+            facts is not None
+            and facts["status"] == "Good"
+            and allows(facts["access_level"], HISTORY_READ) is False
+        ):
+            hint = message("historyNotRecordedHint", node_id=node_id)
+            reason = f"{reason} {hint}"
+    return AdapterFailure(
+        "history", message("historyFailed", node_id=node_id, reason=reason), error
+    )
+
+
 async def read_history(
-    port: HistoryPort, request: dict, offered: list[str], now=lambda: datetime.now(timezone.utc)
+    port: HistoryPort,
+    request: dict,
+    offered: list[str],
+    now=lambda: datetime.now(timezone.utc),
+    model: Model | None = None,
 ) -> dict:
+    """Raw or aggregated history; with ``model``, a failure says when the node keeps none."""
     node_id = request["node_id"]
     aggregate = request.get("aggregate_function")
     if aggregate is None:
@@ -52,11 +83,7 @@ async def read_history(
                 ),
             }
         except Exception as error:
-            raise AdapterFailure(
-                "history",
-                message("historyFailed", node_id=node_id, reason=describe_error(error)),
-                error,
-            ) from error
+            raise await history_failed(node_id, error, model) from error
     if request.get("start") is None:
         raise ApplicationRefusal(message("aggregateNeedsStart"))
     if aggregate not in offered:
@@ -97,8 +124,4 @@ async def read_history(
     except (ApplicationRefusal, LimitExceeded):
         raise
     except Exception as error:
-        raise AdapterFailure(
-            "history",
-            message("historyFailed", node_id=node_id, reason=describe_error(error)),
-            error,
-        ) from error
+        raise await history_failed(node_id, error, model) from error

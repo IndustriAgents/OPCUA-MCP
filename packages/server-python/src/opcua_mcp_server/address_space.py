@@ -32,12 +32,28 @@ ROOT_FOLDER = "ns=0;i=84"
 #: definition browse uses, for the same reason.
 MAX_PER_BROWSE: int = _TRAVERSAL["maxTypeDefinitionsPerRequest"]
 
-_HAS_SUBTYPE = ua.NodeId(ua.ObjectIds.HasSubtype)
+#: HasSubtype and HasTypeDefinition, spelled as :func:`node_id_text` spells them.
+HAS_SUBTYPE = canonical_node_id(f"i={ua.ObjectIds.HasSubtype}")
+HAS_TYPE_DEFINITION = canonical_node_id(f"i={ua.ObjectIds.HasTypeDefinition}")
 
 
 def node_id_text(node_id: Any) -> str:
-    """A NodeId or ExpandedNodeId as the canonical string everything compares by."""
+    """A NodeId or ExpandedNodeId as the canonical string everything compares by.
+
+    Compared as text rather than with ``==`` because the two Python backends
+    answer in different classes: a NodeId from asyncua never equals one from
+    python-opcua, even when both name the same node.
+    """
     return canonical_node_id(node_id.to_string())
+
+
+def is_node_id(value: Any) -> bool:
+    """Whether ``value`` is a NodeId (or ExpandedNodeId) from either backend's library."""
+    return (
+        callable(getattr(value, "to_string", None))
+        and hasattr(value, "Identifier")
+        and hasattr(value, "NamespaceIndex")
+    )
 
 
 def browse_name_matches(segment: str, namespace_index: int, name: str) -> bool:
@@ -153,14 +169,14 @@ def supertype_of(client: Any, data_type: str) -> str | None:
     """
     references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
     for reference in references:
-        if reference.ReferenceTypeId == _HAS_SUBTYPE:
+        if is_subtype_reference(reference):
             return node_id_text(reference.NodeId)
     return None
 
 
 def is_subtype_reference(reference: Any) -> bool:
-    """Whether a reference is HasSubtype, compared as python-opcua compares NodeIds."""
-    return reference.ReferenceTypeId == _HAS_SUBTYPE
+    """Whether a reference is HasSubtype, whichever backend's NodeId it carries."""
+    return node_id_text(reference.ReferenceTypeId) == HAS_SUBTYPE
 
 
 #: What a supertype lookup is, for code that takes one as a parameter.
@@ -168,12 +184,15 @@ SupertypeOf = Callable[[str], "str | None"]
 
 
 __all__ = [
+    "HAS_SUBTYPE",
+    "HAS_TYPE_DEFINITION",
     "MAX_PER_BROWSE",
     "ROOT_FOLDER",
     "SupertypeOf",
     "browse_many",
     "browse_name_matches",
     "browse_references",
+    "is_node_id",
     "is_subtype_reference",
     "node_id_text",
     "supertype_of",

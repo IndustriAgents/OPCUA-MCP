@@ -111,7 +111,11 @@ async def test_history_tool_reports_completed_server_pages():
     node = SimpleNamespace(nodeid=node_id, history_read=initial)
     client = SimpleNamespace(get_node=lambda _: node, uaclient=SimpleNamespace(history_read=resume))
     state = SimpleNamespace(
-        capabilities=SimpleNamespace(aggregate_functions={"Average": ua.NodeId(2342)})
+        capabilities=SimpleNamespace(aggregate_functions={"Average": ua.NodeId(2342)}),
+        # What the history-not-recorded hint would read on a failure.
+        node_facts=None,
+        operation_limits={},
+        policy=None,
     )
     ctx = SimpleNamespace(
         request_context=SimpleNamespace(lifespan_context={"opcua_client": client, "state": state})

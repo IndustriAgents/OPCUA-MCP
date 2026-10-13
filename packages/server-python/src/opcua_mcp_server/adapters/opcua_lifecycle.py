@@ -14,6 +14,7 @@ from ..capabilities import (
 )
 from ..connection import OpcuaConnection, is_connection_error
 from ..operation_limits import read_operation_limits
+from ..policy_resolution import check_policy
 from ..state import ServerState
 
 
@@ -27,9 +28,25 @@ def _bind(state: ServerState, context: dict, client) -> None:
     state.events.reattach(client)
     # A new session may be a restarted server, whose nodes are not necessarily
     # the nodes the old ids named. What each one said about its unit and its
-    # range was true of the session that said it.
+    # range was true of the session that said it — and so was what it said about
+    # its class, its type and who may write it.
     state.node_metadata.forget()
-    _probe_capabilities(state, client, state.connection)
+    state.node_facts.forget()
+    connection = state.connection
+    _probe_capabilities(state, client, connection)
+    # Last, with the NamespaceArray bound (by the connection, before this) and
+    # the operation limits read (just above): the browse paths, subtrees and
+    # deny_read resolved on this session, and the policy measured against it.
+    # Before any tool call rides the session, because every call waits for the
+    # connection round this runs in.
+    state.policy_check = check_policy(
+        client,
+        state.policy,
+        state.node_facts,
+        state.node_metadata,
+        state.operation_limits,
+        connection.session_generation if connection is not None else None,
+    )
 
 
 def _probe_capabilities(
@@ -43,6 +60,7 @@ def _probe_capabilities(
     # session — and a tool that needs it can then use it without a round trip.
     state.operation_limits = read_operation_limits(client)
     state.node_metadata.server_limits = dict(state.operation_limits)
+    state.node_facts.server_limits = dict(state.operation_limits)
     aggregate, functions = client_aggregate_functions(client)
     for probe in (history, history_events, aggregate):
         if probe.support == "unknown":

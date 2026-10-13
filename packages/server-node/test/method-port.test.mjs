@@ -13,6 +13,21 @@ class FakeMethodPort {
     this.c = c;
     this.calls = [];
   }
+  // The information-model services: nothing known, so no call is planned out.
+  // Not recorded — the shared table pins the order of the services it was
+  // written for.
+  async facts() {
+    return new Map();
+  }
+  async onObject() {
+    return null;
+  }
+  async declaredArguments() {
+    return null;
+  }
+  async requirements(nodeIds) {
+    return nodeIds.map(() => null);
+  }
   async inputTypes(nodeId) {
     this.calls.push(["metadata", nodeId]);
     if (this.c.metadataError) throw new Error(this.c.metadataError);

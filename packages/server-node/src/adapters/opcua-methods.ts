@@ -1,25 +1,50 @@
 /** Native method metadata, variants and service result codecs. */
 import {
+  AttributeIds,
   DataType,
   Variant,
   VariantArrayType,
-  BrowseDirection,
+  makeBrowsePath,
+  type Argument,
   type ClientSession,
   type CallMethodResult,
 } from "node-opcua-client";
 import { type MethodPort, type MethodType, type MethodArgument } from "../application/methods.js";
+import { supertypeOf } from "../browse.js";
 import { AdapterFailure, ContractRefusal, describeError } from "../errors.js";
 import { builtInType, guessVariant } from "../method-arguments.js";
+import type { NodeFacts, NodeFactsCache } from "../node-facts.js";
 import { canonicalNodeId } from "../node-ids.js";
+import type { RequirementReading } from "../policy-check.js";
 import { variantToJson } from "../records.js";
 import { isGood } from "../status.js";
 import { convertForVariant } from "../variant-codec.js";
-const HAS_SUBTYPE = 45;
+import { readRequirements } from "./opcua-interlocks.js";
 export class NodeOpcuaMethodPort implements MethodPort {
-  constructor(private readonly session: ClientSession) {}
+  /** The method's InputArguments, once read for this call; see `inputArguments`. */
+  private definition: { methodNodeId: string; inputs: Argument[] | null } | null = null;
+  constructor(
+    private readonly session: ClientSession,
+    private readonly nodeFacts: NodeFactsCache | null = null,
+    private readonly readChunk = Infinity
+  ) {}
+  async facts(nodeIds: string[]): Promise<Map<string, NodeFacts | null>> {
+    if (this.nodeFacts === null) return new Map();
+    return await this.nodeFacts.forNodes(this.session, nodeIds);
+  }
+  async onObject(objectId: string, methodId: string): Promise<boolean | null> {
+    if (this.nodeFacts === null) return null;
+    return await this.nodeFacts.onObject(this.session, objectId, methodId);
+  }
+  async declaredArguments(methodNodeId: string): Promise<number | null> {
+    return (await this.inputArguments(methodNodeId))?.length ?? null;
+  }
+  async requirements(nodeIds: string[]): Promise<RequirementReading[]> {
+    return await readRequirements(this.session, nodeIds, this.readChunk);
+  }
   async inputTypes(methodNodeId: string): Promise<MethodType[]> {
     try {
-      const types = await this.nativeInputTypes(this.session, methodNodeId);
+      const types = await this.nativeInputTypes(methodNodeId);
       return types.map((t) => ({
         dataType: DataType[t.dataType],
         isArray: t.arrayType === VariantArrayType.Array,
@@ -61,6 +86,42 @@ export class NodeOpcuaMethodPort implements MethodPort {
       throw new AdapterFailure("method", describeError(error), error);
     }
   }
+
+  /** The method's InputArguments, or null when it publishes none.
+   *
+   * Null and empty are different answers, which node-opcua's
+   * `getArgumentDefinition` does not tell apart: a method that publishes an
+   * empty list takes no arguments, and one that publishes nothing says nothing
+   * about how many it takes — so only the first refuses a call that passes some.
+   * One translate and one read, as python-opcua's `get_child` makes, once per
+   * call; anything that goes wrong is "publishes none", the old fallback.
+   */
+  private async inputArguments(methodNodeId: string): Promise<Argument[] | null> {
+    if (this.definition?.methodNodeId === methodNodeId) return this.definition.inputs;
+    let inputs: Argument[] | null = null;
+    try {
+      const [result] = await this.session.translateBrowsePath([
+        makeBrowsePath(methodNodeId, "/0:InputArguments"),
+      ]);
+      const target = result && isGood(result.statusCode) ? result.targets?.[0] : undefined;
+      if (target) {
+        const dataValue = await this.session.read({
+          nodeId: target.targetId.toString(),
+          attributeId: AttributeIds.Value,
+        });
+        if (isGood(dataValue.statusCode)) {
+          const value: unknown = dataValue.value?.value;
+          if (value === null || value === undefined) inputs = [];
+          else if (Array.isArray(value)) inputs = value as Argument[];
+        }
+      }
+    } catch {
+      inputs = null;
+    }
+    this.definition = { methodNodeId, inputs };
+    return inputs;
+  }
+
   /** The declared type of each input argument, or [] when the method publishes none.
    *
    * A declared DataType that is not itself built in (`Duration`, `UtcTime`, an
@@ -69,40 +130,14 @@ export class NodeOpcuaMethodPort implements MethodPort {
    * not one that declares nothing, and guessing would send it anyway.
    */
   private async nativeInputTypes(
-    session: ClientSession,
     methodNodeId: string
   ): Promise<Array<{ dataType: DataType; arrayType: VariantArrayType }>> {
-    let definition;
-    try {
-      definition = await session.getArgumentDefinition(methodNodeId);
-    } catch {
-      // Not every method publishes InputArguments, and a method with no
-      // arguments has nothing to publish. Fall back rather than refuse.
-      return [];
-    }
-
-    const supertypeOf = async (dataType: string): Promise<string | null> => {
-      // Every inverse reference, filtered here rather than by the server:
-      // python-opcua's server answers a browse filtered to HasSubtype with
-      // nothing at all, and the Python runtime does the same for that reason.
-      const result = await session.browse({
-        nodeId: dataType,
-        browseDirection: BrowseDirection.Inverse,
-        resultMask: 63,
-      });
-      if (!isGood(result.statusCode)) return null;
-      const parent = (result.references ?? []).find(
-        (reference) =>
-          reference.referenceTypeId.namespace === 0 &&
-          reference.referenceTypeId.value === HAS_SUBTYPE
-      );
-      return parent ? canonicalNodeId(parent.nodeId.toString()) : null;
-    };
-
     const declared = [];
-    for (const argument of definition.inputArguments ?? []) {
+    for (const argument of (await this.inputArguments(methodNodeId)) ?? []) {
       declared.push({
-        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), supertypeOf),
+        dataType: await builtInType(canonicalNodeId(argument.dataType.toString()), (dataType) =>
+          supertypeOf(this.session, dataType)
+        ),
         arrayType: argument.valueRank >= 1 ? VariantArrayType.Array : VariantArrayType.Scalar,
       });
     }

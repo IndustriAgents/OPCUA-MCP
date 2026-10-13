@@ -18,6 +18,15 @@ for (const c of cases)
       if (c.crash === name) throw new AdapterFailure(name, "native timeout", native);
     };
     const port = {
+      // The information-model services: nothing known about any node, so every
+      // write is planned as it was before them. Not recorded — the shared table
+      // pins the order of the services it was written for.
+      async facts() {
+        return new Map();
+      },
+      async requirements(nodeIds) {
+        return nodeIds.map(() => null);
+      },
       async current(nodes, indices, chunk) {
         record("current", { indices, chunk });
         return new Map(Object.entries(c.current ?? {}).map(([k, v]) => [Number(k), v]));

@@ -58,6 +58,9 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
   private get metadata() {
     return this.runtime.metadata;
   }
+  private get facts() {
+    return this.runtime.facts;
+  }
   private get subs() {
     return this.runtime.subs;
   }
@@ -112,8 +115,13 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
         message("emptyArray", { tool: "write_opcua_nodes", argument: "nodes" })
       );
     }
-    const port = new NodeOpcuaWritePort(session, this.metadata);
     const serverLimits = await this.operationLimits();
+    const port = new NodeOpcuaWritePort(
+      session,
+      this.metadata,
+      this.facts,
+      readChunk(serverLimits)
+    );
     const bounds = new Map(
       nodes.map((node, index) => [
         index,
@@ -126,14 +134,22 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
         nodes,
         { write: writeLimit(serverLimits), read: readChunk(serverLimits) },
         bounds,
-        this.policy.config.allowOutOfRangeWrites
+        this.policy.config.allowOutOfRangeWrites,
+        this.policy
       )
     );
   }
 
   async callOpcuaMethod(objectNodeId: string, methodNodeId: string, methodArgs?: unknown[]) {
-    const port = new NodeOpcuaMethodPort(this.requireSession());
-    return objectResult(await callMethod(port, objectNodeId, methodNodeId, methodArgs));
+    const session = this.requireSession();
+    const port = new NodeOpcuaMethodPort(
+      session,
+      this.facts,
+      readChunk(await this.operationLimits())
+    );
+    return objectResult(
+      await callMethod(port, objectNodeId, methodNodeId, methodArgs, this.policy)
+    );
   }
 
   subscriptionPort(): import("../application/subscriptions.js").SubscriptionPort {

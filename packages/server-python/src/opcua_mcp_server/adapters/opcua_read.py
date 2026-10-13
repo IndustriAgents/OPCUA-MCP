@@ -44,6 +44,8 @@ def node_value_record(node_id: str, data_value: Any, engineering: AnalogInfo | N
         # only an AnalogItemType publishes it — but on the ones that do it is the
         # difference between "51.75" and "51.75 °C, normal range 0 to 150".
         "engineering": engineering.to_json() if engineering else None,
+        # Only when asked for (include_write_access); see application/read.py.
+        "write_access": None,
     }
 
 

@@ -11,6 +11,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from opcua import ua
 from opcua_mcp_server import events, server
 from opcua_mcp_server.errors import message
+from opcua_mcp_server.policy import ToolPolicy, parse_policy_config
+from opcua_mcp_server.state import ServerState
 
 CASES = json.loads((ROOT / "tests/fixtures/alarm-tool-alias.json").read_text(encoding="utf-8"))[
     "cases"
@@ -32,8 +34,10 @@ async def test_actual_alarm_handler(case, monkeypatch):
     monkeypatch.setattr(
         events, "_action_method", lambda *_: SimpleNamespace(nodeid=ua.NodeId(9111))
     )
+    # No alarm scope in the policy, so the scope check reads nothing.
+    state = ServerState(policy=ToolPolicy(parse_policy_config({})))
     ctx = SimpleNamespace(
-        request_context=SimpleNamespace(lifespan_context={"opcua_client": client})
+        request_context=SimpleNamespace(lifespan_context={"opcua_client": client, "state": state})
     )
 
     async def invoke():

@@ -83,9 +83,14 @@ class PythonOpcuaWritePort:
         def prepare():
             try:
                 declared = node.get("data_type")
+                # A planned node says whether it is an array (from its ValueRank);
+                # otherwise, and where the ValueRank allowed either, the value does.
+                shape = node.get("array")
                 if declared:
                     variant_type = ua.VariantType[declared]
-                    is_array = isinstance(node.get("value"), (list, tuple))
+                    is_array = (
+                        isinstance(node.get("value"), (list, tuple)) if shape is None else shape
+                    )
                 else:
                     value = self.readings.get(index)
                     if value is None or not value.StatusCode.is_good():
@@ -97,7 +102,7 @@ class PythonOpcuaWritePort:
                             ),
                         }
                     variant_type = ua.VariantType(value.Value.VariantType.value)
-                    is_array = value.Value.is_array
+                    is_array = value.Value.is_array if shape is None else shape
                 converted = convert_for_variant(node.get("value"), variant_type, is_array)
                 self.write_ids.append(self.client.get_node(node["node_id"]).nodeid)
                 self.write_values.append(ua.DataValue(ua.Variant(converted, variant_type)))

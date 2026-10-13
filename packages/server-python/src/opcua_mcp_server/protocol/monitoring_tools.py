@@ -26,7 +26,7 @@ from ..limits import (
 from ..subscriptions import (
     resolve_filter,
 )
-from .results import _history_result, _object_result, _records_result, _state
+from .results import _history_result, _model, _object_result, _records_result, _state
 
 _TRAVERSAL = CONTRACT["traversal"]
 
@@ -178,7 +178,14 @@ async def acknowledge_alarm(
     try:
         return _object_result(
             await act_on_alarm_use_case(
-                _alarm_port(ctx), event_id, "acknowledge", comment, None, condition_id, True
+                _alarm_port(ctx),
+                event_id,
+                "acknowledge",
+                comment,
+                None,
+                condition_id,
+                True,
+                _model(ctx),
             )
         )
     except (ApplicationRefusal, AdapterFailure) as error:
@@ -197,7 +204,14 @@ async def act_on_alarm(
     try:
         return _object_result(
             await act_on_alarm_use_case(
-                _alarm_port(ctx), event_id, action, comment, shelve_duration_ms, condition_id, False
+                _alarm_port(ctx),
+                event_id,
+                action,
+                comment,
+                shelve_duration_ms,
+                condition_id,
+                False,
+                _model(ctx),
             )
         )
     except (ApplicationRefusal, AdapterFailure) as error:

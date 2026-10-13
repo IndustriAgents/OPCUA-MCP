@@ -6,6 +6,7 @@ from typing import Protocol
 
 from ..errors import AdapterFailure, ApplicationRefusal, describe_error, message
 from ..node_ids import canonical_node_id
+from .model import Model
 
 
 class AlarmPort(Protocol):
@@ -36,7 +37,9 @@ async def act_on_alarm(
     duration: float | None,
     condition_id: str | None,
     acknowledgement: bool,
+    model: Model | None = None,
 ) -> dict:
+    """Acknowledge or act on one alarm; with ``model``, only one inside the policy's scope."""
     if action == "shelveFor" and duration is None:
         raise ApplicationRefusal(message("shelveForNeedsDuration"))
     if action != "shelveFor" and duration is not None:
@@ -52,6 +55,13 @@ async def act_on_alarm(
             else message("alarmActionFailed", action=action, condition_id=condition, reason=reason)
         )
 
+    if model is not None:
+        try:
+            await model.check_alarm_scope(condition)
+        except ApplicationRefusal:
+            raise
+        except Exception as error:
+            raise AdapterFailure("alarm-scope", failed(describe_error(error)), error) from error
     try:
         status = await port.action(condition, event_id, action, comment, duration)
     except Exception as error:

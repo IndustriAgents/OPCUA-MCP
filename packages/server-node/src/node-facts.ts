@@ -112,8 +112,10 @@ const UNRESOLVED: DataTypeResolution = { data_type: null, enumeration: false };
 /** The fifteen data_type spellings `write_opcua_nodes` accepts, read from the
  *  tool's own input schema so the two can never list different types. */
 const WRITABLE_TYPES: ReadonlySet<string> = new Set(
-  CONTRACT.tools.find((tool) => tool.name === "write_opcua_nodes")?.inputSchema?.properties?.nodes
-    ?.items?.properties?.data_type?.enum ?? []
+  (
+    CONTRACT.tools.find((tool) => tool.name === "write_opcua_nodes")?.inputSchema?.properties?.nodes
+      ?.items?.properties?.data_type?.enum ?? []
+  ).filter((name): name is string => typeof name === "string")
 );
 
 /** Enumeration (Part 6 §5.2.4): every enumerated DataType is an Int32 on the wire. */

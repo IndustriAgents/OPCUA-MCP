@@ -146,7 +146,7 @@ async def write_opcua_nodes(nodes: list[dict[str, Any]], ctx: Context) -> list[d
         raise ToolError(error_message("emptyArray", tool="write_opcua_nodes", argument="nodes"))
     state = _state(ctx)
     port = PythonOpcuaWritePort(
-        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata
+        ctx.request_context.lifespan_context["opcua_client"], state.node_metadata, state.node_facts
     )
     bounds = {}
     for index, node in enumerate(nodes):

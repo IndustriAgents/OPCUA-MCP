@@ -97,10 +97,15 @@ class FakeModelPort:
 
 
 class FakeWritePort:
-    def __init__(self, engineering=None):
+    def __init__(self, known=None, engineering=None):
         self.calls = []
+        self.known = known or {}
         self.info = engineering or {}
         self.prepared = []
+
+    async def facts(self, node_ids):
+        self.calls.append(["facts", node_ids])
+        return {node_id: self.known.get(node_id) for node_id in node_ids}
 
     async def current(self, nodes, indices, chunk):
         self.calls.append(["current", indices])
@@ -124,11 +129,10 @@ LIMITS = {"write": 100, "read": 100}
 
 
 async def test_a_planned_write_skips_a_read_only_node_and_types_the_rest():
-    port = FakeWritePort()
-    model = Model(FakeModelPort({TEMPERATURE: facts(access_level=5), SETPOINT: facts()}), full())
+    port = FakeWritePort({TEMPERATURE: facts(access_level=5), SETPOINT: facts()})
     nodes = [{"node_id": TEMPERATURE, "value": 20}, {"node_id": SETPOINT, "value": 61.25}]
 
-    results = await write_nodes(port, nodes, LIMITS, {}, False, model)
+    results = await write_nodes(port, nodes, LIMITS, {}, False)
 
     assert results == [
         {
@@ -143,19 +147,19 @@ async def test_a_planned_write_skips_a_read_only_node_and_types_the_rest():
     assert port.prepared == [
         {"node_id": SETPOINT, "value": 61.25, "data_type": "Double", "array": False}
     ]
-    assert [call[0] for call in port.calls] == ["engineering", "prepare", "send"]
+    assert [call[0] for call in port.calls] == ["facts", "engineering", "prepare", "send"]
 
 
 async def test_a_planned_write_reads_the_current_value_only_where_the_type_is_unknown():
-    port = FakeWritePort()
-    model = Model(FakeModelPort({SETPOINT: None}), full())
+    port = FakeWritePort({SETPOINT: None})
 
-    await write_nodes(port, [{"node_id": SETPOINT, "value": 1}], LIMITS, {}, False, model)
+    await write_nodes(port, [{"node_id": SETPOINT, "value": 1}], LIMITS, {}, False)
 
     assert ["current", [0]] in port.calls
 
 
-async def test_the_instrument_range_refuses_the_batch_even_when_the_eu_range_is_lifted():
+@pytest.mark.parametrize("known", [facts(), None], ids=["facts-read", "facts-unknown"])
+async def test_the_instrument_range_refuses_the_batch_even_when_the_eu_range_is_lifted(known):
     engineering = {
         SETPOINT: {
             "unit": "°C",
@@ -164,11 +168,10 @@ async def test_the_instrument_range_refuses_the_batch_even_when_the_eu_range_is_
             "instrument_range": {"low": -50, "high": 250},
         }
     }
-    port = FakeWritePort(engineering)
-    model = Model(FakeModelPort({SETPOINT: facts()}), full())
+    port = FakeWritePort({SETPOINT: known}, engineering)
 
     with pytest.raises(ApplicationRefusal, match="InstrumentRange"):
-        await write_nodes(port, [{"node_id": SETPOINT, "value": 300}], LIMITS, {}, True, model)
+        await write_nodes(port, [{"node_id": SETPOINT, "value": 300}], LIMITS, {}, True)
     assert ["send"] not in port.calls
 
 
@@ -182,10 +185,8 @@ async def test_an_interlock_that_does_not_hold_refuses_the_write(tmp_path):
             ],
         },
     )
-    model_port = FakeModelPort(
-        {GUARDED: facts()}, readings={PERMIT: {"status": "Good", "value": False}}
-    )
-    port = FakeWritePort()
+    model_port = FakeModelPort(readings={PERMIT: {"status": "Good", "value": False}})
+    port = FakeWritePort({GUARDED: facts()})
 
     with pytest.raises(ApplicationRefusal) as refused:
         await write_nodes(
@@ -212,12 +213,11 @@ async def test_an_interlock_whose_target_does_not_resolve_stops_every_write(tmp_
             "preconditions": [{"targets": [missing], "require": [{"node": PERMIT, "equals": 1}]}],
         },
     )
-    model = Model(FakeModelPort({SETPOINT: facts()}), policy)
+    model = Model(FakeModelPort(), policy)
+    port = FakeWritePort({SETPOINT: facts()})
 
     with pytest.raises(ApplicationRefusal) as refused:
-        await write_nodes(
-            FakeWritePort(), [{"node_id": SETPOINT, "value": 1}], LIMITS, {}, False, model
-        )
+        await write_nodes(port, [{"node_id": SETPOINT, "value": 1}], LIMITS, {}, False, model)
 
     assert str(refused.value) == message("preconditionUnresolved", entry=missing)
 

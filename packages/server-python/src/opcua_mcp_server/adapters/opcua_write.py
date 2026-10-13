@@ -37,9 +37,10 @@ def check_max_change(node_id, value, bound, data_value):
 
 
 class PythonOpcuaWritePort:
-    def __init__(self, client, metadata):
+    def __init__(self, client, metadata, facts=None):
         self.client = client
         self.metadata = metadata
+        self.node_facts = facts
         self.readings = {}
         self.write_ids = []
         self.write_values = []
@@ -54,6 +55,11 @@ class PythonOpcuaWritePort:
                 raise AdapterFailure(operation, describe_error(error), error) from error
 
         return await asyncio.to_thread(invoke)
+
+    async def facts(self, node_ids):
+        # Never raises: a node whose attributes could not be read has None facts,
+        # and its plan falls back to the read-first inference.
+        return await asyncio.to_thread(self.node_facts.for_nodes, self.client, node_ids)
 
     async def current(self, nodes, indices, chunk):
         def read():

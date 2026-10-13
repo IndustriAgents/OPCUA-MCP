@@ -1,12 +1,14 @@
 """What the information model and the model-aware policy add to a tool call.
 
-Each use case takes an optional :class:`Model`. Without one it is exactly the
-orchestration the port tables in ``tests/fixtures/*-port.json`` pin; with one,
-the call is also checked against what the nodes themselves publish (``node_facts``)
-and against the policy rules that need a reading to decide — interlocks and the
-alarm scope. The rules are the pure functions in ``write_plan.py`` and
-``policy_check.py``; this module only gathers their inputs through a port, so
-nothing here touches a client library.
+A use case takes an optional :class:`Model`. With one, the call is also checked
+against what the nodes themselves publish (``node_facts``) and against the
+policy rules that need a reading to decide — interlocks and the alarm scope.
+Without one it is the orchestration the port tables in
+``tests/fixtures/*-port.json`` pin. (A write is planned from the facts either
+way, through its own port; the model adds only its interlocks.) The rules are
+the pure functions in ``write_plan.py`` and ``policy_check.py``; this module
+only gathers their inputs through a port, so nothing here touches a client
+library.
 
 The plant model only ever narrows: a fact that could not be read skips its check
 (the server enforces its own rights), while a policy rule that cannot be applied

@@ -89,11 +89,15 @@ async def get_server_status(ctx: Context) -> CallToolResult:
     state = _state(ctx)
     connection = ctx.request_context.lifespan_context["opcua_connection"]
     port = PythonOpcuaDiagnosticsPort(connection, lambda: capability_status(state.capabilities))
-    return _object_result(
-        await get_server_status_use_case(
-            port, describe_security(security_config()), server_identity_record(state.policy.config)
-        )
+    status = await get_server_status_use_case(
+        port, describe_security(security_config()), server_identity_record(state.policy.config)
     )
+    # After the read, like the capabilities: the read may have re-established the
+    # session, and with it re-run the check. Only while there is a session — a
+    # report about a server this process cannot reach would describe one that
+    # is gone.
+    status["policy_check"] = state.policy_check if status.get("connected") else None
+    return _object_result(status)
 
 
 async def browse_opcua_nodes(
@@ -108,7 +112,9 @@ async def browse_opcua_nodes(
 ) -> CallToolResult:
     """Explore the address space: list children, walk a subtree, resolve a path, search."""
     client = ctx.request_context.lifespan_context["opcua_client"]
-    port = PythonOpcuaBrowsePort(client, _state(ctx).operation_limits)
+    state = _state(ctx)
+    port = PythonOpcuaBrowsePort(client, state.operation_limits)
+    policy = state.policy
     try:
         result = await browse_nodes(
             port,
@@ -119,6 +125,7 @@ async def browse_opcua_nodes(
             name_filter=name_filter,
             include_values=include_values,
             max_nodes=max_nodes,
+            hidden=policy.read_denied if policy.config.deny_read else None,
         )
         return _object_result(result["result"], result["completeness"])
     except (ApplicationRefusal, AdapterFailure) as error:

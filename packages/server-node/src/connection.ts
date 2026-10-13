@@ -464,6 +464,9 @@ export class OpcuaConnection {
     this.session_ = randomBytes(8).toString("hex");
     this.generation_ += 1;
     console.error("OPC UA session re-created after the server lost it");
+    // A restarted server may have loaded its namespaces in a different order,
+    // and the policy is about to be resolved again against this session.
+    await this.bindPolicyNamespaces(session);
     if (!this.onSessionRestored) return;
     try {
       await this.onSessionRestored(session);

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from typing import Protocol
 
 from ..completeness import traversal_completeness
@@ -57,7 +58,9 @@ async def browse_nodes(
     name_filter: str | None,
     include_values: bool,
     max_nodes: int,
+    hidden: Callable[[str], bool] | None = None,
 ) -> dict:
+    """Walk from ``node_id`` (or ``browse_path``); ``hidden`` is what deny_read hides."""
     limits = CONTRACT["traversal"]
     depth = max(0, min(limits["maxDepth"], int(depth)))
     max_nodes = max(1, min(limits["maxNodes"], int(max_nodes)))
@@ -68,6 +71,10 @@ async def browse_nodes(
         if browse_path
         else canonical_node_id(node_id)
     )
+    # A start named by browse_path is only known now; one named by node_id was
+    # checked before anything was sent. See the filter after the walk.
+    if hidden is not None and hidden(root):
+        raise ApplicationRefusal(message("readDenied", node_id=root))
 
     def keep(record):
         return (wanted_class is None or record["node_class"].lower() == wanted_class) and (
@@ -120,6 +127,13 @@ async def browse_nodes(
                         found.append(record)
                     if ref["nodeClass"] == "Object" and current_depth + 1 < depth:
                         queue.append((child_id, current_depth + 1))
+        # What deny_read hides is not listed: not the node, and — because the
+        # deny set holds its whole subtree — nothing under it either. After the
+        # walk rather than inside it, so `inspected` and `truncated` still
+        # describe the walk that was made; before the detail below, so nothing
+        # hidden is read.
+        if hidden is not None:
+            found = [record for record in found if not hidden(record["node_id"])]
         await port.enrich(found, include_values)
         return {
             "result": {"nodes": found, "truncated": truncated, "inspected": inspected},

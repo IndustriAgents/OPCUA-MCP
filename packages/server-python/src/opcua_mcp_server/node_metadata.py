@@ -134,7 +134,7 @@ def _range(value: Any) -> Range | None:
         return None
 
 
-def _browse_path(node_id: Any, browse_name: str) -> ua.BrowsePath:
+def property_path(node_id: Any, browse_name: str) -> ua.BrowsePath:
     """One ``<index>:<name>`` hop from ``node_id``, as a BrowsePath.
 
     ``HierarchicalReferences`` rather than ``HasProperty`` (and subtypes
@@ -211,7 +211,7 @@ class NodeMetadata:
     def _read(self, client: Any, node_ids: list[str]) -> dict[str, AnalogInfo | None]:
         """One translate and one read for the whole batch. See the module docstring."""
         paths = [
-            _browse_path(client.get_node(node_id).nodeid, browse_name)
+            property_path(client.get_node(node_id).nodeid, browse_name)
             for node_id in node_ids
             for browse_name in PROPERTY_BROWSE_NAMES
         ]
@@ -226,7 +226,7 @@ class NodeMetadata:
         targets: list[Any] = []
         owners: list[tuple[int, int]] = []
         for index, result in enumerate(results):
-            target = _first_target(result)
+            target = first_target(result)
             if target is None:
                 continue
             owners.append((index // len(PROPERTY_BROWSE_NAMES), index % len(PROPERTY_BROWSE_NAMES)))
@@ -252,7 +252,7 @@ class NodeMetadata:
         return {node_id: _assemble(properties) for node_id, properties in found.items()}
 
 
-def _first_target(result: Any) -> Any:
+def first_target(result: Any) -> Any:
     """The NodeId a browse path resolved to, or None if it resolved to nothing.
 
     A node with no EURange answers ``BadNoMatch``, which is an answer and not a
@@ -278,4 +278,11 @@ def _assemble(properties: list[Any]) -> AnalogInfo | None:
     return None if info.is_empty else info
 
 
-__all__ = ["PROPERTY_BROWSE_NAMES", "AnalogInfo", "NodeMetadata", "Range"]
+__all__ = [
+    "PROPERTY_BROWSE_NAMES",
+    "AnalogInfo",
+    "NodeMetadata",
+    "Range",
+    "first_target",
+    "property_path",
+]

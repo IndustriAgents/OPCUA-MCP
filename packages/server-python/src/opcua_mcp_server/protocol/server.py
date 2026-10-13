@@ -116,6 +116,32 @@ class PolicyMCPServer(MCPServer):
         if decided.outcome != "allowed":
             raise ToolError(refusal(spec["name"], decided, answers, connection.url))
 
+    def _authorize_read(self, call: _Call) -> None:
+        """Check deny_read again, strictly, now that the session is resolved.
+
+        :meth:`ToolPolicy.authorize` already checked it before the connection
+        was up, on whatever the previous session had resolved — the only answer
+        it had. This is the session the read will ride on: its browse paths and
+        subtrees are the ones that count, and a deny set it could not resolve in
+        full refuses the read outright (``readPolicyIncomplete``). Refused and
+        recorded the way an authorize refusal is; a read is not audited, so in
+        practice that is the refusal alone.
+        """
+        try:
+            self.state.policy.authorize_read(call.name, call.arguments, strict=True)
+        except PermissionError as exc:
+            call.denied = True
+            _audit_after(
+                self.state,
+                call.name,
+                call.arguments,
+                "denied",
+                str(exc),
+                call_id=call.call_id,
+                attempt=call.attempt,
+            )
+            raise ToolError(str(exc)) from exc
+
     async def call_tool(self, name, arguments, context=None):
         """Translate protocol errors around the shared execution envelope."""
         owner = self
@@ -182,6 +208,8 @@ class PolicyMCPServer(MCPServer):
 
             async def capabilities(self, call):
                 await owner._ensure_capabilities(call.spec, call.arguments, connection)
+                # And deny_read, as the session just connected (or rebuilt) resolved it.
+                owner._authorize_read(call)
 
             async def dispatch(self, call):
                 return await dispatch(call.name, call.arguments, context)

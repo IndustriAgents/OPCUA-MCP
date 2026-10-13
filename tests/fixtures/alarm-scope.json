@@ -1,0 +1,113 @@
+{
+  "$comment": "The operator policy's alarm scope (control.alarm_sources, control.alarm_max_severity), driven through BOTH runtimes: tests/unit/test_alarm_scope.py and packages/server-node/test/alarm-scope.test.mjs call checkAlarmScope / check_alarm_scope on each `input` and assert `expect`. `source` and `sources` are canonical node IDs (resolved); `sources` null and `max_severity` null mean not configured. `error` is why the condition's SourceNode or Severity could not be read, which refuses: an alarm whose scope cannot be checked is not acknowledged on the policy's behalf.",
+  "cases": [
+    {
+      "name": "nothing configured",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 500,
+        "error": null,
+        "sources": null,
+        "max_severity": null
+      },
+      "expect": null
+    },
+    {
+      "name": "the source is listed",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 500,
+        "error": null,
+        "sources": ["ns=1;s=Temperature", "ns=1;s=Pressure"],
+        "max_severity": null
+      },
+      "expect": null
+    },
+    {
+      "name": "the source is not listed",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 500,
+        "error": null,
+        "sources": ["ns=1;s=Pressure"],
+        "max_severity": null
+      },
+      "expect": "Condition ns=1;i=1001 is raised by ns=1;s=Temperature, which is not in the operator policy's alarm_sources. Nothing was acknowledged or changed."
+    },
+    {
+      "name": "no source with sources configured",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": null,
+        "severity": 500,
+        "error": null,
+        "sources": ["ns=1;s=Temperature"],
+        "max_severity": null
+      },
+      "expect": "Condition ns=1;i=1001 is raised by an unknown source, which is not in the operator policy's alarm_sources. Nothing was acknowledged or changed."
+    },
+    {
+      "name": "too severe",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 700,
+        "error": null,
+        "sources": null,
+        "max_severity": 500
+      },
+      "expect": "Condition ns=1;i=1001 has severity 700, above the operator policy's alarm_max_severity of 500, so a person has to handle it. Nothing was acknowledged or changed."
+    },
+    {
+      "name": "severity at the limit is allowed",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 500,
+        "error": null,
+        "sources": null,
+        "max_severity": 500
+      },
+      "expect": null
+    },
+    {
+      "name": "an unknown severity with a limit configured",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": null,
+        "error": null,
+        "sources": null,
+        "max_severity": 500
+      },
+      "expect": "Condition ns=1;i=1001 has severity unknown, above the operator policy's alarm_max_severity of 500, so a person has to handle it. Nothing was acknowledged or changed."
+    },
+    {
+      "name": "a read error refuses",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 500,
+        "error": "SourceNode: BadNoMatch",
+        "sources": ["ns=1;s=Temperature"],
+        "max_severity": null
+      },
+      "expect": "Condition ns=1;i=1001 could not be checked against the operator policy's alarm scope (SourceNode: BadNoMatch), so nothing was acknowledged or changed."
+    },
+    {
+      "name": "the source is checked before the severity",
+      "input": {
+        "condition_id": "ns=1;i=1001",
+        "source": "ns=1;s=Temperature",
+        "severity": 900,
+        "error": null,
+        "sources": ["ns=1;s=Pressure"],
+        "max_severity": 500
+      },
+      "expect": "Condition ns=1;i=1001 is raised by ns=1;s=Temperature, which is not in the operator policy's alarm_sources. Nothing was acknowledged or changed."
+    }
+  ]
+}

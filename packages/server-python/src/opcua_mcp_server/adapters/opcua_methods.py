@@ -7,16 +7,21 @@ from typing import Any
 
 from opcua import ua
 
+from ..address_space import node_id_text, supertype_of
 from ..errors import AdapterFailure, ApplicationRefusal, describe_error
 from ..limits import LimitExceeded
 from ..method_arguments import built_in_type, guess_variant
-from ..node_ids import canonical_node_id
 from ..records import variant_to_json
 from ..variant_codec import convert_for_variant
 
 
-def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]:
-    """The declared type of each input argument, or [] when the method publishes none.
+def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]] | None:
+    """The declared type of each input argument, or None when the method publishes none.
+
+    None and ``[]`` are different answers: a method that publishes an empty
+    InputArguments takes no arguments, and one that publishes none at all has
+    said nothing about how many it takes — so only the first can have its
+    arguments counted (``methodArgumentCount``).
 
     A declared DataType that is not itself built in (``Duration``, ``UtcTime``,
     an enumeration) is resolved to the built-in type it is encoded as, and one
@@ -28,23 +33,14 @@ def _input_argument_types(client, method_node_id: str) -> list[tuple[Any, bool]]
     except Exception:
         # Not every method publishes InputArguments, and a method with no
         # arguments has nothing to publish. Fall back rather than refuse.
-        return []
-
-    def supertype_of(data_type: str) -> str | None:
-        # Every inverse reference, filtered here rather than by the server:
-        # python-opcua's own server answers a browse filtered to HasSubtype with
-        # nothing at all, and `method-arguments.ts` does the same for that reason.
-        references = client.get_node(data_type).get_references(direction=ua.BrowseDirection.Inverse)
-        for reference in references:
-            if canonical_node_id(reference.ReferenceTypeId.to_string()) == canonical_node_id(
-                ua.NodeId(ua.ObjectIds.HasSubtype).to_string()
-            ):
-                return canonical_node_id(reference.NodeId.to_string())
         return None
+
+    def parent(data_type: str) -> str | None:
+        return supertype_of(client, data_type)
 
     return [
         (
-            built_in_type(canonical_node_id(argument.DataType.to_string()), supertype_of),
+            built_in_type(node_id_text(argument.DataType), parent),
             argument.ValueRank >= 1,
         )
         for argument in arguments or []
@@ -86,12 +82,12 @@ class PythonOpcuaMethodPort:
 
         return await asyncio.to_thread(invoke)
 
-    async def input_types(self, method_node_id: str) -> list[dict]:
+    async def input_types(self, method_node_id: str) -> list[dict] | None:
         def metadata():
-            return [
-                {"dataType": kind.name, "isArray": is_array}
-                for kind, is_array in _input_argument_types(self.client, method_node_id)
-            ]
+            declared = _input_argument_types(self.client, method_node_id)
+            if declared is None:
+                return None
+            return [{"dataType": kind.name, "isArray": is_array} for kind, is_array in declared]
 
         return await self._run(metadata)
 

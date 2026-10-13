@@ -7,15 +7,18 @@ import {
   VariantArrayType,
   type ClientSession,
 } from "node-opcua-client";
-import type { CurrentValue, WritePort, WriteRequest } from "../application/write.js";
+import type { CurrentValue, PlannedWrite, WritePort, WriteRequest } from "../application/write.js";
 import { checkMaxChange as checkNormalizedChange } from "../application/write.js";
 import { AdapterFailure, ContractRefusal, describeError } from "../errors.js";
 import { chunked } from "../limits.js";
+import type { NodeFacts, NodeFactsCache } from "../node-facts.js";
 import type { NodeMetadata } from "../node-metadata.js";
+import type { RequirementReading } from "../policy-check.js";
 import { asNumber } from "../policy.js";
 import { variantToJson } from "../records.js";
 import { isGood } from "../status.js";
 import { convertForVariant } from "../variant-codec.js";
+import { readRequirements } from "./opcua-interlocks.js";
 
 export function currentValue(value: DataValue | undefined): CurrentValue | undefined {
   if (!value) return undefined;
@@ -41,8 +44,21 @@ export class NodeOpcuaWritePort implements WritePort {
     [];
   constructor(
     private readonly session: ClientSession,
-    private readonly metadata: NodeMetadata
+    private readonly metadata: NodeMetadata,
+    private readonly nodeFacts: NodeFactsCache | null = null,
+    private readonly readChunk = Infinity
   ) {}
+
+  /** What each node says about itself, from the session's cache. Never throws:
+   *  facts that cannot be read are null, and the server decides. */
+  async facts(nodeIds: string[]): Promise<Map<string, NodeFacts | null>> {
+    if (this.nodeFacts === null) return new Map();
+    return await this.nodeFacts.forNodes(this.session, nodeIds);
+  }
+
+  async requirements(nodeIds: string[]): Promise<RequirementReading[]> {
+    return await readRequirements(this.session, nodeIds, this.readChunk);
+  }
 
   async current(
     nodes: WriteRequest[],
@@ -79,18 +95,18 @@ export class NodeOpcuaWritePort implements WritePort {
   }
 
   async prepare(
-    node: WriteRequest,
+    write: PlannedWrite,
     index: number
   ): Promise<{ status: string; error: string } | null> {
     try {
       let dataType: DataType;
       let arrayType = VariantArrayType.Scalar;
       let dimensions: number[] | null = null;
-      if (node?.data_type) {
-        const named = DataType[node.data_type as keyof typeof DataType];
-        if (typeof named !== "number") throw new Error(`Unknown data_type "${node.data_type}"`);
+      if (write.data_type !== null) {
+        const named = DataType[write.data_type as keyof typeof DataType];
+        if (typeof named !== "number") throw new Error(`Unknown data_type "${write.data_type}"`);
         dataType = named;
-        if (Array.isArray(node.value)) arrayType = VariantArrayType.Array;
+        if (write.array ?? Array.isArray(write.value)) arrayType = VariantArrayType.Array;
       } else {
         const value = this.readings.get(index);
         if (!value || !isGood(value.statusCode) || !value.value)
@@ -100,12 +116,18 @@ export class NodeOpcuaWritePort implements WritePort {
               "could not read the node's data type to convert the value; give data_type to write without reading it first",
           };
         dataType = value.value.dataType;
-        arrayType = value.value.arrayType;
-        dimensions = value.value.dimensions;
+        // The node's ValueRank, where it said one, decides the shape; the
+        // current value's only where it did not.
+        if (write.array === null) {
+          arrayType = value.value.arrayType;
+          dimensions = value.value.dimensions;
+        } else if (write.array) {
+          arrayType = VariantArrayType.Array;
+        }
       }
-      const value = convertForVariant(node.value, dataType, arrayType);
+      const value = convertForVariant(write.value, dataType, arrayType);
       this.writes.push({
-        nodeId: node.node_id,
+        nodeId: write.node_id,
         attributeId: AttributeIds.Value,
         value: new DataValue({ value: new Variant({ dataType, arrayType, dimensions, value }) }),
       });

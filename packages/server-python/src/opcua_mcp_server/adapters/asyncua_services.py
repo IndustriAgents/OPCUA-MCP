@@ -48,6 +48,10 @@ class ServiceView:
     def get_attributes(self, nodes, attribute):
         return self._call("read_attributes", nodes, attribute)
 
+    def read(self, parameters):
+        # Several attributes of several nodes in one Read (node_facts.py).
+        return self._call("read", parameters)
+
     def set_attributes(self, nodes, values, attribute=legacy.AttributeIds.Value):
         return self._call("write_attributes", nodes, values, attribute)
 

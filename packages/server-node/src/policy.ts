@@ -3,8 +3,10 @@ import { readFileSync } from "fs";
 import { ACCESS_CLASSES } from "./access-classes.js";
 import { CONTRACT, type ToolGuard, type ToolSpec } from "./contract.js";
 import { namespaceUriForm, resolveNodeId } from "./node-ids.js";
-import { message } from "./errors.js";
+import { ContractRefusal, message } from "./errors.js";
 import { parseNumericString } from "./numeric.js";
+import type { Requirement } from "./policy-check.js";
+import type { BoundRecord } from "./write-plan.js";
 
 export type ToolProfile = "observe" | "operator" | "full";
 
@@ -23,6 +25,25 @@ interface WritableNodeEntry {
   max_change?: number;
 }
 
+/** One `writable_subtrees` rule as written. */
+interface WritableSubtreeEntry {
+  root: string;
+  type_definition?: string | null;
+  max_nodes?: number | null;
+  min?: number | null;
+  max?: number | null;
+  enum?: unknown[] | null;
+  max_change?: number | null;
+}
+
+/** One `preconditions` entry as written. */
+interface PreconditionEntry {
+  targets?: string[] | null;
+  methods?: Array<{ object_id: string; method_id: string }> | null;
+  require: Requirement[];
+  description?: string | null;
+}
+
 /** A policy file once `checkPolicyFile` has passed it. `null` is "not set". */
 interface PolicyFile {
   version?: number | null;
@@ -31,10 +52,15 @@ interface PolicyFile {
   allow_insecure_control?: boolean | null;
   allow_unverified_server_control?: boolean | null;
   allow_out_of_range_writes?: boolean | null;
+  deny_read?: string[] | null;
   control?: {
     writable_nodes?: Array<string | WritableNodeEntry> | null;
     callable_methods?: Array<{ object_id: string; method_id: string }> | null;
     acknowledge_alarms?: boolean | null;
+    writable_subtrees?: WritableSubtreeEntry[] | null;
+    alarm_sources?: string[] | null;
+    alarm_max_severity?: number | null;
+    preconditions?: PreconditionEntry[] | null;
   } | null;
 }
 
@@ -79,14 +105,53 @@ export function isEmptyBound(bound: ValueBound): boolean {
 }
 
 const BOUND_KEYS = ["node", "min", "max", "enum", "max_change"];
+const SUBTREE_KEYS = ["root", "type_definition", "max_nodes", "min", "max", "enum", "max_change"];
 
-function boundNumber(entry: WritableNodeEntry, key: "min" | "max" | "max_change"): number | null {
-  const value = entry[key];
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`writable_nodes entry "${entry.node}" has a non-numeric ${key}`);
+/** A writable entry's bound keys as a `ValueBound`, or a refusal naming the entry.
+ *
+ * Shared by `writable_nodes` objects and `writable_subtrees` rules, which carry
+ * the same four keys and are refused in the same words but for what the entry is
+ * called. In one order — min, max, enum, max_change, then the two relations — so
+ * a rule with two faults reports the same one on both runtimes.
+ */
+function boundOf(entry: Record<string, unknown>, label: string, name: string): ValueBound {
+  const number = (key: "min" | "max" | "max_change"): number | null => {
+    const value = entry[key];
+    if (value === undefined || value === null) return null;
+    // Finite as well: `1e400` parses to infinity, which is not a bound anyone wrote.
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`${label} entry "${name}" has a non-numeric ${key}`);
+    }
+    return value;
+  };
+  const minimum = number("min");
+  const maximum = number("max");
+  // `null` is "no enum", as it is "no bound" for min and max. This refused it
+  // while Python accepted it (#157).
+  const values = entry.enum ?? null;
+  if (values !== null && (!Array.isArray(values) || values.length === 0)) {
+    throw new Error(`${label} entry "${name}" has an empty or non-list enum`);
   }
-  return value;
+  const bound: ValueBound = {
+    minimum,
+    maximum,
+    allowed: values as unknown[] | null,
+    maxChange: number("max_change"),
+  };
+  if (bound.minimum !== null && bound.maximum !== null && bound.minimum > bound.maximum) {
+    throw new Error(`${label} entry "${name}" has min above max`);
+  }
+  if (bound.maxChange !== null && bound.maxChange < 0) {
+    throw new Error(`${label} entry "${name}" has a negative max_change`);
+  }
+  return bound;
+}
+
+/** The first key of `entry` not in `known`, in sorted order, or undefined. */
+function unknownKey(entry: Record<string, unknown>, known: readonly string[]): string | undefined {
+  return Object.keys(entry)
+    .filter((key) => !known.includes(key))
+    .sort()[0];
 }
 
 /** One `writable_nodes` entry as a [node id, bound] pair.
@@ -99,37 +164,211 @@ function valueBound(entry: string | WritableNodeEntry): [string, ValueBound] {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     throw new Error("writable_nodes entry must be a node id or an object");
   }
-  const unknown = Object.keys(entry).filter((key) => !BOUND_KEYS.includes(key));
-  if (unknown.length > 0) {
+  const unknown = unknownKey(entry as unknown as Record<string, unknown>, BOUND_KEYS);
+  if (unknown !== undefined) {
     // Loud, because the failure it prevents is silent: an operator who writes
     // "minimum" instead of "min" believes a bound is in force and none is.
     throw new Error(
-      `Unknown key in a writable_nodes entry: ${unknown.sort()[0]}. ` +
+      `Unknown key in a writable_nodes entry: ${unknown}. ` +
         `Use one of: ${[...BOUND_KEYS].sort().join(", ")}`
     );
   }
   if (typeof entry.node !== "string" || entry.node.trim() === "") {
     throw new Error("A writable_nodes entry must name a node");
   }
-  // `null` is "no enum", as it is "no bound" for min and max. This refused it
-  // while Python accepted it (#157).
-  const values = entry.enum ?? null;
-  if (values !== null && (!Array.isArray(values) || values.length === 0)) {
-    throw new Error(`writable_nodes entry "${entry.node}" has an empty or non-list enum`);
+  return [
+    entry.node,
+    boundOf(entry as unknown as Record<string, unknown>, "writable_nodes", entry.node),
+  ];
+}
+
+/** One `writable_subtrees` rule: every Variable under `root` (of `typeDefinition`,
+ *  when given) is writable with `bound`, up to `maxNodes` of them. */
+export interface SubtreeRule {
+  root: string;
+  typeDefinition: string | null;
+  maxNodes: number;
+  bound: ValueBound;
+}
+
+/** One `writable_subtrees` entry, checked, as a rule (spec §6.2). */
+function subtreeRule(entry: unknown): SubtreeRule {
+  if (!isObject(entry)) {
+    throw new Error("A control.writable_subtrees entry must be an object");
   }
-  const bound: ValueBound = {
-    minimum: boundNumber(entry, "min"),
-    maximum: boundNumber(entry, "max"),
-    allowed: values,
-    maxChange: boundNumber(entry, "max_change"),
+  const unknown = unknownKey(entry, SUBTREE_KEYS);
+  if (unknown !== undefined) {
+    throw new Error(
+      `Unknown key in a writable_subtrees entry: ${unknown}. ` +
+        `Use one of: ${[...SUBTREE_KEYS].sort().join(", ")}`
+    );
+  }
+  if (!nonEmpty(entry.root)) {
+    throw new Error("A control.writable_subtrees entry must name a root");
+  }
+  const root = entry.root as string;
+  const typeDefinition = entry.type_definition ?? null;
+  if (typeDefinition !== null && !nonEmpty(typeDefinition)) {
+    throw new Error(`writable_subtrees entry "${root}" has an empty or non-string type_definition`);
+  }
+  const limits = CONTRACT.policyCheck;
+  const maxNodes = entry.max_nodes ?? null;
+  if (
+    maxNodes !== null &&
+    !(
+      typeof maxNodes === "number" &&
+      Number.isInteger(maxNodes) &&
+      maxNodes >= 1 &&
+      maxNodes <= limits.maxSubtreeNodes
+    )
+  ) {
+    throw new Error(
+      `writable_subtrees entry "${root}" has max_nodes outside 1 to ${limits.maxSubtreeNodes}`
+    );
+  }
+  return {
+    root,
+    typeDefinition: typeDefinition as string | null,
+    maxNodes: (maxNodes as number | null) ?? limits.defaultSubtreeNodes,
+    bound: boundOf(entry, "writable_subtrees", root),
   };
-  if (bound.minimum !== null && bound.maximum !== null && bound.minimum > bound.maximum) {
-    throw new Error(`writable_nodes entry "${entry.node}" has min above max`);
+}
+
+const PRECONDITION_KEYS = ["targets", "methods", "require", "description"];
+const REQUIREMENT_KEYS = ["node", "equals", "in", "min", "max"];
+
+/** A value a precondition may compare with: a string, a finite number, a boolean. */
+function scalar(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+/** One `preconditions` entry, checked (spec §6.5). */
+function checkPrecondition(entry: unknown): void {
+  if (!isObject(entry)) {
+    throw new Error("A control.preconditions entry must be an object");
   }
-  if (bound.maxChange !== null && bound.maxChange < 0) {
-    throw new Error(`writable_nodes entry "${entry.node}" has a negative max_change`);
+  const unknown = unknownKey(entry, PRECONDITION_KEYS);
+  if (unknown !== undefined) {
+    throw new Error(
+      `Unknown key in a control.preconditions entry: ${unknown}. ` +
+        `Use one of: ${[...PRECONDITION_KEYS].sort().join(", ")}`
+    );
   }
-  return [entry.node, bound];
+  const targets = entry.targets ?? null;
+  if (targets !== null && !(Array.isArray(targets) && targets.every(nonEmpty))) {
+    throw new Error(
+      "A control.preconditions entry's targets must be a list of node IDs or browse paths"
+    );
+  }
+  const methods = entry.methods ?? null;
+  if (
+    methods !== null &&
+    !(
+      Array.isArray(methods) &&
+      methods.every(
+        (item) => isObject(item) && nonEmpty(item.object_id) && nonEmpty(item.method_id)
+      )
+    )
+  ) {
+    throw new Error(
+      "A control.preconditions entry's methods must be a list of objects with a non-empty object_id and method_id"
+    );
+  }
+  if (
+    ((targets as unknown[] | null)?.length ?? 0) + ((methods as unknown[] | null)?.length ?? 0) ===
+    0
+  ) {
+    throw new Error("A control.preconditions entry must name at least one target or method");
+  }
+  const require = entry.require ?? null;
+  if (!Array.isArray(require) || require.length === 0) {
+    throw new Error("A control.preconditions entry must have a non-empty require list");
+  }
+  if ((entry.description ?? null) !== null && typeof entry.description !== "string") {
+    throw new Error("A control.preconditions entry's description must be a string");
+  }
+  require.forEach(checkRequirement);
+}
+
+/** One `require` item: a node, and exactly one of equals, in, or min/max. */
+function checkRequirement(requirement: unknown): void {
+  if (!isObject(requirement)) {
+    throw new Error("A precondition requirement must be an object");
+  }
+  const unknown = unknownKey(requirement, REQUIREMENT_KEYS);
+  if (unknown !== undefined) {
+    throw new Error(
+      `Unknown key in a precondition requirement: ${unknown}. ` +
+        `Use one of: ${[...REQUIREMENT_KEYS].sort().join(", ")}`
+    );
+  }
+  if (!nonEmpty(requirement.node)) {
+    throw new Error("A precondition requirement must name a node");
+  }
+  const node = requirement.node as string;
+  const set = (key: string) => (requirement[key] ?? null) !== null;
+  const kinds = [set("equals"), set("in"), set("min") || set("max")].filter(Boolean).length;
+  if (kinds !== 1) {
+    throw new Error(
+      `Precondition requirement on "${node}" must have exactly one of equals, in, or min/max`
+    );
+  }
+  if (set("equals") && !scalar(requirement.equals)) {
+    throw new Error(
+      `Precondition requirement on "${node}" has an equals that is not a string, number or boolean`
+    );
+  }
+  if (
+    set("in") &&
+    !(Array.isArray(requirement.in) && requirement.in.length > 0 && requirement.in.every(scalar))
+  ) {
+    throw new Error(
+      `Precondition requirement on "${node}" has an in that is not a non-empty list of strings, numbers or booleans`
+    );
+  }
+  for (const key of ["min", "max"]) {
+    const value = requirement[key] ?? null;
+    if (value !== null && !(typeof value === "number" && Number.isFinite(value))) {
+      throw new Error(`Precondition requirement on "${node}" has a non-numeric ${key}`);
+    }
+  }
+  const min = (requirement.min ?? null) as number | null;
+  const max = (requirement.max ?? null) as number | null;
+  if (min !== null && max !== null && min > max) {
+    throw new Error(`Precondition requirement on "${node}" has min above max`);
+  }
+}
+
+/** A list of node ids or browse paths, as deny_read and alarm_sources take. */
+function isEntryList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(nonEmpty);
+}
+
+/** One `preconditions` entry once checked. */
+export interface Precondition {
+  targets: string[];
+  methods: Array<{ object_id: string; method_id: string }>;
+  require: Requirement[];
+}
+
+/** Whether a policy entry is a browse path from the Root folder rather than an id. */
+export function isBrowsePath(entry: string): boolean {
+  return entry.startsWith("/");
+}
+
+/** A `ValueBound` as the fixtures and `write_access` spell it. */
+export function boundRecord(bound: ValueBound | null): BoundRecord | null {
+  if (bound === null) return null;
+  return {
+    min: bound.minimum,
+    max: bound.maximum,
+    enum: bound.allowed,
+    max_change: bound.maxChange,
+  };
 }
 
 /** What this process can prove about the other end of the channel (#134).
@@ -198,6 +437,18 @@ export interface PolicyConfig {
    *  declares is worth more than one a human retyped, and it is the only value
    *  bound that exists on a deployment with no policy file at all. */
   allowOutOfRangeWrites: boolean;
+  /** Nodes no read may touch, with everything under them: node ids or browse
+   *  paths, as written. Applies under every profile. */
+  denyRead: string[];
+  /** Operator: subtrees whose Variables are writable, with a bound each. */
+  writableSubtrees: SubtreeRule[];
+  /** Operator: the only alarm sources acknowledge_alarm and act_on_alarm may act
+   *  on. Empty is no restriction. */
+  alarmSources: string[];
+  /** Operator: the most severe condition they may act on, or null for any. */
+  alarmMaxSeverity: number | null;
+  /** Operator: interlocks that must hold before a write or a call goes out. */
+  preconditions: Precondition[];
 }
 
 function value(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -282,6 +533,12 @@ function checkPolicyFile(file: Record<string, unknown>): void {
   requireFlag(file, "allow_insecure_control", "allow_insecure_control");
   requireFlag(file, "allow_unverified_server_control", "allow_unverified_server_control");
   requireFlag(file, "allow_out_of_range_writes", "allow_out_of_range_writes");
+  // Before control, and before returning for a file without one: deny_read is
+  // top-level, because it applies under every profile.
+  const deny = file.deny_read ?? null;
+  if (deny !== null && !isEntryList(deny)) {
+    throw new Error("OPCUA_POLICY_FILE deny_read must be a list of node IDs or browse paths");
+  }
 
   const control = file.control ?? null;
   if (control === null) return;
@@ -309,6 +566,41 @@ function checkPolicyFile(file: Record<string, unknown>): void {
     }
   }
   requireFlag(control, "acknowledge_alarms", "control.acknowledge_alarms");
+
+  const subtrees = control.writable_subtrees ?? null;
+  if (subtrees !== null) {
+    if (!Array.isArray(subtrees)) {
+      throw new Error("OPCUA_POLICY_FILE control.writable_subtrees must be a list");
+    }
+    subtrees.forEach(subtreeRule);
+  }
+  const sources = control.alarm_sources ?? null;
+  if (sources !== null && !isEntryList(sources)) {
+    throw new Error(
+      "OPCUA_POLICY_FILE control.alarm_sources must be a list of node IDs or browse paths"
+    );
+  }
+  const severity = control.alarm_max_severity ?? null;
+  if (
+    severity !== null &&
+    !(
+      typeof severity === "number" &&
+      Number.isInteger(severity) &&
+      severity >= 1 &&
+      severity <= 1000
+    )
+  ) {
+    throw new Error(
+      "OPCUA_POLICY_FILE control.alarm_max_severity must be a whole number from 1 to 1000"
+    );
+  }
+  const preconditions = control.preconditions ?? null;
+  if (preconditions !== null) {
+    if (!Array.isArray(preconditions)) {
+      throw new Error("OPCUA_POLICY_FILE control.preconditions must be a list");
+    }
+    preconditions.forEach(checkPrecondition);
+  }
 }
 
 function requireFlag(section: Record<string, unknown>, key: string, name: string): void {
@@ -397,6 +689,15 @@ export function parsePolicyConfig(env: NodeJS.ProcessEnv): PolicyConfig {
     allowUnverifiedServerControl,
     serverIdentity: serverIdentity(env),
     allowOutOfRangeWrites,
+    denyRead: file.deny_read ?? [],
+    writableSubtrees: (control.writable_subtrees ?? []).map(subtreeRule),
+    alarmSources: control.alarm_sources ?? [],
+    alarmMaxSeverity: control.alarm_max_severity ?? null,
+    preconditions: (control.preconditions ?? []).map((entry) => ({
+      targets: entry.targets ?? [],
+      methods: entry.methods ?? [],
+      require: entry.require,
+    })),
   };
 }
 
@@ -496,22 +797,31 @@ function classVisible(config: PolicyConfig, tool: ToolSpec): boolean {
   // yes. Derived from the guard, so a new control tool needs no code here.
   if (guard.flag) return config[guard.flag];
   if (guard.methodPaths?.length) return config.callableMethods.size > 0;
-  if (guard.nodeIdPaths?.length) return config.writableNodes.size > 0;
+  // Configured, not resolved: a subtree rule that matched nothing on this
+  // session still makes the tool one the operator meant to offer, and the
+  // catalogue must not move with the plant (#140).
+  if (guard.nodeIdPaths?.length) {
+    return config.writableNodes.size > 0 || config.writableSubtrees.length > 0;
+  }
   return false;
 }
 
 /** Every value a guard path selects out of a call's arguments.
  *
- * Supports `field` and `array[].field`. A path that selects nothing yields
- * nothing, and the caller treats that as a denial rather than a pass: an
- * argument the guard expected and did not find means the call does not look
- * like what the contract declared.
+ * Supports `field`, `array[].field`, and a trailing `array[]` for every string
+ * element of a list of strings — which is how a read guard names `node_ids`. A
+ * path that selects nothing yields nothing, and the caller treats that as a
+ * denial rather than a pass: an argument the guard expected and did not find
+ * means the call does not look like what the contract declared.
  */
 export function valuesAt(args: Record<string, unknown>, path: string): string[] {
   const [head, ...rest] = path.split(".");
   if (head.endsWith("[]")) {
     const items = args[head.slice(0, -2)];
     if (!Array.isArray(items)) return [];
+    if (rest.length === 0) {
+      return items.filter((item): item is string => typeof item === "string");
+    }
     const field = rest.join(".");
     return items.flatMap((item) =>
       item && typeof item === "object" ? valuesAt(item as Record<string, unknown>, field) : []
@@ -598,7 +908,7 @@ export function formatNumber(value: number): string {
  * numeric string matches a numeric entry, because the write path parses it and
  * the plant sees the number.
  */
-function sameJsonValue(value: unknown, candidate: unknown): boolean {
+export function sameJsonValue(value: unknown, candidate: unknown): boolean {
   if (typeof value === "boolean" || typeof candidate === "boolean") return value === candidate;
   if (typeof candidate === "number") {
     const number = asNumber(value);
@@ -617,7 +927,97 @@ export class ToolPolicy {
    */
   private namespaces: readonly string[] | null = null;
 
+  /** What each browse-path entry resolved to on this session; null for one that
+   *  did not. Empty until the first resolution, and an entry that is not here
+   *  matches nothing — the same reading as an `nsu=` entry before the namespace
+   *  array is known. */
+  private paths = new Map<string, string | null>();
+  /** Every node writable_subtrees made writable on this session, with its rule's
+   *  bound; the first rule to match a node wins. */
+  private subtreeNodes = new Map<string, ValueBound>();
+  /** Every node deny_read hides, as expanded on this session. The plain node-id
+   *  entries are also checked directly, so they hide their node before the
+   *  first expansion has run. */
+  private deniedNodes = new Set<string>();
+  /** Why the deny set is not known in full, or null when it is. While set, every
+   *  guarded read is refused: a confidentiality rule that could not be applied in
+   *  full must not be applied in part. */
+  private denyIncomplete: string | null = null;
+
   constructor(readonly config: PolicyConfig) {}
+
+  /** Bind what the browse-path entries resolved to, on every session.
+   *
+   * A path names a node by where it is, which is the one name that survives a
+   * server that renumbers its nodes; it is resolved again on every session for
+   * the same reason an `nsu=` entry is.
+   */
+  bindPaths(resolved: ReadonlyMap<string, string | null>): void {
+    this.paths = new Map(resolved);
+  }
+
+  /** Bind the nodes writable_subtrees matched on this session. */
+  bindSubtrees(nodes: ReadonlyMap<string, ValueBound>): void {
+    this.subtreeNodes = new Map(nodes);
+  }
+
+  /** Bind the expanded deny set, and whether it is complete (`incomplete` null). */
+  bindDenied(nodes: ReadonlySet<string>, incomplete: string | null): void {
+    this.deniedNodes = new Set(nodes);
+    this.denyIncomplete = incomplete;
+  }
+
+  /** Drop everything resolved against the old session, before resolving again.
+   *
+   * Fail closed in the meantime: path entries match nothing, subtree matches
+   * write nothing, and a deny_read with entries refuses guarded reads until it
+   * has been expanded on the new session — a node the old session's expansion
+   * hid may sit somewhere else now.
+   */
+  forgetResolution(reason: string): void {
+    this.paths = new Map();
+    this.subtreeNodes = new Map();
+    this.deniedNodes = new Set();
+    this.denyIncomplete = this.config.denyRead.length > 0 ? reason : null;
+  }
+
+  /** The number of nodes the deny set holds, and whether it is complete. */
+  denyState(): { size: number; complete: boolean } {
+    return { size: this.deniedNodes.size, complete: this.denyIncomplete === null };
+  }
+
+  /** The canonical node id a policy entry names on this session, or null.
+   *
+   * Every entry goes through here — writable_nodes, callable_methods,
+   * writable_subtrees roots, deny_read, alarm_sources, preconditions — so a
+   * browse path works wherever a node id does. A request's own node id never
+   * does: that goes through `resolve`, and a path there names nothing.
+   */
+  resolveEntry(entry: string): string | null {
+    if (isBrowsePath(entry)) return this.paths.get(entry) ?? null;
+    return this.resolve(entry);
+  }
+
+  /** A request's node id in the spelling this policy compares by, or null. */
+  resolveNodeId(nodeId: string): string | null {
+    return this.resolve(nodeId);
+  }
+
+  /** `nodeId` written against the namespace URI rather than its index, or null.
+   *
+   * For the audit record (spec §8): a namespace index means nothing once the
+   * server that assigned it has restarted, and the URI is what lets a line be
+   * read against the right node months later. Null when the index is not in the
+   * NamespaceArray this session reported, or no array has been reported.
+   */
+  uriForm(nodeId: string): string | null {
+    if (this.namespaces === null) return null;
+    const resolved = this.resolve(nodeId);
+    const match = resolved === null ? null : /^ns=([0-9]+);(.+)$/s.exec(resolved);
+    if (!match) return null;
+    const uri = this.namespaces[Number(match[1])];
+    return uri === undefined ? null : `nsu=${uri};${match[2]}`;
+  }
 
   /** Bind the live NamespaceArray, re-read on every (re)connect.
    *
@@ -661,6 +1061,9 @@ export class ToolPolicy {
     const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
     if (!tool) throw new Error(message("unknownTool", { tool: name }));
     if (!this.isVisible(tool)) throw new Error(this.refusal(tool));
+    // Every profile: deny_read is a confidentiality control on reads, not an
+    // operator allowlist, and `full` does not lift it.
+    this.authorizeRead(name, args, false);
     if (this.config.profile !== "operator") return;
 
     // `isVisible` has already refused a guardless control tool; this is the
@@ -675,6 +1078,145 @@ export class ToolPolicy {
     this.authorizeNodes(name, guard, args);
     this.authorizeValues(guard, args);
     this.authorizeMethods(name, guard, args);
+  }
+
+  /** Refuse a read of a node deny_read hides, under every profile (spec §6.3).
+   *
+   * Walks the tool's `readGuard`, as `authorize` walks its `guard`. Called twice
+   * per call: from `authorize`, before anything is sent, with what is known so
+   * far; and `strict` once the connection is up and the policy resolved on it,
+   * when a deny set that could not be expanded in full refuses every guarded read
+   * rather than letting through whatever it failed to name.
+   */
+  authorizeRead(name: string, args: Record<string, unknown>, strict: boolean): void {
+    if (this.config.denyRead.length === 0) return;
+    const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
+    const paths = tool?.readGuard?.nodeIdPaths ?? [];
+    if (paths.length === 0) return;
+    if (strict && this.denyIncomplete !== null) {
+      throw new ContractRefusal(message("readPolicyIncomplete", { reason: this.denyIncomplete }));
+    }
+    for (const path of paths) {
+      for (const nodeId of valuesAt(args, path)) {
+        if (this.isReadDenied(nodeId)) {
+          throw new ContractRefusal(message("readDenied", { node_id: nodeId }));
+        }
+      }
+    }
+  }
+
+  /** Whether deny_read hides `nodeId`. */
+  isReadDenied(nodeId: string): boolean {
+    if (this.config.denyRead.length === 0) return false;
+    const wanted = this.resolve(nodeId);
+    if (wanted === null) return false;
+    if (this.deniedNodes.has(wanted)) return true;
+    return this.config.denyRead.some(
+      (entry) => !isBrowsePath(entry) && this.resolveEntry(entry) === wanted
+    );
+  }
+
+  /** Why `name` is not callable at all, or null when it is offered. */
+  toolRefusal(name: string): string | null {
+    const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
+    if (!tool) return message("unknownTool", { tool: name });
+    return this.isVisible(tool) ? null : this.refusal(tool);
+  }
+
+  /** Whether `nodeId` is in the operator's writable set: writable_nodes, or a
+   *  writable_subtrees match. Never throws. */
+  isWritable(nodeId: string): boolean {
+    const wanted = this.resolve(nodeId);
+    if (wanted === null) return false;
+    return this.writableSet().has(wanted);
+  }
+
+  /** Every node the operator may write, resolved, on this session. */
+  writableSet(): Set<string> {
+    const set = this.resolvedEntries(this.config.writableNodes);
+    for (const nodeId of this.subtreeNodes.keys()) set.add(nodeId);
+    return set;
+  }
+
+  /** Every (object, method) pair the operator may call, resolved, as `o|m`. */
+  callableSet(): Set<string> {
+    const allowed = new Set<string>();
+    for (const entry of this.config.callableMethods) {
+      const [entryObject, entryMethod] = entry.split("|");
+      const resolvedObject = this.resolveEntry(entryObject);
+      const resolvedMethod = this.resolveEntry(entryMethod);
+      if (resolvedObject !== null && resolvedMethod !== null) {
+        allowed.add(`${resolvedObject}|${resolvedMethod}`);
+      }
+    }
+    return allowed;
+  }
+
+  /** The operator preconditions that guard a write to `nodeId` (spec §6.5). */
+  preconditionsForNode(nodeId: string): Precondition[] {
+    if (this.config.profile !== "operator") return [];
+    const wanted = this.resolve(nodeId);
+    if (wanted === null) return [];
+    return this.config.preconditions.filter((precondition) =>
+      precondition.targets.some((target) => this.resolveEntry(target) === wanted)
+    );
+  }
+
+  /** The first precondition target or method pair that does not resolve, as
+   *  written, or null when every one does (spec §12).
+   *
+   * An interlock whose target names nothing on this server guards nothing, and
+   * the node it was meant for may still be writable through a plain id — so
+   * under operator, while one does not resolve, no write and no method call is
+   * sent at all. Policy order: each entry's targets, then its method pairs.
+   */
+  unresolvedPrecondition(): string | null {
+    if (this.config.profile !== "operator") return null;
+    for (const precondition of this.config.preconditions) {
+      for (const target of precondition.targets) {
+        if (this.resolveEntry(target) === null) return target;
+      }
+      for (const pair of precondition.methods) {
+        if (
+          this.resolveEntry(pair.object_id) === null ||
+          this.resolveEntry(pair.method_id) === null
+        ) {
+          return `${pair.object_id}|${pair.method_id}`;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** The operator preconditions that guard a call of `method` on `object`. */
+  preconditionsForCall(object: string, method: string): Precondition[] {
+    if (this.config.profile !== "operator") return [];
+    const wantedObject = this.resolve(object);
+    const wantedMethod = this.resolve(method);
+    if (wantedObject === null || wantedMethod === null) return [];
+    return this.config.preconditions.filter((precondition) =>
+      precondition.methods.some(
+        (pair) =>
+          this.resolveEntry(pair.object_id) === wantedObject &&
+          this.resolveEntry(pair.method_id) === wantedMethod
+      )
+    );
+  }
+
+  /** The operator's alarm scope, resolved, or null when it sets none (spec §6.4).
+   *
+   * `sources` is null when alarm_sources is not configured, and the resolved
+   * entries when it is — an entry that did not resolve is dropped, so a list of
+   * nothing but unresolved entries allows no source at all.
+   */
+  alarmScope(): { sources: string[] | null; maxSeverity: number | null } | null {
+    const { profile, alarmSources, alarmMaxSeverity } = this.config;
+    if (profile !== "operator") return null;
+    if (alarmSources.length === 0 && alarmMaxSeverity === null) return null;
+    return {
+      sources: alarmSources.length === 0 ? null : [...this.resolvedEntries(alarmSources)],
+      maxSeverity: alarmMaxSeverity,
+    };
   }
 
   /** Why a hidden tool is hidden, worded so the reader knows what to change.
@@ -770,10 +1312,18 @@ export class ToolPolicy {
   boundFor(nodeId: string): ValueBound | null {
     const wanted = this.resolve(nodeId);
     if (wanted === null) return null;
+    let explicit = false;
     for (const [entry, bound] of this.config.valueBounds) {
-      if (!isEmptyBound(bound) && this.resolve(entry) === wanted) return bound;
+      if (this.resolveEntry(entry) !== wanted) continue;
+      if (!isEmptyBound(bound)) return bound;
+      explicit = true;
     }
-    return null;
+    // A node an explicit writable_nodes entry names takes that entry's bound,
+    // even none: the entry is the more specific statement. Subtree rules are
+    // operator policy, and only bind there.
+    if (explicit || this.config.profile !== "operator") return null;
+    const bound = this.subtreeNodes.get(wanted);
+    return bound && !isEmptyBound(bound) ? bound : null;
   }
 
   private authorizeNodes(name: string, guard: ToolGuard, args: Record<string, unknown>): void {
@@ -800,15 +1350,7 @@ export class ToolPolicy {
       }
       const wantedObject = this.resolve(object);
       const wantedMethod = this.resolve(method);
-      const allowed = new Set<string>();
-      for (const entry of this.config.callableMethods) {
-        const [entryObject, entryMethod] = entry.split("|");
-        const resolvedObject = this.resolve(entryObject);
-        const resolvedMethod = this.resolve(entryMethod);
-        if (resolvedObject !== null && resolvedMethod !== null) {
-          allowed.add(`${resolvedObject}|${resolvedMethod}`);
-        }
-      }
+      const allowed = this.callableSet();
       if (
         wantedObject === null ||
         wantedMethod === null ||
@@ -839,18 +1381,17 @@ export class ToolPolicy {
    * namespace this server does not publish can match nothing, and that is the
    * whole of what it should do.
    */
-  private resolvedSet(entries: Iterable<string>): Set<string> {
+  private resolvedEntries(entries: Iterable<string>): Set<string> {
     const resolved = new Set<string>();
     for (const entry of entries) {
-      const value = this.resolve(entry);
+      const value = this.resolveEntry(entry);
       if (value !== null) resolved.add(value);
     }
     return resolved;
   }
 
   private requireWritableNode(nodeId: string): void {
-    const wanted = this.resolve(nodeId);
-    if (wanted === null || !this.resolvedSet(this.config.writableNodes).has(wanted)) {
+    if (!this.isWritable(nodeId)) {
       throw new Error(message("nodeNotWritable", { node_id: nodeId }));
     }
   }

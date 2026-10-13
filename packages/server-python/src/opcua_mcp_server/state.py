@@ -37,6 +37,7 @@ from .capabilities import CapabilityAnswers
 from .config import SERVER_URL, WARM_UP_WAIT_MS
 from .connection import OpcuaConnection
 from .events import EventSubscriptions
+from .node_facts import NodeFacts
 from .node_metadata import NodeMetadata
 from .operation_limits import UNSTATED
 from .policy import ToolPolicy, tool_policy
@@ -81,6 +82,13 @@ class ServerState:
         #: What each node published about its own number, for the life of one
         #: session. Dropped on rebind for the same reason the capabilities are.
         self.node_metadata = NodeMetadata()
+        #: What each node's own attributes said — NodeClass, DataType, AccessLevel
+        #: and the rest — for the life of one session, dropped with the above.
+        self.node_facts = NodeFacts()
+        #: The policy measured against this session's server
+        #: (``serverStatus.policy_check``), or None before the first check. Set on
+        #: every (re)connect; see ``policy_resolution.check_policy``.
+        self.policy_check: dict | None = None
 
         #: The startup warm-up, set by the lifespan, and when requests stop
         #: waiting for it (event-loop time). See :meth:`await_warm_up`.
@@ -172,3 +180,5 @@ class ServerState:
         self.capabilities = CapabilityAnswers()
         self.operation_limits = dict(UNSTATED)
         self.node_metadata.server_limits = dict(UNSTATED)
+        self.node_facts.server_limits = dict(UNSTATED)
+        self.policy_check = None

@@ -23,6 +23,23 @@ NodeValuesItemEngineeringObject = TypedDict('NodeValuesItemEngineeringObject', {
     'instrument_range': Required[NodeValuesItemEngineeringObjectInstrumentRangeObject | None],
 }, total=False)
 
+NodeValuesItemWriteAccessObjectStatesArrayItem = TypedDict('NodeValuesItemWriteAccessObjectStatesArrayItem', {
+    'value': Required[int | bool],
+    'label': Required[str],
+}, total=False)
+
+NodeValuesItemWriteAccessObject = TypedDict('NodeValuesItemWriteAccessObject', {
+    'allowed': Required[bool],
+    'reason': Required[str | None],
+    'data_type': Required[str | None],
+    'array': Required[bool | None],
+    'states': Required[list[NodeValuesItemWriteAccessObjectStatesArrayItem] | None],
+    'min': Required[float | None],
+    'max': Required[float | None],
+    'allowed_values': Required[list[JsonValue] | None],
+    'max_change': Required[float | None],
+}, total=False)
+
 NodeValuesItem = TypedDict('NodeValuesItem', {
     'node_id': Required[str],
     'value': Required[JsonValue],
@@ -31,6 +48,7 @@ NodeValuesItem = TypedDict('NodeValuesItem', {
     'source_timestamp': Required[str | None],
     'server_timestamp': Required[str | None],
     'engineering': Required[NodeValuesItemEngineeringObject | None],
+    'write_access': Required[NodeValuesItemWriteAccessObject | None],
 }, total=False)
 
 NodeValues: TypeAlias = list[NodeValuesItem]
@@ -150,6 +168,20 @@ ServerStatusCapabilities = TypedDict('ServerStatusCapabilities', {
     'aggregate_functions': Required[list[JsonValue]],
 }, total=False)
 
+ServerStatusPolicyCheckObjectFindingsItem = TypedDict('ServerStatusPolicyCheckObjectFindingsItem', {
+    'entry': Required[str],
+    'problem': Required[str],
+}, total=False)
+
+ServerStatusPolicyCheckObject = TypedDict('ServerStatusPolicyCheckObject', {
+    'generation': Required[int | None],
+    'writable_nodes': Required[list[str]],
+    'callable_methods': Required[list[str]],
+    'read_denied': Required[int],
+    'read_policy_complete': Required[bool],
+    'findings': Required[list[ServerStatusPolicyCheckObjectFindingsItem]],
+}, total=False)
+
 ServerStatus = TypedDict('ServerStatus', {
     'connected': Required[bool],
     'endpoint_url': Required[str],
@@ -163,6 +195,7 @@ ServerStatus = TypedDict('ServerStatus', {
     'namespaces': Required[list[JsonValue]],
     'error': Required[str | None],
     'capabilities': Required[ServerStatusCapabilities],
+    'policy_check': Required[ServerStatusPolicyCheckObject | None],
 }, total=False)
 
 EventRecordsItem = TypedDict('EventRecordsItem', {
@@ -199,6 +232,7 @@ Completeness = TypedDict('Completeness', {
 
 ReadOpcuaNodesInput = TypedDict('ReadOpcuaNodesInput', {
     'node_ids': Required[list[str]],
+    'include_write_access': NotRequired[bool],
 }, total=False)
 
 ReadOpcuaNodesResult = TypedDict('ReadOpcuaNodesResult', {'result': NodeValues})

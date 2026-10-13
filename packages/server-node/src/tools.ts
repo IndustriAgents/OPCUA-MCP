@@ -93,7 +93,7 @@ export class OpcuaTools {
     private readonly policy: ToolPolicy = toolPolicy(),
     private readonly audit: AuditSink = new AuditSink()
   ) {
-    this.runtime = new NodeOpcuaRuntime(conn);
+    this.runtime = new NodeOpcuaRuntime(conn, this.policy);
     this.featureHandlers = new ProtocolFeatureHandlers(
       this.runtime,
       this.policy,
@@ -213,7 +213,7 @@ export class OpcuaTools {
         hasConnection: () => true,
         waitForWarmUp: () => this.awaitWarmUp(),
         connect: () => this.ensureConnection(),
-        capabilities: (call) => this.ensureCapabilities(call.spec, call.arguments),
+        capabilities: (call) => this.prepareCall(call),
         dispatch: async (call) =>
           call.name === "get_server_status"
             ? await this.invokeFeature(call.spec.name, call.arguments, async () =>
@@ -253,6 +253,20 @@ export class OpcuaTools {
       },
       call
     );
+  }
+
+  /** Everything a connected call needs settled on its session before it is served.
+   *
+   * The policy resolved on this session, the capabilities the call needs, and
+   * deny_read again — strictly, now that the policy is resolved on the session
+   * this call will use: a node a browse-path entry hides, or a deny set that
+   * could not be expanded in full, refuses here. Before the connection there was
+   * nothing to resolve against. Runs again before a resend, on the new session.
+   */
+  private async prepareCall(call: ExecutionCall) {
+    await this.runtime.ensurePolicy();
+    await this.ensureCapabilities(call.spec, call.arguments);
+    if (call.spec.readGuard) this.policy.authorizeRead(call.name, call.arguments, true);
   }
 
   /** Anticipated failures keep their wording; crashes share the Python SDK boundary. */

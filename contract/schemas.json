@@ -88,7 +88,7 @@
                   "object",
                   "null"
                 ],
-                "description": "What the instrument can physically return, which is usually wider than eu_range: a sensor may read below zero on a scale whose normal operation starts there. Reported, never enforced — the edge of what a device can represent is not the same as what the process expects. null when the node publishes none.",
+                "description": "What the instrument can physically return, which is usually wider than eu_range: a sensor may read below zero on a scale whose normal operation starts there. A write outside it is refused even when OPCUA_ALLOW_OUT_OF_RANGE_WRITES lifts the eu_range check — that override is for writing outside normal operation, not outside what the device can represent. null when the node publishes none.",
                 "properties": {
                   "low": {
                     "type": "number",
@@ -113,6 +113,109 @@
               "instrument_range"
             ],
             "additionalProperties": false
+          },
+          "write_access": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Whether this node can be written, and what a write to it must look like — only when read_opcua_nodes was called with include_write_access, null otherwise. Answers from the node's own attributes (NodeClass, AccessLevel, UserAccessLevel, DataType, ValueRank, its enumeration states) and from this server's policy, so an agent can get a write right the first time instead of learning the rules from refusals. It is what is known before trying, not a promise: the OPC UA server still decides.",
+            "properties": {
+              "allowed": {
+                "type": "boolean",
+                "description": "True when nothing known here would stop a write: the policy allows it and the node says it is writable by this OPC UA user."
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why a write would not go through, when allowed is false; null when it is true."
+              },
+              "data_type": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The OPC UA data type a written value is converted to, from the node's DataType attribute ('Double', 'Int32', …). null when the node declares an abstract type or it could not be read; the write then converts to the type of the current value."
+              },
+              "array": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "True when the node holds an array (write a list), false for a single value, null when the node allows either or it is unknown."
+              },
+              "states": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "description": "The values an enumerated or two-state node may hold, with their labels: [{ value, label }]. A write may name a state by its label exactly as listed. null for a node that is not one.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": [
+                        "integer",
+                        "boolean"
+                      ],
+                      "description": "The value as written to the node."
+                    },
+                    "label": {
+                      "type": "string",
+                      "description": "The name the server gives it."
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "min": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The lowest value a write may carry: the tightest of the node's EURange (unless OPCUA_ALLOW_OUT_OF_RANGE_WRITES), its InstrumentRange and the operator policy's min. null when nothing bounds it."
+              },
+              "max": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The highest value a write may carry, from the same three bounds as min."
+              },
+              "allowed_values": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "description": "The only values the operator policy allows for this node (its enum), or null.",
+                "items": {}
+              },
+              "max_change": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The largest move from the current value the operator policy allows in one write, or null."
+              }
+            },
+            "required": [
+              "allowed",
+              "reason",
+              "data_type",
+              "array",
+              "states",
+              "min",
+              "max",
+              "allowed_values",
+              "max_change"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -122,7 +225,8 @@
           "status",
           "source_timestamp",
           "server_timestamp",
-          "engineering"
+          "engineering",
+          "write_access"
         ],
         "additionalProperties": false
       }
@@ -696,6 +800,75 @@
             "aggregate_functions"
           ],
           "additionalProperties": false
+        },
+        "policy_check": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The deployment's policy measured against this server's own address space, from the check run on every session (contract policyCheck): what the allowlists, browse paths and writable_subtrees resolved to, how much deny_read hides, and anything the policy names that the server says cannot work. null when not connected, or before the first check.",
+          "properties": {
+            "generation": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "The session generation the check ran on, as in capabilities."
+            },
+            "writable_nodes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Every node the operator profile may write, resolved: writable_nodes entries and writable_subtrees matches, as canonical node IDs, sorted. Empty under observe and full."
+            },
+            "callable_methods": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Every method the operator profile may call, resolved, as 'object_node_id|method_node_id', sorted. Empty under observe and full."
+            },
+            "read_denied": {
+              "type": "integer",
+              "description": "How many nodes deny_read hides: its entries and everything under them."
+            },
+            "read_policy_complete": {
+              "type": "boolean",
+              "description": "False when deny_read could not be resolved in full, in which case every read is refused until it is."
+            },
+            "findings": {
+              "type": "array",
+              "description": "One per problem found, in policy order. Empty when the policy and the server agree.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entry": {
+                    "type": "string",
+                    "description": "The policy entry, as written."
+                  },
+                  "problem": {
+                    "type": "string",
+                    "description": "What is wrong with it, worded by contract policyCheck.messages."
+                  }
+                },
+                "required": [
+                  "entry",
+                  "problem"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "generation",
+            "writable_nodes",
+            "callable_methods",
+            "read_denied",
+            "read_policy_complete",
+            "findings"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -710,7 +883,8 @@
         "diagnostics",
         "namespaces",
         "error",
-        "capabilities"
+        "capabilities",
+        "policy_check"
       ],
       "additionalProperties": false
     },
@@ -903,6 +1077,10 @@
             "type": "string"
           },
           "description": "The OPC UA node IDs to read, in the format 'ns=<namespace>;i=<identifier>'. Example: ['ns=2;i=2', 'ns=2;i=3']. A single node is a one-element list. At most 500 per call."
+        },
+        "include_write_access": {
+          "type": "boolean",
+          "description": "Also report, per node, whether it can be written and what a write must look like (write_access): its type, whether it is an array, its enumeration states and labels, and the bounds a value must stay within. Set it before writing a node you have not written before. Costs one extra read of the nodes' attributes the first time a node is asked about in a session. Default false."
         }
       },
       "required": [
@@ -1137,7 +1315,7 @@
                   "object",
                   "array"
                 ],
-                "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. A value that does not convert is reported for that node and not written."
+                "description": "The value to write. Converted to the node's OPC UA data type — a JSON number to a Double or Int32, true/false to a Boolean, a list to an array value. A string is accepted for a numeric or boolean node and parsed, so '42.5' and 'true' work; a numeric string must be written as a JSON number would be ('42.5', not '0x2A' or '1_000'). A String node takes only a string, and a DateTime an ISO-8601 string with a timezone. An enumerated or two-state node also takes a state's label exactly as the server names it ('Running', 'Open') — read it with include_write_access to see them. A value that does not convert, a list for a single-valued node or a write to a read-only node is reported for that node and not written."
               },
               "data_type": {
                 "type": [
@@ -1162,7 +1340,7 @@
                   "ByteString",
                   null
                 ],
-                "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Skips the read-first type inference, which is what makes a write-only node writable and removes a round trip. Unset, the node's current type is read and used."
+                "description": "The OPC UA data type to write as, named as OPC UA names it: 'Boolean', 'SByte', 'Byte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Float', 'Double', 'String', 'DateTime', 'Guid', 'ByteString'. Unset, the node's own DataType attribute decides, and the current value's type only for a node that declares an abstract one (BaseDataType, Number). Set, it must match the node's DataType where that is concrete: a mismatch is reported for that node and not written."
               }
             },
             "required": [

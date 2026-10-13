@@ -1,0 +1,892 @@
+{
+  "$comment": "What read_opcua_nodes reports as write_access when include_write_access is set, driven through BOTH runtimes: tests/unit/test_write_access.py and packages/server-node/test/write-access.test.mjs call writeAccess / write_access on each `input` and assert `expect` key for key. `policy.tool_refusal` is the sentence the policy would refuse write_opcua_nodes with outright (profile, allowed_tools, control gate), or null; `allowlisted` and `bound` are the operator allowlist's answer for this node. min and max are the tightest of the EURange (unless the override), the InstrumentRange and the operator bound. The reasons are contract writeAccessReasons, or a policy refusal quoted verbatim.",
+  "cases": [
+    {
+      "name": "full profile, a writable analogue node",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 0,
+        "max": 150,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "observe: the policy refusal, verbatim",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": "Tool \"write_opcua_nodes\" is disabled by OPCUA_PROFILE=observe",
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "Tool \"write_opcua_nodes\" is disabled by OPCUA_PROFILE=observe",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 0,
+        "max": 150,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "operator, not on the allowlist",
+      "input": {
+        "node_id": "ns=2;i=41",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": true,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "Node ns=2;i=41 is not writable under the operator policy",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "operator with a bound: the tightest of bound and EURange",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": true,
+          "allowlisted": true,
+          "bound": { "min": 10, "max": 80, "enum": null, "max_change": 5 },
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 10,
+        "max": 80,
+        "allowed_values": null,
+        "max_change": 5
+      }
+    },
+    {
+      "name": "operator with an enum bound",
+      "input": {
+        "node_id": "ns=2;i=41",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": true,
+          "allowlisted": true,
+          "bound": { "min": null, "max": null, "enum": [0, 1], "max_change": null },
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": [0, 1],
+        "max_change": null
+      }
+    },
+    {
+      "name": "a bound wider than the EURange does not widen it",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": true,
+          "allowlisted": true,
+          "bound": { "min": -10, "max": 500, "enum": null, "max_change": null },
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 0,
+        "max": 150,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "a bound is ignored outside operator",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": { "min": 10, "max": 80, "enum": null, "max_change": 5 },
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 0,
+        "max": 150,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "read-only on the server",
+      "input": {
+        "node_id": "ns=2;i=3",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 5,
+          "user_access_level": 5,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "it is read-only on the OPC UA server (AccessLevel)",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "not writable for this user",
+      "input": {
+        "node_id": "ns=2;i=41",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 1,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "it is not writable by the OPC UA user this server is logged in as (UserAccessLevel)",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "not a Variable",
+      "input": {
+        "node_id": "ns=2;i=1",
+        "facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "its NodeClass is Object, not Variable",
+        "data_type": null,
+        "array": null,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "attributes could not be read: the ranges are still reported",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": null,
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "the node's attributes could not be read, so whether it can be written is unknown",
+        "data_type": null,
+        "array": null,
+        "states": null,
+        "min": 0,
+        "max": 150,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "an unknown node",
+      "input": {
+        "node_id": "ns=2;i=999999",
+        "facts": {
+          "status": "BadNodeIdUnknown",
+          "node_class": null,
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "the node could not be inspected (BadNodeIdUnknown)",
+        "data_type": null,
+        "array": null,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "an enumeration lists its states",
+      "input": {
+        "node_id": "ns=2;i=102",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Int32",
+          "data_type_id": "ns=0;i=852",
+          "enumeration": true,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": [
+            { "value": 0, "label": "Running" },
+            { "value": 1, "label": "Failed" },
+            { "value": 2, "label": "NoConfiguration" },
+            { "value": 3, "label": "Suspended" },
+            { "value": 4, "label": "Shutdown" },
+            { "value": 5, "label": "Test" },
+            { "value": 6, "label": "CommunicationFault" },
+            { "value": 7, "label": "Unknown" }
+          ],
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Int32",
+        "array": false,
+        "states": [
+          { "value": 0, "label": "Running" },
+          { "value": 1, "label": "Failed" },
+          { "value": 2, "label": "NoConfiguration" },
+          { "value": 3, "label": "Suspended" },
+          { "value": 4, "label": "Shutdown" },
+          { "value": 5, "label": "Test" },
+          { "value": 6, "label": "CommunicationFault" },
+          { "value": 7, "label": "Unknown" }
+        ],
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "a two-state node lists its two labels",
+      "input": {
+        "node_id": "ns=2;i=105",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Boolean",
+          "data_type_id": "ns=0;i=1",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": { "true": "Locked", "false": "Unlocked" }
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Boolean",
+        "array": false,
+        "states": [
+          { "value": true, "label": "Locked" },
+          { "value": false, "label": "Unlocked" }
+        ],
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "the override leaves only the InstrumentRange",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 250 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": true
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": -50,
+        "max": 250,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "an InstrumentRange tighter than the EURange on one side",
+      "input": {
+        "node_id": "ns=2;i=90",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": {
+          "unit": "°C",
+          "unit_description": "degree Celsius",
+          "eu_range": { "low": 0, "high": 150 },
+          "instrument_range": { "low": -50, "high": 120 }
+        },
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": 0,
+        "max": 120,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "an array node",
+      "input": {
+        "node_id": "ns=2;i=108",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": 1,
+          "array_dimensions": [3],
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": true,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "a node that takes either a scalar or an array",
+      "input": {
+        "node_id": "ns=2;i=41",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -2,
+          "array_dimensions": null,
+          "access_level": 3,
+          "user_access_level": 3,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": true,
+        "reason": null,
+        "data_type": "Double",
+        "array": null,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "the policy refusal comes before read-only",
+      "input": {
+        "node_id": "ns=2;i=3",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 1,
+          "user_access_level": 1,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": "Tool \"write_opcua_nodes\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "Tool \"write_opcua_nodes\" is disabled because the OPC UA channel is unsecured (OPCUA_SECURITY_POLICY=None), and control over a channel anyone can read or forge is refused. Set OPCUA_SECURITY_POLICY, OPCUA_CLIENT_CERT, OPCUA_CLIENT_KEY and OPCUA_SERVER_CERT, or OPCUA_ALLOW_INSECURE_CONTROL=true on a lab network only.",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "not a Variable comes before the policy refusal",
+      "input": {
+        "node_id": "ns=2;i=1",
+        "facts": {
+          "status": "Good",
+          "node_class": "Object",
+          "data_type": null,
+          "data_type_id": null,
+          "enumeration": false,
+          "value_rank": null,
+          "array_dimensions": null,
+          "access_level": null,
+          "user_access_level": null,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": "Tool \"write_opcua_nodes\" is disabled by OPCUA_PROFILE=observe",
+          "operator": false,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "its NodeClass is Object, not Variable",
+        "data_type": null,
+        "array": null,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    },
+    {
+      "name": "not on the allowlist comes before read-only",
+      "input": {
+        "node_id": "ns=2;i=3",
+        "facts": {
+          "status": "Good",
+          "node_class": "Variable",
+          "data_type": "Double",
+          "data_type_id": "ns=0;i=11",
+          "enumeration": false,
+          "value_rank": -1,
+          "array_dimensions": null,
+          "access_level": 1,
+          "user_access_level": 1,
+          "executable": null,
+          "user_executable": null,
+          "states": null,
+          "two_state": null
+        },
+        "engineering": null,
+        "policy": {
+          "tool_refusal": null,
+          "operator": true,
+          "allowlisted": false,
+          "bound": null,
+          "allow_out_of_range": false
+        }
+      },
+      "expect": {
+        "allowed": false,
+        "reason": "Node ns=2;i=3 is not writable under the operator policy",
+        "data_type": "Double",
+        "array": false,
+        "states": null,
+        "min": null,
+        "max": null,
+        "allowed_values": null,
+        "max_change": null
+      }
+    }
+  ]
+}

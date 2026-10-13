@@ -914,6 +914,58 @@
         "type": "string"
       }
     },
+    "writeSkips": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "writeAccessReasons": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "policyCheck": {
+      "type": "object",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "defaultSubtreeNodes": {
+          "type": "number"
+        },
+        "maxSubtreeNodes": {
+          "type": "number"
+        },
+        "maxDenyNodes": {
+          "type": "number"
+        },
+        "messages": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "defaultSubtreeNodes",
+        "maxSubtreeNodes",
+        "maxDenyNodes",
+        "messages"
+      ],
+      "additionalProperties": false
+    },
     "notices": {
       "type": "object",
       "properties": {
@@ -1054,6 +1106,9 @@
             "type": "object"
           },
           "guard": {
+            "type": "object"
+          },
+          "readGuard": {
             "type": "object"
           }
         },

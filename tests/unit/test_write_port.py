@@ -27,6 +27,12 @@ class FakePort:
         if self.case.get("crash") == name:
             raise AdapterFailure(name, "native timeout", self.native) from self.native
 
+    async def facts(self, node_ids):
+        # Nothing known about any node, so every write is planned as it was
+        # before the facts existed. Not recorded: the shared table pins the
+        # order of the services it was written for.
+        return {}
+
     async def current(self, nodes, indices, chunk):
         self.record("current", indices=indices, chunk=chunk)
         return {int(k): v for k, v in self.case.get("current", {}).items()}

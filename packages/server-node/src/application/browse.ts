@@ -62,15 +62,39 @@ async function resolvePath(port: BrowsePort, start: string, path: string): Promi
   }
   return current;
 }
-export async function browseNodes(port: BrowsePort, request: BrowseRequest) {
+/** Where a browse starts: the node given, or where `browse_path` leads from it.
+ *
+ * The start node is checked against deny_read here, because a browse_path is
+ * only a node once it has been resolved — which the read guard cannot see.
+ */
+async function startNode(
+  port: BrowsePort,
+  request: BrowseRequest,
+  denied: (nodeId: string) => boolean
+): Promise<string> {
+  const given = request.nodeId ?? CONTRACT.traversal.rootNodeId;
+  const root = request.browsePath
+    ? await resolvePath(port, given, request.browsePath)
+    : canonicalNodeId(given);
+  if (denied(root))
+    throw new ContractRefusal(
+      message("readDenied", { node_id: request.browsePath ? root : given })
+    );
+  return root;
+}
+/** `browse_opcua_nodes`. `denied` is deny_read: a start node it names is refused,
+ *  and what it hides is dropped from what the walk found. */
+export async function browseNodes(
+  port: BrowsePort,
+  request: BrowseRequest,
+  denied: (nodeId: string) => boolean = () => false
+) {
   const limits = CONTRACT.traversal;
   const clamp = (value: number, lo: number, hi: number) =>
     Math.min(hi, Math.max(lo, Math.trunc(value)));
   const depth = clamp(request.depth ?? limits.defaultDepth, 0, limits.maxDepth);
   const maxNodes = clamp(request.maxNodes ?? limits.defaultMaxNodes, 1, limits.maxNodes);
-  const root = request.browsePath
-    ? await resolvePath(port, request.nodeId ?? limits.rootNodeId, request.browsePath)
-    : canonicalNodeId(request.nodeId ?? limits.rootNodeId);
+  const root = await startNode(port, request, denied);
   const wantedClass = request.nodeClass?.toLowerCase();
   const wantedName = request.nameFilter?.toLowerCase();
   const keep = (record: NodeRefRecord) =>
@@ -124,11 +148,16 @@ export async function browseNodes(port: BrowsePort, request: BrowseRequest) {
         }
       }
     }
-    await port.enrich(found, request.includeValues ?? false);
+    // What deny_read hides is dropped before anything more is read about it. Its
+    // subtree is in the deny set too, so what was found under it goes with it.
+    // The walk's own counts stand: they say how far it went, and a dropped record
+    // is not a gap in the answer the caller is entitled to.
+    const visible = found.filter((record) => !denied(record.node_id));
+    await port.enrich(visible, request.includeValues ?? false);
     return {
-      result: { nodes: found, truncated, inspected },
+      result: { nodes: visible, truncated, inspected },
       completeness: traversalCompleteness({
-        returned: found.length,
+        returned: visible.length,
         truncated,
         maxNodes,
         unbrowsable,

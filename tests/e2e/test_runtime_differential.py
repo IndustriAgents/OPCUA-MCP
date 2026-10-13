@@ -33,6 +33,11 @@ import pytest
 from conftest import AGGREGATE_NODE_ID
 from test_mcp_e2e import NODE, NODE_BUILD, _server_params, connect, text_of
 
+#: Mock scratch nodes whose DataType is the one written, so the write codec's own
+#: refusals are reached rather than stopped earlier by a type mismatch.
+SCRATCH_BYTES = "ns=2;i=121"
+SCRATCH_DATETIME = "ns=2;i=122"
+
 #: Fields whose value legitimately differs between two calls a moment apart.
 #:
 #: Replaced with a marker of the same shape rather than removed, so the field
@@ -127,6 +132,8 @@ DIFFERENTIAL_CALLS = [
     # one runtime used to write anyway: Node's Number() read "0x10" as 16, Python's
     # float() read true as 1.0, and a zone-less DateTime was local time on one
     # runtime and UTC on the other. Every one fails conversion, so nothing is sent.
+    # `[5]` for a scalar node is now stopped before the codec, by the node's own
+    # ValueRank — still a per-node record, and still worded the same on both.
     (
         "write_opcua_nodes",
         {
@@ -135,7 +142,7 @@ DIFFERENTIAL_CALLS = [
                 {"node_id": NODE["ScratchDouble"], "value": True},
                 {"node_id": NODE["ScratchDouble"], "value": [5]},
                 {
-                    "node_id": NODE["ScratchDouble"],
+                    "node_id": SCRATCH_DATETIME,
                     "value": "2026-04-23T17:40:00",
                     "data_type": "DateTime",
                 },
@@ -493,7 +500,7 @@ DIFFERENTIAL_FAILURES = [
         {
             "nodes": [
                 {
-                    "node_id": NODE["ScratchDouble"],
+                    "node_id": SCRATCH_BYTES,
                     "value": base64.b64encode(bytes(65537)).decode("ascii"),
                     "data_type": "ByteString",
                 }

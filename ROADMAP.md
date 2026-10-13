@@ -34,6 +34,13 @@ the list below grew out of.
 - Writes bounded by the value, not only the node: the `EURange` the equipment
   publishes, and per-node `min`, `max`, `enum` and `max_change` in the policy
   file.
+- Writes and method calls checked against the target's own information model
+  before they are sent — NodeClass, AccessLevel, UserAccessLevel, DataType,
+  ValueRank, ArrayDimensions, enumeration states and labels, InstrumentRange,
+  Executable and method ownership — with `include_write_access` to ask first.
+- Policy entries by browse path, `writable_subtrees` by type, interlocks
+  (`preconditions`), an alarm scope, a `deny_read` list, and a policy check on
+  every session reported under `get_server_status` → `policy_check`.
 - Configurable OPC UA channel security: policy, mode, client certificate and
   key, username or X.509 user identity, and a pinned server certificate, all
   validated at startup.

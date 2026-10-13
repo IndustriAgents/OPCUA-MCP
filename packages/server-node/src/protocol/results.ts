@@ -8,7 +8,13 @@ import { prettyJson } from "../result-text.js";
 import type { SubscriptionRecord } from "../application/subscriptions.js";
 import type { ServerStatusRecord } from "../application/diagnostics.js";
 import type { CapabilityStatusRecord } from "../capabilities.js";
-export type ServerStatusReport = ServerStatusRecord & { capabilities: CapabilityStatusRecord };
+import type { PolicyCheckRecord } from "../policy-resolution.js";
+/** `resultShapes.serverStatus`: what the server says, what it was found to support,
+ *  and how the deployment's policy measured up against it. */
+export type ServerStatusReport = ServerStatusRecord & {
+  capabilities: CapabilityStatusRecord;
+  policy_check: PolicyCheckRecord | null;
+};
 export function withNotice<T extends { content: Array<{ type: string; text: string }> }>(
   result: T,
   text: string | null

@@ -11,28 +11,47 @@ from ..audit import AuditWriteError, build_record, operator_id
 from ..contract import CONTRACT
 from ..errors import ApplicationRefusal
 from ..errors import message as error_message
-from ..policy import control_gate, values_at
+from ..policy import ToolPolicy, control_gate, values_at
 from ..state import ServerState
 
 
-def _audit_targets(spec: dict, arguments: dict[str, Any]) -> dict[str, Any]:
-    """What a control call was aimed at, for the audit record."""
+def _audit_targets(
+    spec: dict, arguments: dict[str, Any], policy: ToolPolicy | None = None
+) -> dict[str, Any]:
+    """What a control call was aimed at, for the audit record.
+
+    With ``policy``, each node id is also given in namespace-URI form
+    (``node_uris``, ``object_node_uri``, ``method_node_uri``), right after the
+    plain one. ``ns=2`` is an index the server assigns per session, so a record
+    that says only ``ns=2;i=41`` may name a different node after a restart that
+    reordered the namespaces; the URI form is the name that survives it. Null
+    where the id cannot be expressed that way. Only the audit record asks:
+    :func:`describe_targets` is a sentence for a person, and stays as it was.
+    """
     guard = spec.get("guard")
     if not guard:
         return {}
     record: dict[str, Any] = {}
+
+    def uri(node_id: Any) -> str | None:
+        return policy.uri_form(node_id) if isinstance(node_id, str) and policy else None
 
     node_ids = [
         value for path in guard.get("nodeIdPaths", []) for value in values_at(arguments, path)
     ]
     if node_ids:
         record["node_ids"] = node_ids
+        if policy is not None:
+            record["node_uris"] = [uri(node_id) for node_id in node_ids]
 
     for pair in guard.get("methodPaths", []):
         objects = values_at(arguments, pair["objectPath"])
         methods = values_at(arguments, pair["methodPath"])
         record["object_node_id"] = objects[0] if objects else None
         record["method_node_id"] = methods[0] if methods else None
+        if policy is not None:
+            record["object_node_uri"] = uri(record["object_node_id"])
+            record["method_node_uri"] = uri(record["method_node_id"])
         break
 
     for path in guard.get("auditPaths", []):
@@ -107,7 +126,7 @@ def _audit_decision(
         ),
         tool=name,
         decision=decision,
-        targets=_audit_targets(spec, arguments),
+        targets=_audit_targets(spec, arguments, state.policy),
         reason=reason or None,
     )
     state.audit.write(record)

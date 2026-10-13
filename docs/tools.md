@@ -78,6 +78,34 @@ only an `AnalogItemType` carries it. The range is not only reported: a write
 outside the node's own `EURange` is refused before anything is sent, which is a
 safety bound the equipment declared rather than one a human retyped.
 
+Every reading also carries `write_access`, which is `null` unless you ask for it
+with `include_write_access: true`. Then it says whether a write would go through
+and what it must look like, from the node's own attributes and this server's
+policy:
+
+```
+read_opcua_nodes  node_ids=["ns=2;i=102", "ns=2;i=3"]  include_write_access=true
+→ { "node_id": "ns=2;i=102", "value": 0, "data_type": "Int32", …,
+    "write_access": { "allowed": true, "reason": null, "data_type": "Int32", "array": false,
+                      "states": [ { "value": 0, "label": "Running" },
+                                  { "value": 1, "label": "Failed" }, … ],
+                      "min": null, "max": null, "allowed_values": null, "max_change": null } }
+  { "node_id": "ns=2;i=3", …,
+    "write_access": { "allowed": false,
+                      "reason": "it is read-only on the OPC UA server (AccessLevel)", … } }
+```
+
+`write_opcua_nodes` acts on the same attributes. A node that cannot take the
+write — not a Variable, read-only for this OPC UA user, a `data_type` that
+contradicts its DataType, a list for a single value, an array past its length —
+is reported in its own record with a status (`BadNotWritable`,
+`BadTypeMismatch`, …) and an `error` saying why it was not sent, and the rest of
+the batch goes. An enumeration or two-state node takes a state's label exactly as
+listed (`"Failed"`, `"Locked"`); a value that is not one of its states, or is
+past the node's `InstrumentRange`, refuses the whole batch. `call_opcua_method`
+refuses, before sending, a method node that is not a Method, is not executable,
+is not a method of the object, or is given the wrong number of arguments.
+
 A walk of the address space says whether it finished, so a partial answer can
 never pass for a complete one — in the record, and in the `completeness` object
 every partial-capable tool returns beside it:

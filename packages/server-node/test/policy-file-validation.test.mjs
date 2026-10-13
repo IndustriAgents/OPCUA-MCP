@@ -29,7 +29,11 @@ function writeCase(testCase) {
   return path;
 }
 
-/** The settings `expect` can name, spelled as the table spells them. */
+/** The settings `expect` can name, spelled as the table spells them.
+ *
+ * The newer keys are as written, unresolved: a browse path stays a path here,
+ * because resolving it needs a server and this table is about the file.
+ */
 function settings(config) {
   const sorted = (set) => [...set].sort();
   return {
@@ -40,6 +44,11 @@ function settings(config) {
     acknowledge_alarms: config.acknowledgeAlarms,
     allow_insecure_control: config.allowInsecureControl,
     allow_out_of_range_writes: config.allowOutOfRangeWrites,
+    deny_read: config.denyRead,
+    writable_subtrees: config.writableSubtrees.map((rule) => rule.root),
+    alarm_sources: config.alarmSources,
+    alarm_max_severity: config.alarmMaxSeverity,
+    preconditions: config.preconditions.length,
   };
 }
 

@@ -17,9 +17,11 @@ Neither registry is configured yet; both are needed before the first release.
    workflow `publish.yml`, environment `pypi`. No token to store.
 3. Create the `pypi` GitHub environment (optionally with a required reviewer, so
    a publish needs an explicit approval).
-4. Optional, and not done yet: the Apple and Windows code-signing secrets —
-   see [Platform signing](#platform-signing--secrets-to-add). Releases work
-   without them and say in their notes that the executables are unsigned.
+4. Not used: the Apple and Windows code-signing secrets. The project ships its
+   macOS and Windows executables without platform-native signatures by decision
+   (#145); see [Platform signing](#platform-signing--secrets-to-add). Releases
+   say so in their notes, and the executables are verified through
+   `SHA256SUMS` and their attestations like every other asset.
 
 ## A note on READMEs
 
@@ -206,11 +208,13 @@ makes `SHA256SUMS` final.
 
 ### Platform signing — secrets to add
 
-Neither certificate exists yet, so today macOS executables are ad-hoc signed and
-Windows executables are unsigned, and the release notes say so. The signing steps
-are fully wired and switch on by themselves once these **repository secrets**
-exist; configuring only part of a set fails the release rather than shipping it
-half-signed. The build and test steps never see them — only the signing step
+The project does not hold an Apple Developer ID or a Windows code-signing
+certificate and does not plan to (#145), so macOS executables are ad-hoc signed
+and Windows executables are unsigned, and the release notes say so. Origin and
+integrity come from the Sigstore-signed `SHA256SUMS` and the build-provenance
+attestations instead. The signing steps remain wired in case that changes: they
+switch on by themselves once these **repository secrets** exist; configuring
+only part of a set fails the release rather than shipping it half-signed. The build and test steps never see them — only the signing step
 does.
 
 **macOS — Developer ID signature, hardened runtime, notarization**

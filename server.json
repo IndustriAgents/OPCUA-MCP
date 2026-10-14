@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/midhunxavier/OPCUA-MCP#readme",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "opcua-mcp-server",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -75,7 +75,7 @@
         },
         {
           "name": "OPCUA_SERVER_CERT",
-          "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect.",
+          "description": "Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it, or OPCUA_SERVER_TRUST_STORE instead. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_SERVER_TRUST_STORE validates the server or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect.",
           "format": "filepath",
           "placeholder": "/etc/opcua/server.pem"
         },
@@ -160,7 +160,7 @@
         },
         {
           "name": "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL",
-          "description": "Permit control tools on a secured OPC UA channel whose server certificate is not pinned with OPCUA_SERVER_CERT. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment.",
+          "description": "Permit control tools on a secured OPC UA channel whose server is not authenticated: neither pinned with OPCUA_SERVER_CERT nor validated by OPCUA_SERVER_TRUST_STORE. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment.",
           "format": "boolean",
           "default": "false"
         },

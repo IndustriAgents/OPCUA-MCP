@@ -3,7 +3,7 @@
 What exists, what is being worked on next, and what is only an idea. This is an
 order of work, not a schedule: nothing here carries a release date.
 
-The manifests are at <!-- BEGIN GENERATED: version -->**0.5.1**<!-- END GENERATED: version -->.
+The manifests are at <!-- BEGIN GENERATED: version -->**0.6.0**<!-- END GENERATED: version -->.
 [CHANGELOG.md](CHANGELOG.md) records what has actually shipped — including
 entries under `[Unreleased]`, which are merged but not yet published to npm or
 PyPI. The work in progress is the production-hardening epic

@@ -85,9 +85,10 @@ chmod +x opcua-mcp-server-python-linux-x64
 ```
 
 **Platform signatures.** Each release's notes state, per platform, whether its
-executables carry a platform-native signature. The release workflow signs and
-notarizes them when the project's Apple Developer ID and Windows code-signing
-certificates are configured; until they are, the notes say so, and:
+executables carry a platform-native signature. The project does not hold an
+Apple Developer ID or a Windows code-signing certificate, so the notes say they
+do not; verify the download with `SHA256SUMS` and its attestation
+([below](#verifying-a-download)), and then:
 
 - **macOS** binaries are ad-hoc signed, not notarised, so Gatekeeper will refuse
   the first launch. Having verified the download, clear the quarantine flag once:

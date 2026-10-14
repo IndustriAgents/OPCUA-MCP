@@ -156,9 +156,10 @@ export function renderToolReference(contract, { link, anchors }) {
       "`control` tools need `operator`, which offers them only for allowlisted " +
       "targets, or `full`; `alarm-action` tools need `operator` with " +
       "`OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — " +
-      "a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override " +
+      "a secured channel and an authenticated server, pinned with `OPCUA_SERVER_CERT` " +
+      "or validated by `OPCUA_SERVER_TRUST_STORE` — unless a lab override " +
       "is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, " +
-      "`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are " +
+      "`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unauthenticated server. **Hints** are " +
       "the MCP tool annotations each tool advertises.",
     ...(gated.length
       ? [
@@ -207,7 +208,7 @@ export function renderToolSummary(contract, { link, reference }) {
     table(["Access", "Offered under", "Tools"], rows),
     "",
     "Control and alarm tools also need a verified server (a secured channel and a " +
-      "pinned `OPCUA_SERVER_CERT`) unless a lab override is set. " +
+      "pinned `OPCUA_SERVER_CERT` or an `OPCUA_SERVER_TRUST_STORE`) unless a lab override is set. " +
       "† Works only on a server that advertises the feature it needs, such as historical access.",
   ].join("\n");
 }

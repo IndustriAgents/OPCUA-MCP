@@ -596,7 +596,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/77/b1/5788cf02d4527ec81
 
 [[package]]
 name = "opcua-local-server"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "packages/mock-server" }
 dependencies = [
     { name = "asyncua" },
@@ -607,7 +607,7 @@ requires-dist = [{ name = "asyncua", specifier = ">=2.0.1,<2.1" }]
 
 [[package]]
 name = "opcua-mcp-server"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "packages/server-python" }
 dependencies = [
     { name = "asyncua" },

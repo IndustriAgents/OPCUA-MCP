@@ -49,7 +49,7 @@ Both runtimes expose the same **15 tools** — 7 read, 4 monitor, 2 alarm-action
 | `write_opcua_nodes` | control | destructive, idempotent | Write a value to one or more OPC UA nodes. |
 | `call_opcua_method` | control | destructive | Call a method on an OPC UA object. |
 
-**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — a secured channel and a pinned `OPCUA_SERVER_CERT` — unless a lab override is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unpinned server. **Hints** are the MCP tool annotations each tool advertises.
+**Access** decides which `OPCUA_PROFILE` offers a tool. `read` and `monitor` tools are offered under every profile, including the default `observe`. `control` tools need `operator`, which offers them only for allowlisted targets, or `full`; `alarm-action` tools need `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full`. Both also need a verified server — a secured channel and an authenticated server, pinned with `OPCUA_SERVER_CERT` or validated by `OPCUA_SERVER_TRUST_STORE` — unless a lab override is set: `OPCUA_ALLOW_INSECURE_CONTROL` for a channel with no security, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` for an unauthenticated server. **Hints** are the MCP tool annotations each tool advertises.
 
 † **Needs a server feature**: always listed, and refused at call time with `capability_not_supported` or `capability_unknown` when the connected server does not advertise what it needs — `read_opcua_history` on `AccessHistoryDataCapability` or `AggregateFunctions`; `read_event_history` on `AccessHistoryEventsCapability`.
 
@@ -205,7 +205,7 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_CLIENT_CERT` | — | Path to the certificate (PEM or DER) this client presents as its application identity. Required by any security policy other than None. A path that does not exist stops the server at startup. |
 | `OPCUA_CLIENT_KEY` | — | Path to the private key matching the client certificate. A path, never key material. Whoever can read the file can impersonate this client: keep it readable only by the account running the server. A path that does not exist stops the server at startup. |
 | `OPCUA_APPLICATION_URI` | the subjectAltName URI of the client certificate | Application URI announced to the server. Set it only for a certificate that carries no URI of its own. A configured URI that conflicts with the certificate is refused before connecting. |
-| `OPCUA_SERVER_CERT` | — | Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect. |
+| `OPCUA_SERVER_CERT` | — | Path to the OPC UA server's own certificate (PEM or DER), pinned: a server presenting any other certificate cannot complete the handshake. Control tools (writes, method calls, alarm actions) require it, or OPCUA_SERVER_TRUST_STORE instead. Requires a security policy other than None. Unset, encryption protects against eavesdropping but not against an impostor endpoint, so control tools are refused unless OPCUA_SERVER_TRUST_STORE validates the server or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL is set. Set without a security policy, it stops the server at startup rather than pinning nothing; a pinned certificate that has expired or is not yet valid refuses to connect. |
 | `OPCUA_SERVER_TRUST_STORE` | — | Directory with trusted/certs root CAs, issuers/certs intermediate CAs, and trusted/crl plus issuers/crl signed current revocation lists. Authenticate the OPC UA peer by its validated chain and expected server URI. Requires secured channel and OPCUA_SERVER_APPLICATION_URI; Python requires the maintained asyncua backend. Missing, stale, forged or revoked trust material refuses connection. Cannot be combined with an exact server certificate pin. |
 | `OPCUA_SERVER_APPLICATION_URI` | — | ApplicationUri of the intended OPC UA server. Must match the peer certificate URI SAN and advertised application identity. Required with OPCUA_SERVER_TRUST_STORE. |
 
@@ -229,7 +229,7 @@ which both runtimes are tested against and which ships inside this package:
 | `OPCUA_ALLOWED_METHODS` | — | Comma-separated object_node_id\|method_node_id pairs the operator profile may call. Either half may be a browse path from the Root folder. Empty fails closed: operator can call nothing. An entry without \| stops the server at startup. |
 | `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS` | `false` | Let the operator profile act on alarms: acknowledge_alarm and every act_on_alarm action. |
 | `OPCUA_ALLOW_INSECURE_CONTROL` | `false` | Permit control tools on an OPC UA channel with no security policy (None). Does not cover a secured channel to an unverified server; that is OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL. Fail-open override: writes, method calls and alarm actions then travel unauthenticated and unencrypted. Reported as control=INSECURE-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment. |
-| `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Permit control tools on a secured OPC UA channel whose server certificate is not pinned with OPCUA_SERVER_CERT. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment. |
+| `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` | `false` | Permit control tools on a secured OPC UA channel whose server is not authenticated: neither pinned with OPCUA_SERVER_CERT nor validated by OPCUA_SERVER_TRUST_STORE. Does not cover a channel with no security policy; that is OPCUA_ALLOW_INSECURE_CONTROL. Fail-open override: writes, method calls and alarm actions are then encrypted to whichever server answered the endpoint, which may be an impostor. Reported as control=UNVERIFIED-OVERRIDE in the startup line, get_server_status and every audit record. Never enable it against production equipment. |
 | `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` | `false` | Allow a write outside the EURange the OPC UA server itself published for the node. A published InstrumentRange still applies. Fail-open override: it discards the only value bound a deployment with no policy file has. |
 
 **Audit** — Where the control audit trail goes, and what it is labelled with.
@@ -291,12 +291,14 @@ Three profiles, and the default is the restrictive one:
 `OPCUA_ALLOWED_WRITE_NODES` is refused before anything reaches OPC UA, and one
 forbidden target rejects an entire batch rather than letting part of it through.
 Both `operator` and `full` also require a **verified server**: a security
-policy _and_ the server's certificate pinned with `OPCUA_SERVER_CERT`. Encrypted
-is not enough — without the pin the channel is encrypted to whoever answered.
+policy _and_ an authenticated server — its certificate pinned with
+`OPCUA_SERVER_CERT`, or validated against a CA trust store with
+`OPCUA_SERVER_TRUST_STORE` + `OPCUA_SERVER_APPLICATION_URI`. Encrypted is not
+enough — without either the channel is encrypted to whoever answered.
 Two lab-only overrides say otherwise in as many words, one per missing property:
 `OPCUA_ALLOW_INSECURE_CONTROL=true` for a channel with no security, and
-`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` for a secured one to an unpinned
-server. A refused control call names the variable to set, and
+`OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` for a secured one to an
+unauthenticated server. A refused control call names the variable to set, and
 `get_server_status` → `server_identity` says which of the three is in force.
 
 The policy is enforced again on **every call**, not only when tools are listed —
@@ -313,7 +315,7 @@ which is the only value bound that exists with no policy file at all. See
 Every control call is recorded — its targets, its outcome, the endpoint it went
 to, the session it rode on and the attempt number — to stderr and, with
 `OPCUA_AUDIT_FILE` set, to an owner-only, append-only JSON-lines file beside it,
-fsync'd per record. A control call whose record cannot be written is refused
+fsync'd per record by default. A control call whose record cannot be written is refused
 rather than sent; reads carry on. `OPCUA_AUDIT_CHAIN` adds an optional hash
 chain, checked with `opcua-mcp-server --verify-audit FILE… [--key-file KEY]`.
 What the file can and cannot prove is in
@@ -451,10 +453,12 @@ Result: Found 5 variables:
 
 The connection defaults to no security (`SecurityPolicy.None`) and the tool
 profile defaults to **observe-only**. For anything beyond local development,
-configure both channel security and an `operator` allowlist, and pin the endpoint
-with `OPCUA_SERVER_CERT`. Control tools need that pin, not only an encrypted
-channel: encryption says nobody can read the traffic, the pin says who is on the
-other end. Each can be waived for a lab by its own explicit override
+configure both channel security and an `operator` allowlist, and authenticate the
+endpoint: pin it with `OPCUA_SERVER_CERT`, or validate it against a CA trust store
+with `OPCUA_SERVER_TRUST_STORE` + `OPCUA_SERVER_APPLICATION_URI` (maintained
+asyncua backend only). Control tools need that authentication, not only an
+encrypted channel: encryption says nobody can read the traffic, the pin or trust
+store says who is on the other end. Each can be waived for a lab by its own explicit override
 (`OPCUA_ALLOW_INSECURE_CONTROL`, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL`), and
 never by the other's.
 

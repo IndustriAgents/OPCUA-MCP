@@ -25,7 +25,7 @@ operation are gated by the [identity and isolation RFC](docs/rfc/0001-remote-ide
 
 - 🔌 **Any OPC UA server** — PLC, SCADA gateway or historian. Nothing to install on the plant side.
 - 🧰 **The whole operator toolkit** — read, browse, history and aggregates, subscriptions, events and alarms, writes and method calls.
-- 🛡️ **Read-only by default** — writes and method calls need an explicit profile, an allowlist and a pinned server certificate, and every control call is audited.
+- 🛡️ **Read-only by default** — writes and method calls need an explicit profile, an allowlist and an authenticated server (pinned certificate or CA trust store), and every control call is audited.
 - 🐍 **Python or Node** — two first-class runtimes with the same tools and the same answers. [Use whichever you have](docs/install.md#which-runtime-am-i-installing).
 - 📦 **One-file Claude Desktop install** — a `.mcpb` bundle with nothing else to set up.
 
@@ -273,7 +273,7 @@ units — never a bare number. [What a result looks like](docs/tools.md#what-com
 | **alarm-action** | `operator` with `OPCUA_ALLOW_ACKNOWLEDGE_ALARMS`, or `full` | `acknowledge_alarm` · `act_on_alarm` |
 | **control** | `operator`, for allowlisted targets only, or `full` | `write_opcua_nodes` · `call_opcua_method` |
 
-Control and alarm tools also need a verified server (a secured channel and a pinned `OPCUA_SERVER_CERT`) unless a lab override is set. † Works only on a server that advertises the feature it needs, such as historical access.
+Control and alarm tools also need a verified server (a secured channel and a pinned `OPCUA_SERVER_CERT` or an `OPCUA_SERVER_TRUST_STORE`) unless a lab override is set. † Works only on a server that advertises the feature it needs, such as historical access.
 
 <!-- END GENERATED: tool-summary -->
 

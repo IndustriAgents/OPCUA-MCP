@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "opcua-mcp-server",
   "display_name": "OPC UA",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Read industrial sensors and control equipment on any OPC UA server.",
   "long_description": "Connects Claude to any OPC UA server — a PLC, a SCADA gateway, a historian or a simulator — and exposes it as MCP tools.\n\nSet the endpoint below to your OPC UA server's URL. The default **observe** profile can read, browse and monitor but cannot write, call methods or acknowledge alarms. Use **operator** with explicit target allowlists for production control; **full** is intended for a tightly scoped OPC UA account.\n\n**Security:** the connection defaults to unencrypted and anonymous for local simulation. Control tools need the OPC UA server's certificate pinned, not only an encrypted channel: encryption says nobody can read the traffic, the pin says who is on the other end. Against real equipment, set Basic256Sha256, a client certificate and key, the server's certificate, and credentials scoped to exactly the nodes and methods required.",
   "author": {

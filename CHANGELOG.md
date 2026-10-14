@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-14
+
+The production-hardening release from epic
+[#151](https://github.com/IndustriAgents/OPCUA-MCP/issues/151). Control needs an
+authenticated OPC UA server, either a pinned certificate or a CA trust store with
+CRLs. MCP starts and stays diagnosable while the endpoint is offline. Every
+bounded or partial result says so in a machine-readable `completeness` object. The
+audit trail is durable (schema v2). Writes are checked against the target node's
+own attributes. Python's default OPC UA stack is now the maintained asyncua
+client, and the legacy stack stays available as a one-release rollback.
+
+This is also the first release whose assets carry a Sigstore-signed `SHA256SUMS`,
+CycloneDX SBOMs and GitHub build-provenance and SBOM attestations, verified by
+the release workflow before it is published
+([docs/install.md](docs/install.md#verifying-a-download)). The macOS and Windows
+executables are not platform-signed: the project does not hold an Apple
+Developer ID or a Windows code-signing certificate and does not plan to (#145).
+Verify them with `SHA256SUMS` and their attestations instead.
+
+Conformance: [real-server matrix for v0.6.0](https://github.com/IndustriAgents/OPCUA-MCP/blob/v0.6.0/docs/compatibility.md#real-server-conformance).
+The linked open62541 1.5.8 and Eclipse Milo 1.1.7 results were produced with the
+0.5.1 package on 2026-09-24 and are dated evidence only; this release makes no
+production qualification claim for any server.
+
 - Add administrator CA trust stores with signed offline CRLs, URI/endpoint binding,
   bounded read-only material and matching authenticated-control diagnostics on
   both runtimes. Recheck CA revocation before application-owned reconnect, and
@@ -810,19 +834,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A runtime divergence has somewhere to go.** The bug template gains a *both
   runtimes, behaving differently* option, and CONTRIBUTING states the rule: a
   behaviour change lands in both runtimes in the same PR, or is declared.
-
-## [0.5.1] — 2026-09-22
-
-0.5.0 was tagged but reached neither npm nor PyPI. Both registry jobs failed, for
-the same underlying reason: the repository moved to the IndustriAgents
-organisation on 2026-09-20, and while #125 updated the links in the prose, it
-touched no package manifest and no publishing account. 0.4.1 had shipped two days
-before the move, so 0.5.0 was the first release that could discover this.
-
-This release is 0.5.0 plus the fix, so **0.5.1 is the first published release of
-the 0.5 line** and the 0.5.0 notes below describe what is in it. Tags in this
-repository are immutable by ruleset, which is why this is a new version rather
-than a re-tag.
 
 ### Documentation
 - **Release notes link the conformance matrix at their tag** (#147).
@@ -2278,7 +2289,8 @@ with the seven core OPC UA tools (read, write, browse, read/write multiple, call
 method, get all variables). This is the only name published to date; the rename
 to `opcua-mcp-server` ships with the next release.
 
-[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/IndustriAgents/OPCUA-MCP/compare/v0.4.0...v0.4.1

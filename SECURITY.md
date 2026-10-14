@@ -359,7 +359,7 @@ Every `control` and `alarm-action` call writes one JSON line to **stderr**
 ```
 
 `control` is what let the call through the channel gate: `secured` for a pinned
-server, or the lab override that was in force (`INSECURE-OVERRIDE`,
+or CA-verified server, or the lab override that was in force (`INSECURE-OVERRIDE`,
 `UNVERIFIED-OVERRIDE`) — `blocked` on a refusal the gate made.
 
 `decision` is `allowed`, `denied`, `completed` or `failed` — the outcome as well
@@ -391,7 +391,8 @@ every node target is also written in namespace-URI form — `node_uris` beside
 resolved against the NamespaceArray of the session the call ran on (`null` for an
 id whose namespace that array does not list).
 `session` is minted by this server rather than taken from the OPC UA server —
-python-opcua discards the server's SessionId and node-opcua exposes it, so a field
+the legacy python-opcua backend discards the server's SessionId and node-opcua
+exposes it, so a field
 built from it could not mean the same thing on both runtimes. `session_generation`
 counts the sessions this process has established (1, 2, …), so two records either
 side of an outage say which came first and how many sessions were lost between
@@ -429,7 +430,9 @@ make a record look attributable when it is not. Unset, `operator_label` is `null
 `schema_version` field) had `operator` only; version 2 adds `schema_version`,
 `session_generation`, `operator_label`, `mcp_principal`, `process_identity` and
 `opcua_user_identity`, and timestamps are milliseconds on both runtimes; `control`
-(#134, above) sits after `profile`. `operator`
+(#134, above) sits after `profile`. A call over a CA-authenticated channel also
+carries `server_authentication_method: "trust-store"` right after `control`; the
+field is absent for a pinned server. `operator`
 is still written with the same value as `operator_label` so existing readers keep
 working; it is deprecated and will be dropped in a future schema version. Every
 field a version-1 reader looked for is still there, with the same meaning.

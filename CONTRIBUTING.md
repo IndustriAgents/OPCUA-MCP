@@ -212,10 +212,11 @@ for local development against the mock. Do **not** use that default against
 production OPC UA systems — configure `OPCUA_SECURITY_POLICY`,
 `OPCUA_CLIENT_CERT`/`OPCUA_CLIENT_KEY` and credentials
 ([Configuration](docs/configuration.md)), pin the server with
-`OPCUA_SERVER_CERT`, and note the gaps listed in [SECURITY.md](SECURITY.md)
-(notably that there is no CA trust list for the server certificate, only
-pinning, and that a written value is bounded only where the node publishes an
-`EURange` or the policy file sets a bound).
+`OPCUA_SERVER_CERT` or validate it against a CA trust store with
+`OPCUA_SERVER_TRUST_STORE`, and note the gaps listed in [SECURITY.md](SECURITY.md)
+(notably that a written value is bounded only by what the node itself publishes
+— its ranges, enumeration states, ValueRank and ArrayDimensions — and what the
+policy file sets).
 
 Both runtimes parse those variables in one place — `src/security.ts` and
 `src/opcua_mcp_server/security.py` — with the same defaults and the same error

@@ -761,6 +761,12 @@
     "maxMethodArguments": 64,
     "maxHistoryValues": 5000,
     "maxSubscriptions": 200,
+    "controlAccountingTimeoutSeconds": 10,
+    "maxBufferedBytes": 8388608,
+    "maxConditionMappings": 4096,
+    "maxCachedNodes": 4096,
+    "maxEventSubscriptions": 32,
+    "maxConcurrentCalls": 16,
     "maxEventBufferSize": 10000,
     "maxRequestBytes": 1048576,
     "maxStringBytes": 131072,
@@ -866,7 +872,7 @@
     "$comment": "What this server may do when the OPC UA session dies underneath a request. Every tool names one. Deliberately NOT `annotations.idempotentHint`, which both runtimes used to read for this: that annotation is advice to the *model* about calling a tool twice, and this decides whether the *transport* may put a second request on the wire after an uncertain outcome. The two are different questions, and conflating them meant write_opcua_nodes was automatically re-sent after a lost response \u2014 it is idempotent from the model's point of view (writing 99.9 twice leaves 99.9) so it carries idempotentHint: true, but OPC UA Part 4 \u00a75.11.4 lets a Write partially succeed, leaves rollback to the client and defines no operation order, so a lost response never proved the write had not landed. Whatever the policy, the connection is always rebuilt, so the next call finds a live session.",
     "resend": "Run the request again on the fresh session. Only for reads, where a second attempt changes nothing in the plant and the first attempt's outcome does not matter.",
     "reconnectOnly": "Rebuild the connection and report the original failure. Honest for the monitor tools: a subscription lives on the session, so it died with it and the failure is complete rather than uncertain.",
-    "uncertainOutcome": "Rebuild the connection and fail with errors.uncertainOutcome, which says the request may or may not have reached the plant and names what it was aimed at. For every control tool: re-sending would be a second physical actuation on a guess, and reporting a plain failure would claim knowledge this server does not have."
+    "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. Read the targets back to see what happened before sending it again."
   },
   "deadSession": {
     "$comment": "What tells a failure of the *connection* from a failure of the *request*. It decides whether rebuilding the session and trying again is meaningful at all: a BadNodeIdUnknown would fail identically on a fresh session, so retrying it would only hide the real answer. It was 23 hand-transcribed strings matched against the error's rendered text, and the test guarding them parametrised over the same constant — so it passed by construction and could not detect the failure it existed to catch, which is a client library rewording a message and silently disabling reconnection. The three groups below are three different kinds of evidence, and only one of them is prose.",
@@ -944,6 +950,10 @@
     }
   },
   "errors": {
+    "controlCancelled": "Control request cancelled before dispatch. Nothing was sent.",
+    "engineeringUnavailable": "Cannot verify engineering ranges for {node_id}: {reason}. Nothing was written.",
+    "resourceBusy": "Resource limit reached for {resource} ({limit}); retry after existing work finishes.",
+    "sessionChanged": "The OPC UA session changed while preparing {tool}. Nothing was sent; call it again against the current session.",
     "schemaConstraint": "{tool} argument {argument} does not satisfy the {constraint} schema constraint",
     "$comment": "Every message a tool call can fail with, in one place, because the two runtimes must word a failure identically and nothing else made them. They were hand-mirrored literals in tools.ts and server.py, and the framing had already diverged unnoticed: the Node server prefixed every failure with 'Error: ' and the Python server did not, so one failure read two ways and no test compared them. A tool failure is returned with isError set, which already says it is an error, so neither runtime prefixes it now. Placeholders are {name}, substituted by errors.ts / errors.py; tests/e2e/test_runtime_differential.py drives a table of failing calls through both servers and asserts the text is byte-identical. Three messages begin with a stable code and a colon, because a client has to act on them differently and should not have to parse prose to know which it got: 'endpoint_offline' (notConnected: the OPC UA server could not be reached, so nothing could be checked or sent), 'capability_not_supported' (the server answered, and does not offer what the call needs) and 'capability_unknown' (the server could not be asked; calling again re-checks). The two capability refusals are issued before anything reaches the plant, and name the session generation and the time the answer was determined, the same values get_server_status reports under capabilities (issue #140).",
     "emptyArray": "{tool} requires a non-empty {argument} array",
@@ -982,7 +992,7 @@
     "readFailed": "Failed to read nodes: {reason}",
     "writeFailed": "Failed to write nodes: {reason}",
     "auditUnavailable": "{tool} was not sent: its audit record could not be written ({reason}). Control calls are refused while the audit trail is unavailable; reads are unaffected.",
-    "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. The connection has been rebuilt \u2014 read the targets back to see what happened before sending it again.",
+    "uncertainOutcome": "The OPC UA session died before the server answered {tool}, so whether it took effect is unknown ({reason}). Targets: {targets}. Read the targets back to see what happened before sending it again.",
     "browseFailed": "Failed to browse {node_id}: {reason}",
     "historyFailed": "Failed to read history of node {node_id}: {reason}",
     "eventHistoryFailed": "Failed to read event history of node {node_id}: {reason}",
@@ -1022,6 +1032,7 @@
     "preconditionUnresolved": "The operator policy has an interlock (preconditions) on {entry}, which does not resolve on this server, so no write or method call is sent until it does. get_server_status reports it under policy_check."
   },
   "writeSkips": {
+    "unknownNode": "Node {node_id} does not exist on this OPC UA session. Nothing was sent to it.",
     "$comment": "Why write_opcua_nodes did not send one node's write, as that record's `error`, with the status named beside each in the spec. Decided from the node's own attributes (NodeClass, AccessLevel, UserAccessLevel, DataType, ValueRank, ArrayDimensions), read once per session and cached. These are per-node, like a value that will not convert: the node cannot take this write whoever asks, and the other writes in the batch still go. A missing attribute skips its check and leaves the decision to the OPC UA server. Pinned by tests/fixtures/write-plan.json for both runtimes. Placeholders are {name}.",
     "notVariable": "Node {node_id} has NodeClass {node_class}, not Variable, so it has no value to write. Nothing was sent to it.",
     "notWritable": "Node {node_id} is read-only on the OPC UA server (its AccessLevel does not include CurrentWrite). Nothing was sent to it.",

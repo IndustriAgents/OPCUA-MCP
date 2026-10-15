@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from mcp.server.mcpserver import MCPServer
 
 from ..connection import OpcuaConnection
+from ..limits import CONTROL_ACCOUNTING_TIMEOUT_SECONDS
 
 
 @asynccontextmanager
@@ -48,6 +49,8 @@ async def opcua_lifespan(
         # Stop the warm-up's backoff and wait out the attempt on the wire, before
         # anything is disconnected: a round that completed after the disconnect
         # would leave a session open behind a server that has stopped.
+        if state.control_tasks:
+            await asyncio.wait(state.control_tasks, timeout=CONTROL_ACCOUNTING_TIMEOUT_SECONDS)
         connection.close()
         await asyncio.wait({warm_up})
         state.warm_up = None

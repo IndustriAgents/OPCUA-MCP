@@ -22,7 +22,7 @@ for (const c of cases)
       // write is planned as it was before them. Not recorded — the shared table
       // pins the order of the services it was written for.
       async facts() {
-        return new Map();
+        return new Map(Object.entries(c.facts ?? {}));
       },
       async requirements(nodeIds) {
         return nodeIds.map(() => null);

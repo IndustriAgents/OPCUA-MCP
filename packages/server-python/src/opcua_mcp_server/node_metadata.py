@@ -40,6 +40,7 @@ answer is remembered, for the session.
 
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -50,6 +51,7 @@ from .connection import is_connection_error
 from .contract import CONTRACT
 from .limits import chunked
 from .operation_limits import UNSTATED, read_chunk, translate_chunk
+from .resources import BoundedCache, cache_generation
 
 _ANALOG = CONTRACT["analog"]
 
@@ -159,7 +161,7 @@ class NodeMetadata:
     """The per-session cache of what each node said about its own number."""
 
     def __init__(self) -> None:
-        self._cache: dict[str, AnalogInfo | None] = {}
+        self._cache: dict[str, AnalogInfo | None] = BoundedCache()
         #: Set when this server answered "no" to the question itself rather than
         #: to one node — a server that does not implement
         #: TranslateBrowsePathsToNodeIds, say. Without it every read would pay a
@@ -179,6 +181,7 @@ class NodeMetadata:
         """What is already known about ``node_id``, without asking the server."""
         return self._cache.get(node_id)
 
+    @cache_generation
     def for_nodes(self, client: Any, node_ids: list[str]) -> dict[str, AnalogInfo | None]:
         """What each node publishes, reading only the ones not already known.
 
@@ -208,7 +211,21 @@ class NodeMetadata:
                 )
         return {node_id: self._cache.get(node_id) for node_id in wanted}
 
-    def _read(self, client: Any, node_ids: list[str]) -> dict[str, AnalogInfo | None]:
+    def for_control(self, client: Any, node_ids: list[str]) -> dict[str, AnalogInfo | None]:
+        try:
+            return self._read(client, node_ids, strict=True)
+        except Exception as error:
+            from .errors import ApplicationRefusal, describe_error, message
+
+            raise ApplicationRefusal(
+                message(
+                    "engineeringUnavailable",
+                    node_id=", ".join(node_ids),
+                    reason=describe_error(error),
+                )
+            ) from error
+
+    def _read(self, client: Any, node_ids: list[str], strict=False) -> dict[str, AnalogInfo | None]:
         """One translate and one read for the whole batch. See the module docstring."""
         paths = [
             property_path(client.get_node(node_id).nodeid, browse_name)
@@ -226,6 +243,14 @@ class NodeMetadata:
         targets: list[Any] = []
         owners: list[tuple[int, int]] = []
         for index, result in enumerate(results):
+            status = getattr(result, "StatusCode", None)
+            if (
+                strict
+                and status is not None
+                and not status.is_good()
+                and status.name != "BadNoMatch"
+            ):
+                raise ValueError(status.name)
             target = first_target(result)
             if target is None:
                 continue
@@ -244,11 +269,26 @@ class NodeMetadata:
         for (node_index, property_index), data_value in zip(owners, values, strict=True):
             status = getattr(data_value, "StatusCode", None)
             if status is not None and not status.is_good():
+                if strict:
+                    raise ValueError(status.name)
                 continue
             found[node_ids[node_index]][property_index] = getattr(
                 getattr(data_value, "Value", None), "Value", None
             )
 
+        if strict:
+            for properties in found.values():
+                for value in properties[1:]:
+                    if value is None:
+                        continue
+                    bounds = _range(value)
+                    if (
+                        bounds is None
+                        or not math.isfinite(bounds.low)
+                        or not math.isfinite(bounds.high)
+                        or bounds.low > bounds.high
+                    ):
+                        raise ValueError("invalid engineering range")
         return {node_id: _assemble(properties) for node_id, properties in found.items()}
 
 

@@ -19,9 +19,11 @@ from ..contract import CONTRACT
 from ..infrastructure.control_audit import (
     _audit_after,
     _audit_permission,
+    capture_audit,
     describe_targets,
     new_call_id,
 )
+from ..infrastructure.control_context import ControlContext, run_control
 from ..result_text import normalize_result_text
 from ..state import ServerState
 from .catalogue import _advertised_tool, _without_sdk_prefix
@@ -139,6 +141,7 @@ class PolicyMCPServer(MCPServer):
                 str(exc),
                 call_id=call.call_id,
                 attempt=call.attempt,
+                snapshot=call.audit_snapshot,
             )
             raise ToolError(str(exc)) from exc
 
@@ -156,15 +159,6 @@ class PolicyMCPServer(MCPServer):
             normalize_failure = staticmethod(_without_sdk_prefix)
             normalize_result = staticmethod(normalize_result_text)
 
-            def allowed(self, call):
-                _audit_permission(
-                    owner.state,
-                    call.name,
-                    call.arguments,
-                    call_id=call.call_id,
-                    attempt=call.attempt,
-                )
-
             def after(self, call, decision, reason=""):
                 _audit_after(
                     owner.state,
@@ -174,13 +168,15 @@ class PolicyMCPServer(MCPServer):
                     reason,
                     call_id=call.call_id,
                     attempt=call.attempt,
+                    snapshot=call.audit_snapshot,
                 )
 
             async def run(self, call):
                 return await owner._run_tool(call, context)
 
         try:
-            return await execute_tool(Port(), name, arguments or {})
+            with self.state.admission.enter(name):
+                return await execute_tool(Port(), name, arguments or {})
         except (PermissionError, ValueError) as error:
             raise ToolError(str(error)) from error
 
@@ -212,6 +208,12 @@ class PolicyMCPServer(MCPServer):
                 owner._authorize_read(call)
 
             async def dispatch(self, call):
+                if call.spec["retryPolicy"] == "uncertainOutcome" and connection is not None:
+                    return await run_control(
+                        ControlContext(call, connection, owner.state.policy),
+                        lambda: dispatch(call.name, call.arguments, context),
+                        owner.state.control_tasks,
+                    )
                 return await dispatch(call.name, call.arguments, context)
 
             async def reconnect(self, session):
@@ -231,12 +233,14 @@ class PolicyMCPServer(MCPServer):
                 owner.state.policy.authorize(call.name, call.arguments)
 
             def allowed(self, call):
+                call.audit_snapshot = capture_audit(owner.state, call)
                 _audit_permission(
                     owner.state,
                     call.name,
                     call.arguments,
                     call_id=call.call_id,
                     attempt=call.attempt,
+                    snapshot=call.audit_snapshot,
                 )
 
             def denied(self, call, reason):
@@ -248,6 +252,7 @@ class PolicyMCPServer(MCPServer):
                     reason,
                     call_id=call.call_id,
                     attempt=call.attempt,
+                    snapshot=call.audit_snapshot,
                 )
 
         return await invoke_tool(Port(), call)

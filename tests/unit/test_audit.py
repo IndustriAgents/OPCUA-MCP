@@ -587,11 +587,18 @@ def _server(sink: AuditSink):
     server = create_server(state)
     dispatched: list[str] = []
 
-    async def run_tool(call, context):
-        dispatched.append(call.name)
+    async def write(nodes: list[dict]):
+        dispatched.append("write_opcua_nodes")
         return "ran"
 
-    server._run_tool = run_tool
+    async def read(node_ids: list[str]):
+        dispatched.append("read_opcua_nodes")
+        return "ran"
+
+    server.remove_tool("write_opcua_nodes")
+    server.remove_tool("read_opcua_nodes")
+    server.tool(name="write_opcua_nodes")(write)
+    server.tool(name="read_opcua_nodes")(read)
     return server, dispatched
 
 
@@ -613,7 +620,9 @@ async def test_a_control_call_whose_record_cannot_be_written_is_refused():
 
 async def test_reads_carry_on_while_the_audit_trail_is_down():
     server, dispatched = _server(_BrokenSink({"allowed", "denied", "completed", "failed"}))
-    assert await server.call_tool("read_opcua_nodes", {"node_ids": ["ns=2;i=5"]}) == "ran"
+    assert (await server.call_tool("read_opcua_nodes", {"node_ids": ["ns=2;i=5"]})).content[
+        0
+    ].text == "ran"
     assert dispatched == ["read_opcua_nodes"]
 
 
@@ -622,7 +631,7 @@ async def test_an_outcome_that_cannot_be_recorded_does_not_unmake_the_call(capsy
     sink = _BrokenSink({"completed"})
     server, dispatched = _server(sink)
 
-    assert await server.call_tool("write_opcua_nodes", WRITE) == "ran"
+    assert (await server.call_tool("write_opcua_nodes", WRITE)).content[0].text == "ran"
     assert dispatched == ["write_opcua_nodes"]
     assert [r["decision"] for r in sink.written] == ["allowed"]
     assert "AUDIT FAILURE" in capsys.readouterr().err

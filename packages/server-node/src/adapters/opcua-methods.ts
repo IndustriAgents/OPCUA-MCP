@@ -1,3 +1,4 @@
+import { dispatchControl } from "../infrastructure/control-context.js";
 /** Native method metadata, variants and service result codecs. */
 import {
   AttributeIds,
@@ -70,11 +71,13 @@ export class NodeOpcuaMethodPort implements MethodPort {
           value: convertForVariant(arg.value, dataType, arrayType),
         });
       });
-      const result: CallMethodResult = await this.session.call({
-        objectId: objectNodeId,
-        methodId: methodNodeId,
-        inputArguments,
-      });
+      const result: CallMethodResult = await dispatchControl(() =>
+        this.session.call({
+          objectId: objectNodeId,
+          methodId: methodNodeId,
+          inputArguments,
+        })
+      );
       if (!isGood(result.statusCode))
         throw new Error(`Method call failed with status: ${result.statusCode.name}`);
       return {

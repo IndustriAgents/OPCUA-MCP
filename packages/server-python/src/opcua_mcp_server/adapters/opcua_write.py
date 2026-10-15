@@ -10,6 +10,7 @@ from opcua import ua
 from ..application.write import check_eu_range as check_normalized_range
 from ..application.write import check_max_change as check_normalized_change
 from ..errors import AdapterFailure, ApplicationRefusal, describe_error
+from ..infrastructure.control_context import dispatch_control
 from ..limits import LimitExceeded, chunked
 from ..policy import as_number
 from ..records import variant_to_json
@@ -84,7 +85,7 @@ class PythonOpcuaWritePort:
             "write-metadata",
             lambda: {
                 node_id: info.to_json() if info else None
-                for node_id, info in self.metadata.for_nodes(self.client, node_ids).items()
+                for node_id, info in self.metadata.for_control(self.client, node_ids).items()
             },
         )
 
@@ -128,8 +129,10 @@ class PythonOpcuaWritePort:
             "write",
             lambda: [
                 str(status.name)
-                for status in self.client.uaclient.set_attributes(
-                    self.write_ids, self.write_values, ua.AttributeIds.Value
+                for status in dispatch_control(
+                    lambda: self.client.uaclient.set_attributes(
+                        self.write_ids, self.write_values, ua.AttributeIds.Value
+                    )
                 )
             ],
         )

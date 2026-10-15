@@ -31,7 +31,7 @@ class FakePort:
         # Nothing known about any node, so every write is planned as it was
         # before the facts existed. Not recorded: the shared table pins the
         # order of the services it was written for.
-        return {}
+        return self.case.get("facts", {})
 
     async def current(self, nodes, indices, chunk):
         self.record("current", indices=indices, chunk=chunk)

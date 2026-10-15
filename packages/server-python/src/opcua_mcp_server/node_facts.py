@@ -69,6 +69,7 @@ from .limits import chunked
 from .node_ids import canonical_node_id
 from .node_metadata import MAX_PER_REQUEST, first_target, property_path
 from .operation_limits import UNSTATED, read_chunk, translate_chunk
+from .resources import BoundedCache, cache_generation
 
 #: The fifteen ``data_type`` spellings ``write_opcua_nodes`` accepts, from its own
 #: input schema. A DataType that resolves to a built-in outside them — NodeId,
@@ -271,14 +272,14 @@ class NodeFacts:
     """The per-session cache of what each node's attributes said."""
 
     def __init__(self) -> None:
-        self._cache: dict[str, dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = BoundedCache()
         #: DataType id -> what it resolved to. Per DataType rather than per node:
         #: a plant has thousands of Doubles and one Double.
-        self._types: dict[str, dict[str, Any]] = {}
+        self._types: dict[str, dict[str, Any]] = BoundedCache()
         #: Enumerated DataType id -> the states published on the DataType node.
-        self._type_states: dict[str, list[dict[str, Any]] | None] = {}
+        self._type_states: dict[str, list[dict[str, Any]] | None] = BoundedCache()
         #: (object, method) -> whether the method was found on the object or its type.
-        self._on_object: dict[tuple[str, str], bool] = {}
+        self._on_object: dict[tuple[str, str], bool] = BoundedCache()
         #: Set when this server answered "no" to TranslateBrowsePaths itself, as
         #: NodeMetadata remembers it: asking again every write would cost a round
         #: trip and a line of stderr each time.
@@ -299,6 +300,7 @@ class NodeFacts:
         """What is already known about ``node_id``, without asking the server."""
         return self._cache.get(node_id)
 
+    @cache_generation
     def for_nodes(self, client: Any, node_ids: list[str]) -> dict[str, dict[str, Any] | None]:
         """Each node's facts, reading only the ones not already known. Never raises."""
         wanted = list(dict.fromkeys(node_ids))
@@ -354,7 +356,7 @@ class NodeFacts:
         incomplete |= self._resolve_types(client, records)
         incomplete |= self._read_states(client, records)
         for node_id, record in records.items():
-            if node_id not in incomplete:
+            if node_id not in incomplete and record["status"] != "BadNodeIdUnknown":
                 self._cache[node_id] = record
         return dict(records)
 
@@ -500,6 +502,7 @@ class NodeFacts:
 
     # --- method ownership --------------------------------------------------------
 
+    @cache_generation
     def on_object(self, client: Any, object_node_id: str, method_node_id: str) -> bool | None:
         """Whether a method is one of the object's, or of its type's; None if unknown.
 

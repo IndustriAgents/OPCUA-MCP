@@ -200,6 +200,7 @@ class OpcuaConnection:
         #: there is nothing re-entrant left to support, and a plain lock is one
         #: that cannot accidentally be held twice by a path that grew a caller.
         self._lock = threading.Lock()
+        self._control_lock = threading.RLock()
         self._client: Client | None = None
         self._last_error: str | None = None
         #: An id for the session currently held; see :attr:`session_id`.
@@ -346,6 +347,8 @@ class OpcuaConnection:
 
     def _bind_policy_namespaces(self, client: Client) -> None:
         """Tell the tool policy which namespace URI is at which index here."""
+        self._policy.forget_resolution()
+        self._policy.bind_namespaces([])
         try:
             uris = client.get_node(NAMESPACE_ARRAY_NODE_ID).get_value()
             self._policy.bind_namespaces([str(uri) for uri in (uris or [])])
@@ -356,7 +359,16 @@ class OpcuaConnection:
                 file=sys.stderr,
             )
 
+    def control_call(self, operation):
+        """Keep teardown and namespace replacement outside a native control send."""
+        with self._control_lock:
+            return operation()
+
     def disconnect(self) -> None:
+        with self._control_lock:
+            self._disconnect()
+
+    def _disconnect(self) -> None:
         """Drop the connection, quietly. Shared by shutdown and rebuild."""
         with self._lock:
             client = self._client
@@ -466,6 +478,10 @@ class OpcuaConnection:
             attempt.done.set()
 
     def _open_new_session(self) -> Client:
+        with self._control_lock:
+            return self._replace_session()
+
+    def _replace_session(self) -> Client:
         """Drop the old client, open a new one, and rebind what held the old.
 
         The caller has already claimed the attempt, so this is the only thread

@@ -179,7 +179,12 @@ async def write_nodes(
         ]
         current = await port.current(nodes, indices, limits["read"]) if indices else {}
         # Read even when the EURange check is lifted: the InstrumentRange is not.
-        engineering = await port.engineering(node_ids)
+        engineering_ids = [
+            node_ids[index]
+            for index, plan in enumerate(plan_all(nodes, node_ids, facts, None, allow_out_of_range))
+            if plan["outcome"] == "send"
+        ]
+        engineering = await port.engineering(engineering_ids)
         plans = plan_all(nodes, node_ids, facts, engineering, allow_out_of_range)
         refusal = next((plan for plan in plans if plan["outcome"] == "refuse"), None)
         if refusal is not None:

@@ -1,6 +1,6 @@
 /** One connected attempt and contract-directed recovery through injected services. */
 import type { ExecutionCall } from "./execution.js";
-import { ContractRefusal, describeError, message } from "../errors.js";
+import { ContractRefusal, UncertainOutcome, describeError, message } from "../errors.js";
 export interface InvocationPort<R> {
   endpoint(): string;
   session(): string | null;
@@ -30,11 +30,13 @@ export async function invokeTool<R>(port: InvocationPort<R>, call: ExecutionCall
       { cause: error }
     );
   }
-  call.session = port.session();
   await port.capabilities(call);
+  call.session = port.session();
+  permit(port, call);
   try {
     return await port.dispatch(call);
   } catch (error) {
+    if (error instanceof UncertainOutcome) throw error;
     if (!port.isConnectionError(error)) throw error;
     return await recover(port, call, error);
   }
@@ -48,14 +50,23 @@ async function recover<R>(
   port.logRecovery(retry === "resend");
   try {
     await port.reconnect(call.session);
-  } catch (error) {
+  } catch (rebuildFailed) {
+    if (retry === "uncertainOutcome")
+      throw new UncertainOutcome(
+        message("uncertainOutcome", {
+          tool: call.name,
+          reason: `${describeError(error)}; recovery failed: ${describeError(rebuildFailed)}`,
+          targets: port.targets(call),
+        }),
+        { cause: error }
+      );
     throw new ContractRefusal(
-      message("notConnected", { url: port.endpoint(), reason: describeError(error) }),
-      { cause: error }
+      message("notConnected", { url: port.endpoint(), reason: describeError(rebuildFailed) }),
+      { cause: rebuildFailed }
     );
   }
   if (retry === "uncertainOutcome")
-    throw new ContractRefusal(
+    throw new UncertainOutcome(
       message("uncertainOutcome", {
         tool: call.name,
         reason: describeError(error),
@@ -65,6 +76,12 @@ async function recover<R>(
     );
   if (retry !== "resend") throw error;
   call.attempt = 2;
+  await port.capabilities(call);
+  call.session = port.session();
+  permit(port, call);
+  return await port.dispatch(call);
+}
+function permit<R>(port: InvocationPort<R>, call: ExecutionCall): void {
   try {
     port.authorize(call);
   } catch (error) {
@@ -78,6 +95,4 @@ async function recover<R>(
     call.denied = true;
     throw error;
   }
-  await port.capabilities(call);
-  return await port.dispatch(call);
 }

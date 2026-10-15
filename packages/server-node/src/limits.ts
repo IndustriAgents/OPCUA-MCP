@@ -26,6 +26,13 @@ export const MAX_BYTE_STRING_BYTES = CONTRACT.limits.maxByteStringBytes;
 export const MAX_ARRAY_ITEMS = CONTRACT.limits.maxArrayItems;
 export const MAX_NESTING_DEPTH = CONTRACT.limits.maxNestingDepth;
 
+export const MAX_CONCURRENT_CALLS = CONTRACT.limits.maxConcurrentCalls;
+export const MAX_EVENT_SUBSCRIPTIONS = CONTRACT.limits.maxEventSubscriptions;
+export const MAX_CACHED_NODES = CONTRACT.limits.maxCachedNodes;
+export const MAX_CONDITION_MAPPINGS = CONTRACT.limits.maxConditionMappings;
+export const MAX_BUFFERED_BYTES = CONTRACT.limits.maxBufferedBytes;
+export const CONTROL_ACCOUNTING_TIMEOUT_SECONDS = CONTRACT.limits.controlAccountingTimeoutSeconds;
+
 /** How many raw readings to ask the OPC UA server for.
  *
  * `0`, absent, or anything past the cap resolves to the cap. A negative number

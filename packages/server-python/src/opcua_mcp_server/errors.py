@@ -46,6 +46,10 @@ class ApplicationRefusal(ValueError):
     """An anticipated refusal, safe to expose through any protocol adapter."""
 
 
+class UncertainOutcome(ApplicationRefusal):
+    """A control may have applied; neither failure nor cancellation proves otherwise."""
+
+
 class AdapterFailure(RuntimeError):
     """A failed native operation; retain the cause for retry classification."""
 

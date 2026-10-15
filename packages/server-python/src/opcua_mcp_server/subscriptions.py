@@ -31,6 +31,7 @@ from .application.subscriptions import resolve_filter as resolve_filter
 from .contract import CONTRACT
 from .errors import message
 from .records import history_record
+from .resources import BoundedRecords
 
 # Defaults and bounds, read from the contract rather than written here. They were
 # five constants declared identically in this file and in `subscriptions.ts` —
@@ -242,6 +243,7 @@ class SubscriptionManager:
     def __init__(self) -> None:
         self._entries: dict[str, _Entry] = {}
         self._counter = 0
+        self._pending = 0
         self._lock = threading.Lock()
         self._client: Any = None
 
@@ -270,6 +272,13 @@ class SubscriptionManager:
         )
 
         with self._lock:
+            active = len(self._entries) + self._pending
+            limit = CONTRACT["limits"]["maxSubscriptions"]
+            if active >= limit:
+                raise ValueError(
+                    message("tooManySubscriptions", active=active, limit=limit, wanted=1)
+                )
+            self._pending += 1
             self._counter += 1
             entry_id = f"sub-{self._counter}"
 
@@ -280,13 +289,19 @@ class SubscriptionManager:
             sampling_interval=sampling,
             buffer_size=size,
             data_filter=data_filter or Filter(),
-            changes=deque(maxlen=size),
+            changes=BoundedRecords(
+                size,
+                CONTRACT["limits"]["maxBufferedBytes"] // CONTRACT["limits"]["maxSubscriptions"],
+            ),
         )
-        self._attach(self._client, entry)
-
-        with self._lock:
-            self._entries[entry_id] = entry
-        return entry.as_record()
+        try:
+            self._attach(self._client, entry)
+            with self._lock:
+                self._entries[entry_id] = entry
+            return entry.as_record()
+        finally:
+            with self._lock:
+                self._pending -= 1
 
     def reattach(self, client: Any) -> None:
         """Re-create every subscription on ``client``, after the old one died.

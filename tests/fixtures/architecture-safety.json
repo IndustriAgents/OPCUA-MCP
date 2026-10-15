@@ -1,0 +1,15 @@
+{
+  "namespaces": {
+    "initial": ["http://opcfoundation.org/UA/", "urn:other", "urn:plant"],
+    "reordered": ["http://opcfoundation.org/UA/", "urn:plant", "urn:other"],
+    "allowed": "nsu=urn:plant;i=5",
+    "target": "ns=2;i=5"
+  },
+  "buffers": [
+    {"name":"record count", "capacity":2, "bytes":100, "records":[{"value":1},{"value":2},{"value":3}], "retained":[{"value":2},{"value":3}]},
+    {"name":"retained UTF-8 bytes", "capacity":10, "bytes":35, "records":[{"value":"éééé"},{"value":"éééé"}], "retained":[{"value":"éééé"}]},
+    {"name":"oversized record is counted as lost", "capacity":2, "bytes":20, "records":[{"value":1},{"value":"12345678901234567890"}], "retained":[{"value":1}]}
+  ],
+  "cache": {"capacity":2, "entries":[["first",1],["second",2],["third",3]], "retained":[["second",2],["third",3]]},
+  "control": {"tool":"call_opcua_method", "object":"ns=2;i=1", "method":"ns=2;i=2", "session":"original"}
+}

@@ -41,6 +41,7 @@ from .node_facts import NodeFacts
 from .node_metadata import NodeMetadata
 from .operation_limits import UNSTATED
 from .policy import ToolPolicy, tool_policy
+from .resources import Admission
 from .subscriptions import SubscriptionManager
 
 
@@ -58,6 +59,8 @@ class ServerState:
         audit: AuditSink | None = None,
     ) -> None:
         self.url = url
+        self.admission = Admission()
+        self.control_tasks: set[asyncio.Task] = set()
         self._policy = policy
         #: stderr-only until `main` replaces it. `main` is the one place allowed
         #: to fail on a bad OPCUA_AUDIT_FILE: a server imported as a module (the

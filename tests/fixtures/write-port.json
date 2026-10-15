@@ -573,6 +573,59 @@
       "fields": {
         "reason": "native timeout"
       }
+    },
+    {
+      "name": "absent batch member is skipped before strict engineering lookup",
+      "nodes": [
+        {
+          "node_id": "ns=2;i=41",
+          "value": 1,
+          "data_type": "Double"
+        },
+        {
+          "node_id": "ns=2;i=999999",
+          "value": 1,
+          "data_type": "Double"
+        }
+      ],
+      "facts": {
+        "ns=2;i=999999": {
+          "status": "BadNodeIdUnknown"
+        }
+      },
+      "limits": {
+        "write": 3,
+        "read": 2
+      },
+      "bounds": {},
+      "allow_out_of_range": false,
+      "calls": [
+        {
+          "name": "engineering",
+          "node_ids": [
+            "ns=2;i=41"
+          ]
+        },
+        {
+          "name": "prepare",
+          "index": 0
+        },
+        {
+          "name": "send"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "ns=2;i=41",
+          "status": "Good",
+          "error": null
+        },
+        {
+          "node_id": "ns=2;i=999999",
+          "status": "BadNodeIdUnknown",
+          "error": "Node ns=2;i=999999 does not exist on this OPC UA session. Nothing was sent to it."
+        }
+      ]
     }
   ]
 }

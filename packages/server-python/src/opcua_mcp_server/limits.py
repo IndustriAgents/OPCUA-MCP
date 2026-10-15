@@ -33,6 +33,13 @@ MAX_BYTE_STRING_BYTES: int = LIMITS["maxByteStringBytes"]
 MAX_ARRAY_ITEMS: int = LIMITS["maxArrayItems"]
 MAX_NESTING_DEPTH: int = LIMITS["maxNestingDepth"]
 
+MAX_CONCURRENT_CALLS: int = LIMITS["maxConcurrentCalls"]
+MAX_EVENT_SUBSCRIPTIONS: int = LIMITS["maxEventSubscriptions"]
+MAX_CACHED_NODES: int = LIMITS["maxCachedNodes"]
+MAX_CONDITION_MAPPINGS: int = LIMITS["maxConditionMappings"]
+MAX_BUFFERED_BYTES: int = LIMITS["maxBufferedBytes"]
+CONTROL_ACCOUNTING_TIMEOUT_SECONDS: int = LIMITS["controlAccountingTimeoutSeconds"]
+
 T = TypeVar("T")
 
 

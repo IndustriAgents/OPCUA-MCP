@@ -203,6 +203,7 @@ export class NodeOpcuaRuntime {
    * nothing by path and deny_read refuses guarded reads.
    */
   private forgetSession(): void {
+    this.events.forgetConditions();
     this.serverLimits = UNSTATED;
     this.metadata.serverLimits = UNSTATED;
     this.metadata.forget();

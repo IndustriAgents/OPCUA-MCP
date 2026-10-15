@@ -156,7 +156,9 @@ def plan_write(
     value = request.get("value")
     requested = request.get("data_type") or None
 
-    # An unknown node is the server's to answer, exactly as before.
+    if facts is not None and facts.get("status") == "BadNodeIdUnknown":
+        return _skip("BadNodeIdUnknown", "unknownNode", node_id=node_id)
+    # Unreadable facts otherwise leave the decision to the server.
     if facts is None or facts.get("status") != "Good":
         return _send(requested, None, value)
 

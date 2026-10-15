@@ -33,6 +33,8 @@ export class ToolFailure extends Error {}
 
 export class ContractRefusal extends ToolFailure {}
 
+export class UncertainOutcome extends ContractRefusal {}
+
 /** A crash carries its cause internally while exposing only the tool name. */
 export class UnexpectedToolFailure extends Error {
   constructor(tool: string, cause: unknown) {

@@ -197,6 +197,13 @@ export const CONTRACT: {
   notices: Record<string, string>;
   /** How much one call may ask for. Refusals, not tuning knobs. */
   limits: {
+    maxConcurrentCalls: number;
+    maxEventSubscriptions: number;
+    maxCachedNodes: number;
+    maxConditionMappings: number;
+    maxBufferedBytes: number;
+    controlAccountingTimeoutSeconds: number;
+
     maxNodesPerRead: number;
     maxNodesPerWrite: number;
     maxMethodArguments: number;

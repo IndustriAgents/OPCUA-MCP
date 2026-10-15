@@ -1,7 +1,10 @@
+import { Admission } from "./resources.js";
+import { runControl } from "./infrastructure/control-context.js";
 import { ProtocolFeatureHandlers } from "./protocol/feature-handlers.js";
 import { NodeOpcuaRuntime } from "./adapters/opcua-runtime.js";
 import {
   auditPermission,
+  auditTargets,
   auditAfter,
   describeTargets,
   newCallId,
@@ -37,6 +40,7 @@ export { checkEuRange } from "./application/write.js";
 export { checkMaxChange } from "./adapters/opcua-write.js";
 
 export class OpcuaTools {
+  private readonly admission = new Admission();
   private readonly runtime: NodeOpcuaRuntime;
   private readonly featureHandlers: ProtocolFeatureHandlers;
   private get capabilities() {
@@ -162,50 +166,46 @@ export class OpcuaTools {
   }
 
   /** Convert one protocol request through the common execution envelope. */
-  async callTool(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
+  async callTool(
+    request: { params: { name: string; arguments?: Record<string, unknown> } },
+    signal?: AbortSignal
+  ) {
     const name = request.params.name,
       args = request.params.arguments ?? {};
     try {
-      return await executeTool(
-        {
-          newCallId,
-          waitForConnection: () => this.awaitConnectionInFlight(),
-          authorize: (name, args) => this.policy.authorize(name, args),
-          allowed: (call) =>
-            auditPermission(
-              this.audit,
-              this.policy,
-              this.conn,
-              call.name,
-              call.arguments,
-              call.callId,
-              call.attempt
-            ),
-          after: (call, decision, reason) =>
-            auditAfter(
-              this.audit,
-              this.policy,
-              this.conn,
-              call.name,
-              call.arguments,
-              decision,
-              call.callId,
-              call.attempt,
-              reason
-            ),
-          run: (call) => this.runTool(call),
-          normalizeFailure: (_name, error) => error,
-          normalizeResult: (result) => result,
-        },
-        name,
-        args
+      return await this.admission.run(name, () =>
+        executeTool(
+          {
+            newCallId,
+            waitForConnection: () => this.awaitConnectionInFlight(),
+            authorize: (name, args) => this.policy.authorize(name, args),
+            after: (call, decision, reason) =>
+              auditAfter(
+                this.audit,
+                this.policy,
+                call.auditSnapshot ?? this.conn,
+                call.name,
+                call.arguments,
+                decision,
+                call.callId,
+                call.attempt,
+                reason,
+                call.auditSnapshot?.targets
+              ),
+            run: (call) => this.runTool(call, signal),
+            normalizeFailure: (_name, error) => error,
+            normalizeResult: (result) => result,
+          },
+          name,
+          args
+        )
       );
     } catch (error) {
       return { content: [{ type: "text", text: describeError(error) }], isError: true };
     }
   }
 
-  private async runTool(call: ExecutionCall) {
+  private async runTool(call: ExecutionCall, signal?: AbortSignal) {
     return await invokeTool(
       {
         endpoint: () => this.conn.endpointUrl,
@@ -219,7 +219,13 @@ export class OpcuaTools {
             ? await this.invokeFeature(call.spec.name, call.arguments, async () =>
                 statusResult(await this.featureHandlers.getServerStatus())
               )
-            : await this.invokeFeature(call.spec.name, call.arguments),
+            : await runControl(
+                call,
+                this.conn,
+                this.policy,
+                () => this.invokeFeature(call.spec.name, call.arguments),
+                signal
+              ),
         isConnectionError,
         reconnect: (session) => this.conn.reconnect(session),
         logRecovery: (resend) =>
@@ -228,16 +234,23 @@ export class OpcuaTools {
           ),
         targets: (call) => describeTargets(call.spec, call.arguments),
         authorize: (call) => this.policy.authorize(call.name, call.arguments),
-        allowed: (call) =>
+        allowed: (call) => {
+          call.auditSnapshot = {
+            endpointUrl: this.conn.endpointUrl,
+            sessionId: this.conn.sessionId,
+            sessionGeneration: this.conn.sessionGeneration,
+            targets: auditTargets(call.spec, call.arguments, this.policy),
+          };
           auditPermission(
             this.audit,
             this.policy,
-            this.conn,
+            call.auditSnapshot,
             call.name,
             call.arguments,
             call.callId,
             call.attempt
-          ),
+          );
+        },
         denied: (call, reason) =>
           auditAfter(
             this.audit,

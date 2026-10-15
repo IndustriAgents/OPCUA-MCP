@@ -1,3 +1,4 @@
+import { dispatchControl } from "../infrastructure/control-context.js";
 /** node-opcua write adapter. Prepared native values belong to this one call. */
 import {
   AttributeIds,
@@ -88,7 +89,7 @@ export class NodeOpcuaWritePort implements WritePort {
 
   async engineering(nodeIds: string[]) {
     try {
-      return await this.metadata.forNodes(this.session, nodeIds);
+      return await this.metadata.forControl(this.session, nodeIds);
     } catch (error) {
       throw new AdapterFailure("write-metadata", describeError(error), error);
     }
@@ -140,7 +141,9 @@ export class NodeOpcuaWritePort implements WritePort {
 
   async send(): Promise<string[]> {
     try {
-      return (await this.session.write(this.writes)).map((status) => status.name);
+      return (await dispatchControl(() => this.session.write(this.writes))).map(
+        (status) => status.name
+      );
     } catch (error) {
       throw new AdapterFailure("write", describeError(error), error);
     }

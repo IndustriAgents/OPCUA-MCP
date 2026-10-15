@@ -916,3 +916,53 @@ certificate generation and trust setup [certificates.md](certificates.md).
 
 The staged [feature module extraction](feature-modules.md) defines the read
 port and enforces dependency direction while the remaining feature slices move.
+
+## Control attempt identity and bounded state
+
+The execution envelope validates requests and performs the initial policy check.
+The invocation layer then establishes the session, resolves its policy and
+capabilities, authorizes again, and writes durable permission immediately before
+dispatch. Native writes, methods and alarm actions carry a per-attempt session
+fence: a replacement during preparation refuses the send. Python also excludes
+session teardown while a native control service is executing. Node waits for its
+library's restored-session refresh before admitting operations; both runtimes
+clear namespace and resolved permissions before refreshing them.
+
+A lost control response is always an uncertain outcome, including when reconnect
+fails. Audit outcomes use the original attempt's session, generation and URI
+targets, and record `decision: "uncertain"` rather than claiming failure. Both runtimes
+refuse a cancellation observed before native dispatch. After dispatch Python waits
+up to the accounting deadline for the owned operation's result; if that deadline
+expires, it records uncertainty and keeps the native task owned until completion.
+Controls are never replayed. Node's connection adapter installs a single-send
+boundary for native WriteRequest and CallRequest transactions: these bypass the
+client library's transparent repair queue and transaction replay. The adapter
+requires the native `_performMessageTransaction` primitive and fails connection
+setup if it is absent; tests exercise the actual client prototype for a broken
+channel and BadSessionIdInvalid. Read transactions retain native recovery.
+Shutdown gives owned controls the same bounded drain
+before closing their session.
+
+Engineering metadata remains best-effort enrichment for reads. Control checks
+query ranges freshly and refuse unreadable or malformed ranges; a confirmed absent
+property is different from a failed lookup. Failed telemetry discovery cannot
+silently disable a write safeguard.
+
+Retained state and admission bounds live in `contract/tools.json` under `limits`:
+
+| Budget | Bound and behavior |
+|---|---|
+| Concurrent non-status calls | 16; overload is refused immediately, without a queue; status has a separate path |
+| Data-change subscriptions | 200, counting pending native creations |
+| Event notifier subscriptions | 32, counting pending creations; concurrent replacement of one notifier is refused |
+| Buffered JSON payload | 8 MiB per subscription category, divided across its maximum subscription count; count and byte overflow both contribute to dropped records |
+| Cached node entries | 4,096 per cache, with an 8 MiB encoded-payload ceiling; oldest entries are evicted |
+| Remembered event-to-condition entries | 4,096 with an 8 MiB encoded-payload ceiling; discarded on session replacement |
+| Cancelled control accounting | 10 seconds after cancellation of an already dispatched operation |
+
+Payload budgets do not measure interpreter/container overhead. Wire messages
+remain subject to the transport limits. Cache writes retain the generation in
+which their lookup started, so late answers cannot refill a cache cleared for a
+new session. Regression fixtures and fault-injection tests cover failed namespace
+refresh, recovery failure, pending-capacity races and byte overflow in both runtime
+suites, plus native-send cancellation checks and Python accounting deadlines.

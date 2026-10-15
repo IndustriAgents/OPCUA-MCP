@@ -241,7 +241,7 @@ describe("authorization across the retry", () => {
     });
 
     assert.equal(state.attempts.length, 2);
-    assert.deepEqual(authorized, ["read_opcua_nodes", "read_opcua_nodes"]);
+    assert.deepEqual(authorized, ["read_opcua_nodes", "read_opcua_nodes", "read_opcua_nodes"]);
   });
 
   it("stops the second attempt when the fresh session no longer authorizes it", async () => {
@@ -254,7 +254,7 @@ describe("authorization across the retry", () => {
     let calls = 0;
     policy.authorize = () => {
       calls += 1;
-      if (calls > 1) throw new Error("Node ns=2;i=5 is not writable under the operator policy");
+      if (calls > 2) throw new Error("Node ns=2;i=5 is not writable under the operator policy");
     };
 
     const result = await tools.callTool({
@@ -288,7 +288,7 @@ describe("authorization across the retry", () => {
       params: { name: "read_opcua_nodes", arguments: { node_ids: ["ns=1;i=5"] } },
     });
 
-    assert.deepEqual(order, ["authorize", "bind", "authorize"]);
+    assert.deepEqual(order, ["authorize", "authorize", "bind", "authorize"]);
   });
 
   it("audits the second attempt as its own, with its own attempt number", async () => {
@@ -311,7 +311,7 @@ describe("authorization across the retry", () => {
       lines.map((line) => [line.decision, line.attempt]),
       [
         ["allowed", 1],
-        ["failed", 1],
+        ["uncertain", 1],
       ]
     );
     // One call, one story: both lines carry the same id.
@@ -549,7 +549,9 @@ it("keeps a socket cause through the real write handler and never resends", asyn
   const { tools, state } = harness({ env: OPERATOR });
   tools.dispatch = OpcuaTools.prototype.dispatch;
   tools.operationLimits = async () => ({});
-  tools.checkWriteBounds = async () => {};
+  tools.metadata.forControl = async () => new Map();
+  tools.conn.state = "connected";
+  tools.conn.session = {};
   let writes = 0;
   tools.requireSession = () => ({
     write: async () => {

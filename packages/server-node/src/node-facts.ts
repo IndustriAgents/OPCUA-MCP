@@ -1,3 +1,4 @@
+import { cacheGeneration, BoundedCache } from "./resources.js";
 // What a node says about itself: its class, its type, its shape and who may write it.
 //
 // `node_facts.py` is the Python half and must produce the same record from the
@@ -370,13 +371,13 @@ async function methodOnObject(
 
 /** The per-session cache of what each node said about itself. */
 export class NodeFactsCache {
-  private readonly cache = new Map<string, NodeFacts>();
+  private readonly cache = new BoundedCache<string, NodeFacts>();
   /** DataType id → what it is written as, and its own states when it is an
    *  enumeration that publishes them; read once per session per type. */
-  private readonly dataTypes = new Map<string, DataTypeResolution>();
-  private readonly dataTypeStates = new Map<string, NodeState[] | null>();
+  private readonly dataTypes = new BoundedCache<string, DataTypeResolution>();
+  private readonly dataTypeStates = new BoundedCache<string, NodeState[] | null>();
   /** (object, method) → whether the method is the object's. */
-  private readonly methodsOnObjects = new Map<string, boolean>();
+  private readonly methodsOnObjects = new BoundedCache<string, boolean>();
   /** Set when the server cannot answer TranslateBrowsePaths at all; see
    *  `NodeMetadata.unanswerable`. States and labels are then never known. */
   private unanswerable = false;
@@ -407,26 +408,32 @@ export class NodeFactsCache {
     session: ClientSession,
     nodeIds: string[]
   ): Promise<Map<string, NodeFacts | null>> {
-    const wanted = [...new Set(nodeIds)];
-    const missing = wanted.filter((nodeId) => !this.cache.has(nodeId));
-    const found = new Map<string, NodeFacts>();
-    if (missing.length > 0) {
-      try {
-        const { facts, complete } = await this.read(session, missing);
-        for (const [nodeId, record] of facts) {
-          found.set(nodeId, record);
-          // A record whose states could not be read this time is returned but
-          // not kept: the next call asks again, as a failure is never cached.
-          if (complete.has(nodeId)) this.cache.set(nodeId, record);
+    return await cacheGeneration(
+      [this.cache, this.dataTypes, this.dataTypeStates, this.methodsOnObjects],
+      async () => {
+        const wanted = [...new Set(nodeIds)];
+        const missing = wanted.filter((nodeId) => !this.cache.has(nodeId));
+        const found = new Map<string, NodeFacts>();
+        if (missing.length > 0) {
+          try {
+            const { facts, complete } = await this.read(session, missing);
+            for (const [nodeId, record] of facts) {
+              found.set(nodeId, record);
+              // A record whose states could not be read this time is returned but
+              // not kept: the next call asks again, as a failure is never cached.
+              if (complete.has(nodeId) && record.status !== "BadNodeIdUnknown")
+                this.cache.set(nodeId, record);
+            }
+          } catch (error) {
+            console.error(
+              `Could not read node attributes: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
-      } catch (error) {
-        console.error(
-          `Could not read node attributes: ${error instanceof Error ? error.message : String(error)}`
+        return new Map(
+          wanted.map((nodeId) => [nodeId, this.cache.get(nodeId) ?? found.get(nodeId) ?? null])
         );
       }
-    }
-    return new Map(
-      wanted.map((nodeId) => [nodeId, this.cache.get(nodeId) ?? found.get(nodeId) ?? null])
     );
   }
 
@@ -439,21 +446,26 @@ export class NodeFactsCache {
     objectId: string,
     methodId: string
   ): Promise<boolean | null> {
-    const key = `${objectId}|${methodId}`;
-    const known = this.methodsOnObjects.get(key);
-    if (known !== undefined) return known;
-    try {
-      const answer = await methodOnObject(session, objectId, methodId);
-      if (answer !== null) this.methodsOnObjects.set(key, answer);
-      return answer;
-    } catch (error) {
-      console.error(
-        `Could not tell whether ${methodId} is a method of ${objectId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      return null;
-    }
+    return await cacheGeneration(
+      [this.cache, this.dataTypes, this.dataTypeStates, this.methodsOnObjects],
+      async () => {
+        const key = `${objectId}|${methodId}`;
+        const known = this.methodsOnObjects.get(key);
+        if (known !== undefined) return known;
+        try {
+          const answer = await methodOnObject(session, objectId, methodId);
+          if (answer !== null) this.methodsOnObjects.set(key, answer);
+          return answer;
+        } catch (error) {
+          console.error(
+            `Could not tell whether ${methodId} is a method of ${objectId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+          return null;
+        }
+      }
+    );
   }
 
   /** The three rounds for the nodes not cached. See the file header. */

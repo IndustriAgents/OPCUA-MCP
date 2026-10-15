@@ -38,6 +38,7 @@ import {
 
 import { TrustStore, trustRefusal } from "./trust-store.js";
 import { CLIENT_APPLICATION_NAME } from "./client-identity.js";
+import { singleSendControls } from "./adapters/control-transactions.js";
 
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
@@ -217,6 +218,7 @@ export class OpcuaConnection {
   private connectPromise: Promise<void> | null = null;
   /** The rebuild in flight, so concurrent callers join it rather than start one. */
   private reconnectPromise: Promise<void> | null = null;
+  private restorePromise: Promise<void> | null = null;
   private state: ConnectionState = "disconnected";
   private lastError: string | null = null;
   /** The client of the round in flight, until it connects or gives up — so that
@@ -253,7 +255,7 @@ export class OpcuaConnection {
 
   /** True while this server holds a session it believes is live. */
   get connected(): boolean {
-    return this.state === "connected" && this.session !== null;
+    return this.state === "connected" && this.session !== null && this.restorePromise === null;
   }
 
   /** True while a connection round — a first connect or a rebuild — is running.
@@ -265,14 +267,16 @@ export class OpcuaConnection {
    * `ensureConnection` already waits on for a bounded time.
    */
   get connecting(): boolean {
-    return this.connectPromise !== null || this.reconnectPromise !== null;
+    return (
+      this.connectPromise !== null || this.reconnectPromise !== null || this.restorePromise !== null
+    );
   }
 
   /** Wait for the connection round already running, whatever it finds. Never
    *  starts one — see `OpcuaTools.awaitConnectionInFlight` for who needs this. */
   async settled(): Promise<void> {
     for (;;) {
-      const inFlight = this.reconnectPromise ?? this.connectPromise;
+      const inFlight = this.restorePromise ?? this.reconnectPromise ?? this.connectPromise;
       if (!inFlight) return;
       await inFlight.catch(() => undefined);
     }
@@ -396,12 +400,23 @@ export class OpcuaConnection {
       console.error(`Connected to OPC UA server (${describeSecurity(security)})`);
 
       const session = await client.createSession(userIdentity(security));
+      singleSendControls(session);
       this.opcuaClient = client;
       this.session = session;
       this.session_ = randomBytes(8).toString("hex");
       this.generation_ += 1;
       this.serverSessionId = session.sessionId.toString();
-      session.on("session_restored", () => void this.restored(session));
+      session.on("session_restored", () => {
+        const restored = this.restored(session)
+          .catch((error) => {
+            this.policy.bindNamespaces([]);
+            console.error("Could not refresh restored session:", error);
+          })
+          .finally(() => {
+            if (this.restorePromise === restored) this.restorePromise = null;
+          });
+        this.restorePromise = restored;
+      });
       this.state = "connected";
       this.lastError = null;
       console.error("OPC UA session created");
@@ -463,6 +478,7 @@ export class OpcuaConnection {
     if (startTime !== null) this.serverStartTime = startTime;
     this.session_ = randomBytes(8).toString("hex");
     this.generation_ += 1;
+    await this.bindPolicyNamespaces(session);
     console.error("OPC UA session re-created after the server lost it");
     // A restarted server may have loaded its namespaces in a different order,
     // and the policy is about to be resolved again against this session.
@@ -585,6 +601,7 @@ export class OpcuaConnection {
 
   /** A live session, re-establishing one if the connection has gone. */
   async ensureConnection(): Promise<void> {
+    if (this.restorePromise) await this.restorePromise;
     if (this.connectPromise) {
       await this.connectPromise;
       return;
@@ -596,6 +613,8 @@ export class OpcuaConnection {
 
   /** Tell the tool policy which namespace URI is at which index on this server. */
   private async bindPolicyNamespaces(session: ClientSession): Promise<void> {
+    this.policy.forgetResolution("namespace mapping changed");
+    this.policy.bindNamespaces([]);
     try {
       const value = await session.readVariableValue(CONTRACT.diagnostics.namespaceArrayNodeId);
       const uris: unknown = value?.value?.value ?? null;

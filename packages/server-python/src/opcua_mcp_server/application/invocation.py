@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from ..errors import ApplicationRefusal, describe_error, message
+from ..errors import ApplicationRefusal, UncertainOutcome, describe_error, message
 from .execution import ExecutionCall
 
 
@@ -28,6 +28,8 @@ class InvocationPort(Protocol):
 async def invoke_tool(port: InvocationPort, call: ExecutionCall) -> Any:
     if call.name == "get_server_status" or not port.has_connection():
         await port.wait_for_warm_up()
+        if call.name != "get_server_status":
+            _permit(port, call)
         return await port.dispatch(call)
     try:
         await port.connect()
@@ -35,11 +37,14 @@ async def invoke_tool(port: InvocationPort, call: ExecutionCall) -> Any:
         raise ApplicationRefusal(
             message("notConnected", url=port.endpoint(), reason=describe_error(error))
         ) from error
-    call.session = port.session()
     await port.capabilities(call)
+    call.session = port.session()
+    _permit(port, call)
     try:
         return await port.dispatch(call)
     except Exception as error:
+        if isinstance(error, UncertainOutcome):
+            raise
         if not port.is_connection_error(error):
             raise
         return await _recover(port, call, error)
@@ -51,11 +56,23 @@ async def _recover(port: InvocationPort, call: ExecutionCall, error: Exception) 
     try:
         await port.reconnect(call.session)
     except Exception as rebuild_failed:
+        if retry == "uncertainOutcome":
+            raise UncertainOutcome(
+                message(
+                    "uncertainOutcome",
+                    tool=call.name,
+                    reason=(
+                        f"{describe_error(error)}; recovery failed: "
+                        f"{describe_error(rebuild_failed)}"
+                    ),
+                    targets=port.targets(call),
+                )
+            ) from error
         raise ApplicationRefusal(
             message("notConnected", url=port.endpoint(), reason=describe_error(rebuild_failed))
         ) from rebuild_failed
     if retry == "uncertainOutcome":
-        raise ApplicationRefusal(
+        raise UncertainOutcome(
             message(
                 "uncertainOutcome",
                 tool=call.name,
@@ -66,6 +83,14 @@ async def _recover(port: InvocationPort, call: ExecutionCall, error: Exception) 
     if retry != "resend":
         raise error
     call.attempt = 2
+    await port.capabilities(call)
+    call.session = port.session()
+    _permit(port, call)
+    return await port.dispatch(call)
+
+
+def _permit(port: InvocationPort, call: ExecutionCall) -> None:
+    """Authorize and durably record the session selected after all preparation."""
     try:
         port.authorize(call)
     except (PermissionError, ValueError) as denial:
@@ -77,5 +102,3 @@ async def _recover(port: InvocationPort, call: ExecutionCall, error: Exception) 
     except Exception:
         call.denied = True
         raise
-    await port.capabilities(call)
-    return await port.dispatch(call)

@@ -9,6 +9,7 @@ from opcua import ua
 
 from ..address_space import node_id_text, supertype_of
 from ..errors import AdapterFailure, ApplicationRefusal, describe_error
+from ..infrastructure.control_context import dispatch_control
 from ..limits import LimitExceeded
 from ..method_arguments import built_in_type, guess_variant
 from ..records import variant_to_json
@@ -58,7 +59,7 @@ def _call(node: Any, method_node: Any, arguments: list[Any]) -> Any:
     request.ObjectId = node.nodeid
     request.MethodId = method_node.nodeid
     request.InputArguments = arguments
-    result = node.server.call([request])[0]
+    result = dispatch_control(lambda: node.server.call([request]))[0]
     # Good *severity*, not plain Good: GoodClamped or GoodLocalOverride is a call
     # that happened, and refusing it would report as failed an action the plant
     # carried out. The subcode is reported in `status` instead.

@@ -62,7 +62,7 @@
       "expect": { "outcome": "send", "data_type": "Double", "array": null, "value": 1 }
     },
     {
-      "name": "an unknown node is left to the server to answer",
+      "name": "an absent node is skipped",
       "request": { "node_id": "ns=2;i=999999", "value": 1 },
       "facts": {
         "status": "BadNodeIdUnknown",
@@ -81,10 +81,10 @@
       },
       "engineering": null,
       "options": { "allow_out_of_range": false },
-      "expect": { "outcome": "send", "data_type": null, "array": null, "value": 1 }
+      "expect": {"outcome": "skip", "status": "BadNodeIdUnknown", "error": "Node ns=2;i=999999 does not exist on this OPC UA session. Nothing was sent to it."}
     },
     {
-      "name": "an unknown node keeps its explicit data_type",
+      "name": "an absent node is skipped with an explicit type",
       "request": { "node_id": "ns=2;i=999999", "value": 1, "data_type": "Int32" },
       "facts": {
         "status": "BadNodeIdUnknown",
@@ -103,7 +103,7 @@
       },
       "engineering": null,
       "options": { "allow_out_of_range": false },
-      "expect": { "outcome": "send", "data_type": "Int32", "array": null, "value": 1 }
+      "expect": {"outcome": "skip", "status": "BadNodeIdUnknown", "error": "Node ns=2;i=999999 does not exist on this OPC UA session. Nothing was sent to it."}
     },
     {
       "name": "an Object has no value to write",

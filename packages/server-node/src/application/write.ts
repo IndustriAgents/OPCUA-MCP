@@ -216,7 +216,10 @@ export async function writeNodes(
       ? await port.current(nodes, indices, limits.read)
       : new Map<number, CurrentValue>();
     // Read even when the EURange check is lifted: the InstrumentRange is not.
-    const engineering = await port.engineering(nodeIds);
+    const engineeringIds = planAll(nodes, nodeIds, facts, null, allowOutOfRange).flatMap(
+      (plan, index) => (plan.outcome === "send" ? [nodeIds[index]] : [])
+    );
+    const engineering = await port.engineering(engineeringIds);
     const plans = planAll(nodes, nodeIds, facts, engineering, allowOutOfRange);
     const refused = plans.find((plan) => plan.outcome === "refuse");
     if (refused?.outcome === "refuse") throw new ContractRefusal(refused.error);

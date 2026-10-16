@@ -1,3 +1,5 @@
+import { message } from "./errors.js";
+import { cacheGeneration, BoundedCache } from "./resources.js";
 // What a node says its number means: the unit, and the ranges around it.
 //
 // `node_metadata.py` is the Python half and must produce the same records from
@@ -136,7 +138,7 @@ function firstTarget(result: BrowsePathResult): string | null {
 
 /** The per-session cache of what each node said about its own number. */
 export class NodeMetadata {
-  private readonly cache = new Map<string, AnalogInfo | null>();
+  private readonly cache = new BoundedCache<string, AnalogInfo | null>();
   /** Set when this server answered "no" to the question itself rather than to one
    *  node — a server that does not implement TranslateBrowsePathsToNodeIds, say.
    *  Without it every read would pay a failed round trip and write a line to
@@ -169,35 +171,55 @@ export class NodeMetadata {
     session: ClientSession,
     nodeIds: string[]
   ): Promise<Map<string, AnalogInfo | null>> {
-    const wanted = [...new Set(nodeIds)];
-    const missing = wanted.filter((nodeId) => !this.cache.has(nodeId));
-    if (missing.length > 0 && !this.unanswerable) {
-      try {
-        for (const [nodeId, info] of await this.read(session, missing)) {
-          this.cache.set(nodeId, info);
+    return await cacheGeneration([this.cache], async () => {
+      const wanted = [...new Set(nodeIds)];
+      const missing = wanted.filter((nodeId) => !this.cache.has(nodeId));
+      if (missing.length > 0 && !this.unanswerable) {
+        try {
+          for (const [nodeId, info] of await this.read(session, missing)) {
+            this.cache.set(nodeId, info);
+          }
+        } catch (error) {
+          // A connection error is not an answer about the address space, and
+          // remembering it as one would leave a whole session's readings
+          // unqualified because of one bad moment. Anything else *is* an answer —
+          // a server that cannot translate browse paths will not learn to — and
+          // asking it again every read would cost a round trip and a line of
+          // stderr each time.
+          this.unanswerable = !isConnectionError(error);
+          console.error(
+            `Could not read engineering units and ranges: ${
+              error instanceof Error ? error.message : String(error)
+            }${this.unanswerable ? "; not asking this session again" : ""}`
+          );
         }
-      } catch (error) {
-        // A connection error is not an answer about the address space, and
-        // remembering it as one would leave a whole session's readings
-        // unqualified because of one bad moment. Anything else *is* an answer —
-        // a server that cannot translate browse paths will not learn to — and
-        // asking it again every read would cost a round trip and a line of
-        // stderr each time.
-        this.unanswerable = !isConnectionError(error);
-        console.error(
-          `Could not read engineering units and ranges: ${
-            error instanceof Error ? error.message : String(error)
-          }${this.unanswerable ? "; not asking this session again" : ""}`
-        );
       }
-    }
-    return new Map(wanted.map((nodeId) => [nodeId, this.cache.get(nodeId) ?? null]));
+      return new Map(wanted.map((nodeId) => [nodeId, this.cache.get(nodeId) ?? null]));
+    });
   }
 
   /** One translate and one read for the whole batch. See the file header. */
-  private async read(
+  async forControl(
     session: ClientSession,
     nodeIds: string[]
+  ): Promise<Map<string, AnalogInfo | null>> {
+    try {
+      return await this.read(session, nodeIds, true);
+    } catch (error) {
+      throw new Error(
+        message("engineeringUnavailable", {
+          node_id: nodeIds.join(", "),
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+        { cause: error }
+      );
+    }
+  }
+
+  private async read(
+    session: ClientSession,
+    nodeIds: string[],
+    strict = false
   ): Promise<Map<string, AnalogInfo | null>> {
     const paths = nodeIds.flatMap((nodeId) =>
       PROPERTY_BROWSE_NAMES.map((browseName) => makeBrowsePath(nodeId, `/${browseName}`))
@@ -212,6 +234,8 @@ export class NodeMetadata {
     const targets: string[] = [];
     const owners: Array<[number, number]> = [];
     results.forEach((result, index) => {
+      if (strict && !isGood(result.statusCode) && result.statusCode.name !== "BadNoMatch")
+        throw new Error(result.statusCode.name);
       const target = firstTarget(result);
       if (target === null) return;
       owners.push([
@@ -235,10 +259,21 @@ export class NodeMetadata {
     );
     owners.forEach(([nodeIndex, propertyIndex], position) => {
       const dataValue = values[position];
-      if (!dataValue || !isGood(dataValue.statusCode)) return;
+      if (!dataValue || !isGood(dataValue.statusCode)) {
+        if (strict) throw new Error(dataValue?.statusCode?.name ?? "missing property value");
+        return;
+      }
       found.get(nodeIds[nodeIndex])![propertyIndex] = dataValue.value?.value ?? null;
     });
 
+    if (strict)
+      for (const properties of found.values()) {
+        for (const value of properties.slice(1)) {
+          if (value == null) continue;
+          const bounds = toRange(value);
+          if (!bounds || bounds.low > bounds.high) throw new Error("invalid engineering range");
+        }
+      }
     return new Map(
       [...found].map(([nodeId, properties]) => [nodeId, assemble(properties)] as const)
     );

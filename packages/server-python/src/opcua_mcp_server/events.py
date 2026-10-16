@@ -29,11 +29,13 @@ from typing import Any
 
 from opcua import ua
 
-from .contract import EVENTS
+from .contract import CONTRACT, EVENTS
 from .errors import message
 from .history import continues, release_continuation_point
+from .infrastructure.control_context import dispatch_control
 from .notices import notice
 from .records import history_data, variant_to_json
+from .resources import BoundedCache, BoundedRecords
 from .variant_codec import convert_for_variant
 
 #: The Server object — where most servers raise every event they have.
@@ -147,7 +149,10 @@ class _BufferingHandler:
 
     def __init__(self, severity_min: int, size: int):
         self.severity_min = severity_min
-        self.records: deque = deque(maxlen=size)
+        self.records: deque = BoundedRecords(
+            size,
+            CONTRACT["limits"]["maxBufferedBytes"] // CONTRACT["limits"]["maxEventSubscriptions"],
+        )
         self.dropped = 0
         #: Re-created on a new session since the last read, so there is a gap
         #: to report. Reported once, like ``dropped``.
@@ -165,9 +170,9 @@ class _BufferingHandler:
         if isinstance(severity, (int, float)) and severity < self.severity_min:
             return
         with self.lock:
-            if len(self.records) == self.records.maxlen:
-                self.dropped += 1
+            before = len(self.records)
             self.records.append(record)
+            self.dropped += before + 1 - len(self.records)
 
     def drain(self, limit: int) -> tuple[list[dict], int, int]:
         """Take up to ``limit`` of the oldest events, removing them."""
@@ -193,8 +198,11 @@ class EventSubscriptions:
 
     def __init__(self) -> None:
         self._subscriptions: dict[str, tuple[Any, _BufferingHandler]] = {}
-        self._condition_of_event: dict[str, str] = {}
+        self._condition_of_event: dict[str, str] = BoundedCache(
+            CONTRACT["limits"]["maxConditionMappings"]
+        )
         self._lock = threading.Lock()
+        self._pending: set[str] = set()
 
     def remember(self, records: list[dict]) -> None:
         """Remember the condition behind every event we hand out."""
@@ -217,12 +225,26 @@ class EventSubscriptions:
         had buffered, and an agent that cannot tell that happened reads the
         missing events as quiet.
         """
-        replaced = self.drop(node_id)
-        handler = _BufferingHandler(severity_min, buffer_size)
-        subscription = _attach(client, node_id, handler)
+        limit = CONTRACT["limits"]["maxEventSubscriptions"]
         with self._lock:
-            self._subscriptions[node_id] = (subscription, handler)
-        return replaced
+            if node_id in self._pending or (
+                node_id not in self._subscriptions
+                and len(self._subscriptions) + len(self._pending) >= limit
+            ):
+                raise ValueError(
+                    message("resourceBusy", resource="event subscriptions", limit=limit)
+                )
+            self._pending.add(node_id)
+        try:
+            replaced = self.drop(node_id)
+            handler = _BufferingHandler(severity_min, buffer_size)
+            subscription = _attach(client, node_id, handler)
+            with self._lock:
+                self._subscriptions[node_id] = (subscription, handler)
+            return replaced
+        finally:
+            with self._lock:
+                self._pending.discard(node_id)
 
     def reattach(self, client) -> None:
         """Re-create every event subscription on ``client``, after the old one died.
@@ -240,6 +262,7 @@ class EventSubscriptions:
         happened".
         """
         with self._lock:
+            self._condition_of_event.clear()
             entries = list(self._subscriptions.items())
         for node_id, (_old, handler) in entries:
             try:
@@ -536,7 +559,7 @@ def alarm_action(
     request.ObjectId = target.nodeid
     request.MethodId = method.nodeid
     request.InputArguments = arguments
-    status = target.server.call([request])[0].StatusCode
+    status = dispatch_control(lambda: target.server.call([request]))[0].StatusCode
     # Good severity: an acknowledgement the server answered GoodClamped (or any
     # Good subcode) happened, and reporting it as a failure invites a retry.
     if not status.is_good():

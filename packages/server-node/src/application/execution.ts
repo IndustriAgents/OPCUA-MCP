@@ -1,6 +1,6 @@
 /** Common authorization/audit envelope; transport and native recovery are injected. */
 import { CONTRACT, type ToolSpec } from "../contract.js";
-import { ContractRefusal, describeError } from "../errors.js";
+import { ContractRefusal, UncertainOutcome, describeError } from "../errors.js";
 import { message } from "../errors.js";
 import { checkRequestBounds } from "../limits.js";
 import { validateArguments } from "../validation.js";
@@ -12,13 +12,22 @@ export interface ExecutionCall {
   attempt: number;
   denied: boolean;
   session: string | null;
+  auditSnapshot?: {
+    endpointUrl: string;
+    sessionId: string | null;
+    sessionGeneration: number | null;
+    targets: Record<string, unknown>;
+  };
 }
 export interface ExecutionPort<R> {
   newCallId(): string;
   waitForConnection(): Promise<void>;
   authorize(name: string, args: Record<string, unknown>): void;
-  allowed(call: ExecutionCall): void;
-  after(call: ExecutionCall, decision: "denied" | "failed" | "completed", reason?: string): void;
+  after(
+    call: ExecutionCall,
+    decision: "denied" | "failed" | "completed" | "uncertain",
+    reason?: string
+  ): void;
   run(call: ExecutionCall): Promise<R>;
   normalizeFailure(name: string, error: unknown): unknown;
   normalizeResult(result: R): R;
@@ -50,14 +59,18 @@ export async function executeTool<R>(
     port.after(call, "denied", describeError(error));
     throw error;
   }
-  port.allowed(call);
   try {
     const result = await port.run(call);
     port.after(call, "completed");
     return port.normalizeResult(result);
   } catch (error) {
     const reported = port.normalizeFailure(name, error);
-    if (!call.denied) port.after(call, "failed", describeError(reported));
+    if (!call.denied)
+      port.after(
+        call,
+        error instanceof UncertainOutcome ? "uncertain" : "failed",
+        describeError(reported)
+      );
     throw reported;
   }
 }

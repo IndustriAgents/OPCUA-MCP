@@ -129,6 +129,8 @@ export function planWrite(
   const requested = request.data_type ?? null;
   const value = request.value;
 
+  if (facts?.status === "BadNodeIdUnknown")
+    return skip("BadNodeIdUnknown", "unknownNode", { node_id: nodeId });
   // Nothing known: the server answers, exactly as it did before any of this.
   if (!factsGood(facts)) {
     return { outcome: "send", data_type: requested, array: null, value };

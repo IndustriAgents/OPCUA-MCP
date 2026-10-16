@@ -1,3 +1,4 @@
+import { BoundedRecords } from "./resources.js";
 // OPC UA data-change subscriptions and their monitored items.
 //
 // An MCP tool call is request/response, so a subscription cannot answer the
@@ -238,6 +239,7 @@ export function terminateFailedMessage(id: string, reason: string): string {
 export class SubscriptionManager {
   private entries = new Map<string, Entry>();
   private counter = 0;
+  private pending = 0;
 
   /** Start monitoring `nodeId`, returning the record for the new subscription. */
   async subscribe(
@@ -252,6 +254,10 @@ export class SubscriptionManager {
     // failed subscribe consumes one on both runtimes. IDs are opaque handles and
     // a gap means nothing — but an agent watching both should not see them
     // number differently.
+    const active = this.entries.size + this.pending,
+      limit = CONTRACT.limits.maxSubscriptions;
+    if (active >= limit)
+      throw new Error(message("tooManySubscriptions", { active, limit, wanted: 1 }));
     const id = `sub-${++this.counter}`;
 
     const entry: Entry = {
@@ -262,14 +268,22 @@ export class SubscriptionManager {
       bufferSize,
       changeCount: 0,
       filter: filter ?? DEFAULT_FILTER,
-      changes: [],
+      changes: new BoundedRecords<ReturnType<typeof toHistoryRecord>>(
+        bufferSize,
+        Math.floor(CONTRACT.limits.maxBufferedBytes / CONTRACT.limits.maxSubscriptions)
+      ),
       subscription: null,
       monitoredItem: null,
     };
 
-    await this.attach(session, entry);
-    this.entries.set(entry.id, entry);
-    return toRecord(entry);
+    this.pending++;
+    try {
+      await this.attach(session, entry);
+      this.entries.set(entry.id, entry);
+      return toRecord(entry);
+    } finally {
+      this.pending--;
+    }
   }
 
   /** Re-create every subscription on `session`, after the old one died.

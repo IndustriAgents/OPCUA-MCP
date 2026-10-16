@@ -114,8 +114,8 @@ class OPCUAMCPServer {
       tools: await this.tools.listTools(),
     }));
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) =>
-      this.tools.callTool(request)
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
+      this.tools.callTool(request, extra.signal)
     );
   }
 

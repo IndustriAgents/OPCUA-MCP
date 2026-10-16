@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..contract import CONTRACT
-from ..errors import ApplicationRefusal, describe_error, message
+from ..errors import ApplicationRefusal, UncertainOutcome, describe_error, message
 from ..limits import check_request_bounds
 from ..validation import validate_arguments
 
@@ -20,13 +20,13 @@ class ExecutionCall:
     attempt: int = 1
     session: str | None = None
     denied: bool = False
+    audit_snapshot: dict | None = None
 
 
 class ExecutionPort(Protocol):
     def new_call_id(self) -> str: ...
     async def wait_for_connection(self) -> None: ...
     def authorize(self, name: str, arguments: dict) -> None: ...
-    def allowed(self, call: ExecutionCall) -> None: ...
     def after(self, call: ExecutionCall, decision: str, reason: str = "") -> None: ...
     async def run(self, call: ExecutionCall) -> Any: ...
     def normalize_failure(self, name: str, error: Exception) -> Exception: ...
@@ -49,13 +49,16 @@ async def execute_tool(port: ExecutionPort, name: str, arguments: dict) -> Any:
         call.denied = True
         port.after(call, "denied", str(error))
         raise
-    port.allowed(call)
     try:
         result = await port.run(call)
     except Exception as error:
         reported = port.normalize_failure(name, error)
         if not call.denied:
-            port.after(call, "failed", describe_error(reported))
+            port.after(
+                call,
+                "uncertain" if isinstance(error, UncertainOutcome) else "failed",
+                describe_error(reported),
+            )
         raise reported from error.__cause__
     port.after(call, "completed")
     return port.normalize_result(result)

@@ -518,6 +518,24 @@
         },
         "maxNestingDepth": {
           "type": "number"
+        },
+        "maxConcurrentCalls": {
+          "type": "number"
+        },
+        "maxEventSubscriptions": {
+          "type": "number"
+        },
+        "maxCachedNodes": {
+          "type": "number"
+        },
+        "maxConditionMappings": {
+          "type": "number"
+        },
+        "maxBufferedBytes": {
+          "type": "number"
+        },
+        "controlAccountingTimeoutSeconds": {
+          "type": "number"
         }
       },
       "required": [
@@ -531,7 +549,13 @@
         "maxStringBytes",
         "maxByteStringBytes",
         "maxArrayItems",
-        "maxNestingDepth"
+        "maxNestingDepth",
+        "maxConcurrentCalls",
+        "maxEventSubscriptions",
+        "maxCachedNodes",
+        "maxConditionMappings",
+        "maxBufferedBytes",
+        "controlAccountingTimeoutSeconds"
       ],
       "additionalProperties": false
     },

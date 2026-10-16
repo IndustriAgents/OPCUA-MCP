@@ -51,6 +51,7 @@ def make_pki(root: Path) -> Path:
     (root / "policy-operator.json").write_text(json.dumps(policy), encoding="utf-8")
     (root / "policy-bad.json").write_text("{ not json", encoding="utf-8")
     (root / "audit").mkdir(exist_ok=True)
+    (root / "trust").mkdir(exist_ok=True)
     # Resolved, because the installers resolve relative paths against the working
     # directory as the OS reports it — /private/var/... on macOS, not /var/....
     return Path(os.path.realpath(root))
@@ -134,12 +135,17 @@ def test_install_case(case, impl, tmp_path):
     if expect["exit"] != 0:
         assert proc.stdout == "", f"{impl} previewed a config it refused"
         assert codes == ([expect["error"]] if expect.get("error") else []), output
+        for text in expect.get("messageIncludes", []):
+            assert text in proc.stderr, f"{impl}: refusal does not mention {text!r}: {output}"
         return
 
     assert codes == []
     warnings = re.findall(r"^WARNING \[([a-z-]+)\]:", proc.stderr, re.M)
     assert warnings == expect["warnings"], output
     assert "Security summary:" in proc.stderr
+    summary = proc.stderr[proc.stderr.index("Security summary:") :]
+    for text in expect.get("summary", []):
+        assert text in summary, f"{impl}: summary does not say {text!r}: {output}"
 
     entry = previewed_entry(client, proc.stdout)
     assert entry["env"] == redact_env(expect["env"])

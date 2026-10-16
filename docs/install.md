@@ -123,8 +123,8 @@ you are comfortable with one:
   anything, so it cannot write a configuration the server would refuse.
 - It **fails closed**. The default profile is `observe` (read-only), written into
   the config explicitly. A control profile has to be asked for with `--profile`,
-  and a control profile for a remote endpoint whose certificate is not pinned is
-  refused (see [Safety rules](#safety-rules)).
+  and a control profile for a remote endpoint whose server is not authenticated —
+  by a pinned certificate or a CA trust store — is refused (see [Safety rules](#safety-rules)).
 
 The easy path, for a real device — read-only, encrypted, and talking only to the
 server whose certificate you pinned:
@@ -195,6 +195,7 @@ lines as it does a secret. For an HMAC chain, install with `--audit-chain sha256
 | `--security-policy`, `--security-mode` | `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE` |
 | `--client-cert`, `--client-key`, `--application-uri` | `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_APPLICATION_URI` |
 | `--server-cert` | `OPCUA_SERVER_CERT`, which pins the server |
+| `--server-trust-store`, `--server-application-uri` | `OPCUA_SERVER_TRUST_STORE`, `OPCUA_SERVER_APPLICATION_URI`, which authenticate the server by its CA chain and expected URI instead of a pin |
 | `--username`, `--user-cert`, `--user-key` | `OPCUA_USERNAME`, `OPCUA_USER_CERT`, `OPCUA_USER_KEY` (for the password, see [Passwords](#passwords)) |
 | `--profile` | `OPCUA_PROFILE`: `observe` (also `read-only`; the default), `operator`, `full` |
 | `--policy-file`, `--allowed-tools`, `--allowed-write-nodes`, `--allowed-methods` | `OPCUA_POLICY_FILE`, `OPCUA_ALLOWED_TOOLS`, `OPCUA_ALLOWED_WRITE_NODES`, `OPCUA_ALLOWED_METHODS` |
@@ -210,7 +211,7 @@ And the installer's own:
 | `--dry-run` | Validate, print the target file, a redacted preview and the security summary; write nothing |
 | `--force` | Replace an existing `opcua` entry instead of refusing |
 | `--store-password-in-config` | Copy `$OPCUA_PASSWORD` into the config file, in plain text. See [Passwords](#passwords) |
-| `--allow-unverified-remote-control` | Write a control profile for a remote endpoint with no pinned certificate. Lab networks only |
+| `--allow-unverified-remote-control` | Write a control profile for a remote endpoint with no pinned certificate or CA trust store. Lab networks only |
 | `--version`, `--help` | As expected |
 
 The two runtimes' installers take the same flags and write the same
@@ -230,10 +231,11 @@ Refused outright (exit 1, nothing written):
   unreadable policy file, an unknown tool name, a hash chain with no audit file.
   The installer runs the server's own parsers on what it is about to write.
 - **A file that does not exist**, or an audit file in a directory that does not.
-- **`--profile operator` or `full` for a remote endpoint without
-  `--server-cert`**, unless `--allow-unverified-remote-control` is given. An
-  encrypted channel to an unpinned server is encrypted to whoever answers at that
-  address. "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an
+- **`--profile operator` or `full` for a remote endpoint whose server nothing
+  authenticates** — neither `--server-cert` nor `--server-trust-store` with
+  `--server-application-uri`, on a secured channel — unless
+  `--allow-unverified-remote-control` is given. An encrypted channel to an
+  unauthenticated server is encrypted to whoever answers at that address. "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an
   address the installer cannot parse counts as remote. The server's own lab
   override, `--allow-unverified-server-control`, does not stand in for this one:
   it is written into the config and opens control at runtime, while

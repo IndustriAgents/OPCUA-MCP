@@ -31,6 +31,7 @@ function makePki() {
   writeFileSync(join(root, "policy-operator.json"), JSON.stringify(policy));
   writeFileSync(join(root, "policy-bad.json"), "{ not json");
   mkdirSync(join(root, "audit"));
+  mkdirSync(join(root, "trust"));
   return root;
 }
 
@@ -80,6 +81,9 @@ describe("install cases (shared table)", () => {
       }
       if (expect.exit !== 0) {
         assert.equal(result.error, expect.error ?? null);
+        for (const text of expect.messageIncludes ?? []) {
+          assert.ok(result.message.includes(text), `refusal does not mention ${text}`);
+        }
         return;
       }
       assert.deepEqual(result.plan.env, expect.env);
@@ -93,6 +97,10 @@ describe("install cases (shared table)", () => {
         result.plan.warnings.map((w) => w.code),
         expect.warnings
       );
+      const summary = result.plan.summary.join("\n");
+      for (const text of expect.summary ?? []) {
+        assert.ok(summary.includes(text), `summary does not say ${text}:\n${summary}`);
+      }
     });
   }
 });

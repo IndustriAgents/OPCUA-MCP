@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer losses through existing dropped counts.
 - Read engineering ranges freshly for controls and refuse failed discovery
   rather than treating it as an absent range.
+- The `--install` command treats a server authenticated by a CA trust store
+  (`--server-trust-store` with `--server-application-uri`) as verified, as the
+  runtime does: a remote control profile no longer needs
+  `--allow-unverified-remote-control`, and the summary no longer says "NOT
+  verified" ([#241](https://github.com/IndustriAgents/OPCUA-MCP/issues/241)).
 
 ## [0.6.0] — 2026-10-14
 

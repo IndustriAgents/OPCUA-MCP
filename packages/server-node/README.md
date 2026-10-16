@@ -54,7 +54,9 @@ old one up, and records absolute paths — Claude Desktop is launched from the G
 and does not inherit a login shell's `PATH`, so a bare `"command": "npx"` often
 works in a terminal and fails in the app. The profile defaults to read-only; a
 control profile must be chosen with `--profile`, and for a remote endpoint needs a
-pinned `--server-cert`. Passwords are never accepted as flags. `--force` replaces
+secured channel whose server is authenticated, by a pinned `--server-cert` or by a
+CA `--server-trust-store` with `--server-application-uri`, unless
+`--allow-unverified-remote-control` is given. Passwords are never accepted as flags. `--force` replaces
 an existing `opcua` entry. Every flag and rule is in
 [docs/install.md](https://github.com/IndustriAgents/OPCUA-MCP/blob/main/docs/install.md#3---install--let-the-server-write-the-config).
 

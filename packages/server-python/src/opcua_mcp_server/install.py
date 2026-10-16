@@ -314,7 +314,7 @@ class InstallOptions:
     dry_run: bool = False
     #: Write $OPCUA_PASSWORD into the client config in plain text.
     store_password_in_config: bool = False
-    #: Write a control profile for a remote endpoint with no pinned certificate.
+    #: Write a control profile for a remote endpoint whose server nothing authenticates.
     allow_unverified_remote_control: bool = False
 
 
@@ -412,7 +412,11 @@ def _normalise(setting: dict[str, Any], raw: str, cwd: str) -> str:
         # directory nobody chose, so a relative path would resolve somewhere else.
         path = os.path.abspath(os.path.join(cwd, value))
         shown = "(path not shown: it names a private key)" if setting["sensitive"] else path
-        if setting.get("mustExist"):
+        if setting.get("mustExist") and setting.get("contents") == "trust-store":
+            # A trust store is a directory of CAs and CRLs, never a single file.
+            if not os.path.isdir(path):
+                raise InstallRefusal("file-missing", f"{flag}: no such directory {shown}")
+        elif setting.get("mustExist"):
             if not os.path.isfile(path):
                 raise InstallRefusal("file-missing", f"{flag}: no such file {shown}")
         elif not os.path.isdir(os.path.dirname(path)):
@@ -503,7 +507,10 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
     config = policy.config
     url = config_env["OPCUA_SERVER_URL"]
     loopback = is_loopback_endpoint(url)
-    pinned = security.server_cert is not None
+    # The runtime's own answer — a pin or a CA trust store, on a secured channel —
+    # so the installer never calls unverified a server the runtime would trust.
+    identity = config.server_identity
+    authenticated = identity.server_authenticated
     control = config.profile != "observe"
     control_tools = sorted(
         t["name"]
@@ -512,13 +519,20 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
     )
 
     # --- the one refusal that is about safety rather than validity ------------------
-    if control and not loopback and not pinned and not options.allow_unverified_remote_control:
+    if (
+        control
+        and not loopback
+        and not authenticated
+        and not options.allow_unverified_remote_control
+    ):
         raise InstallRefusal(
             "unverified-remote-control",
             f"profile={config.profile} would give control of {endpoint_host(url) or url}, a "
             f"remote endpoint whose identity nothing verifies. Pin its certificate with "
-            f"--server-cert (with --security-policy, --client-cert and --client-key), or pass "
-            f"--allow-unverified-remote-control to write it anyway on a lab network",
+            f"--server-cert, or trust its CA with --server-trust-store and "
+            f"--server-application-uri (either with --security-policy, --client-cert and "
+            f"--client-key), or pass --allow-unverified-remote-control to write it anyway on "
+            f"a lab network",
         )
 
     warnings: list[Finding] = []
@@ -526,7 +540,7 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
     def warn(code: str, message: str) -> None:
         warnings.append(Finding(code, message))
 
-    if control and not loopback and not pinned:
+    if control and not loopback and not authenticated:
         warn(
             "unverified-remote-control",
             f"writing profile={config.profile} for a remote endpoint whose identity is not "
@@ -539,11 +553,12 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
             "or written crosses the network unencrypted, to whoever answers. Set "
             "--security-policy",
         )
-    elif not loopback and not pinned:
+    elif not loopback and not authenticated:
         warn(
             "server-not-pinned",
             "the channel is encrypted to whichever server answers at this address. Pin the "
-            "server's certificate with --server-cert",
+            "server's certificate with --server-cert, or trust its CA with --server-trust-store "
+            "and --server-application-uri",
         )
     if security.username is not None and security.policy == "None":
         warn(
@@ -560,7 +575,7 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
     if config.allow_unverified_server_control:
         warn(
             "unverified-server-control-override",
-            "control tools are allowed on a channel whose server certificate is not pinned "
+            "control tools are allowed on a channel whose server is not authenticated "
             "(OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL). Never use this against production "
             "equipment",
         )
@@ -593,8 +608,9 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
         refusal = control_refusal(config)
         if refusal == "controlNeedsVerifiedServer":
             why = (
-                "the server's certificate is not pinned. Set --server-cert, or "
-                "--allow-unverified-server-control on a lab network"
+                "the server is not authenticated. Set --server-cert, or --server-trust-store "
+                "and --server-application-uri, or --allow-unverified-server-control on a lab "
+                "network"
             )
         elif refusal == "controlNeedsSecureChannel":
             why = (
@@ -630,16 +646,22 @@ def plan_install(options: InstallOptions, env: dict[str, str], cwd: str) -> Inst
         user = f'"{security.username}", {where}'
     if security.policy == "None":
         channel = "None: unencrypted and unsigned"
-        identity = "not verified (no channel security)"
+        verdict = "not verified (no channel security)"
     else:
         channel = f"{security.policy}, {security.mode}"
-        identity = "verified: pinned certificate" if pinned else "NOT verified: no --server-cert"
+        if identity.authentication_method == "pin":
+            verdict = "verified: pinned certificate"
+        elif identity.authentication_method == "trust-store":
+            expected = config_env["OPCUA_SERVER_APPLICATION_URI"]
+            verdict = f"verified: CA trust store, expecting {expected}"
+        else:
+            verdict = "NOT verified: no --server-cert or --server-trust-store"
     read_only = " (read-only)" if config.profile == "observe" else ""
     summary = [
         "Security summary:",
         f"  endpoint         {url} ({'this machine' if loopback else 'remote'})",
         f"  channel          {channel}",
-        f"  server identity  {identity}",
+        f"  server identity  {verdict}",
         f"  user             {user}",
         f"  profile          {config.profile}{read_only}",
         f"  control tools    {', '.join(control_tools) if control_tools else 'none'}",
@@ -849,7 +871,7 @@ def usage() -> str:
         ("--dry-run", "Validate, print a redacted preview, write nothing"),
         ("--store-password-in-config", "Copy $OPCUA_PASSWORD into the file (plain text)"),
         ("--allow-unverified-remote-control", "Write operator/full for a remote endpoint"),
-        ("", "with no pinned --server-cert (lab only)"),
+        ("", "with no --server-cert or --server-trust-store (lab only)"),
     ]:
         lines.append(f"  {flag:<38}{description}")
     schema = load_config_schema()

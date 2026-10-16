@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Bind control authorization and outcome audit records to the session used by
+  each attempt. Refresh namespaces on restored sessions and discard stale
+  permissions before a refresh, including when the namespace read fails.
+- Preserve uncertain control outcomes when recovery fails. Account for dispatched
+  Python controls after request cancellation without replaying them; cancellation
+  before dispatch prevents a late send in both runtimes.
+- Enforce pending subscription capacity, event subscription limits, concurrent
+  call admission, and byte/count bounds on buffers and session caches. Report
+  buffer losses through existing dropped counts.
+- Read engineering ranges freshly for controls and refuse failed discovery
+  rather than treating it as an absent range.
+- Python: refuse `OPCUA_SERVER_TRUST_STORE` with `OPCUA_PYTHON_BACKEND=legacy`
+  at startup instead of on the first connect
+  ([#242](https://github.com/IndustriAgents/OPCUA-MCP/issues/242)).
+
 ## [0.6.0] — 2026-10-14
 
 The production-hardening release from epic

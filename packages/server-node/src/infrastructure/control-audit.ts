@@ -66,10 +66,11 @@ export function auditDecision(
   connection: AuditConnection,
   name: string,
   args: Record<string, unknown>,
-  decision: "allowed" | "denied" | "failed" | "completed",
+  decision: "allowed" | "denied" | "failed" | "completed" | "uncertain",
   callId: string,
   attempt: number,
-  reason?: string
+  reason?: string,
+  targets?: Record<string, unknown>
 ): void {
   const tool = CONTRACT.tools.find((candidate) => candidate.name === name);
   if (!tool || !["control", "alarm-action"].includes(tool.accessClass)) return;
@@ -96,7 +97,7 @@ export function auditDecision(
         : {}),
       tool: name,
       decision,
-      targets: auditTargets(tool, args, policy),
+      targets: targets ?? auditTargets(tool, args, policy),
       reason: reason ?? null,
     })
   );

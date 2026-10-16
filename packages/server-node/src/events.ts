@@ -1,3 +1,5 @@
+import { BoundedCache, BoundedRecords } from "./resources.js";
+import { dispatchControl } from "./infrastructure/control-context.js";
 // OPC UA events and Alarms & Conditions: the filter, the record shape, and the
 // per-notifier event buffers the `subscribe_events` / `read_events` pair uses.
 //
@@ -167,7 +169,8 @@ interface EventBuffer {
  */
 export class EventSubscriptions {
   private buffers = new Map<string, EventBuffer>();
-  private conditionOfEvent = new Map<string, string>();
+  private conditionOfEvent = new BoundedCache<string, string>(CONTRACT.limits.maxConditionMappings);
+  private pending = new Set<string>();
 
   /** Remember the condition behind every event we hand out. */
   remember(records: EventRecord[]): void {
@@ -185,6 +188,10 @@ export class EventSubscriptions {
     return this.conditionOfEvent.get(eventId);
   }
 
+  forgetConditions(): void {
+    this.conditionOfEvent.clear();
+  }
+
   /** Start (or restart) buffering events from `nodeId`. */
   async subscribe(
     session: ClientSession,
@@ -195,20 +202,34 @@ export class EventSubscriptions {
     // Reported back to the caller: re-subscribing silently discards whatever the
     // previous subscription had buffered, and an agent that cannot tell that
     // happened reads the missing events as quiet.
-    const replaced = await this.drop(nodeId);
+    const limit = CONTRACT.limits.maxEventSubscriptions;
+    if (
+      this.pending.has(nodeId) ||
+      (!this.buffers.has(nodeId) && this.buffers.size + this.pending.size >= limit)
+    )
+      throw new Error(message("resourceBusy", { resource: "event subscriptions", limit }));
+    this.pending.add(nodeId);
+    try {
+      const replaced = await this.drop(nodeId);
 
-    const buffer: EventBuffer = {
-      session,
-      subscription: null,
-      severityMin,
-      size: bufferSize,
-      records: [],
-      dropped: 0,
-      resubscribed: false,
-    };
-    await this.attach(session, nodeId, buffer);
-    this.buffers.set(nodeId, buffer);
-    return { replaced };
+      const buffer: EventBuffer = {
+        session,
+        subscription: null,
+        severityMin,
+        size: bufferSize,
+        records: new BoundedRecords<EventRecord>(
+          bufferSize,
+          Math.floor(CONTRACT.limits.maxBufferedBytes / CONTRACT.limits.maxEventSubscriptions)
+        ),
+        dropped: 0,
+        resubscribed: false,
+      };
+      await this.attach(session, nodeId, buffer);
+      this.buffers.set(nodeId, buffer);
+      return { replaced };
+    } finally {
+      this.pending.delete(nodeId);
+    }
   }
 
   /** Re-create every event subscription on `session`, after the old one died.
@@ -225,6 +246,7 @@ export class EventSubscriptions {
    * so `read_events` says "not subscribed" rather than "nothing happened".
    */
   async reattach(session: ClientSession): Promise<void> {
+    this.conditionOfEvent.clear();
     for (const [nodeId, buffer] of [...this.buffers]) {
       try {
         await this.attach(session, nodeId, buffer);
@@ -268,11 +290,9 @@ export class EventSubscriptions {
       // pepper every open buffer with them.
       if (isRefreshMarker(record)) return;
       if (typeof record.severity === "number" && record.severity < buffer.severityMin) return;
+      const before = buffer.records.length;
       buffer.records.push(record);
-      if (buffer.records.length > buffer.size) {
-        buffer.records.splice(0, buffer.records.length - buffer.size);
-        buffer.dropped += 1;
-      }
+      buffer.dropped += before + 1 - buffer.records.length;
     });
 
     buffer.session = session;
@@ -594,7 +614,7 @@ export async function alarmAction(
     inputArguments = [new Variant({ dataType: DataType.Double, value: durationMs ?? 0 })];
   }
 
-  const result = await session.call({ objectId, methodId, inputArguments });
+  const result = await dispatchControl(() => session.call({ objectId, methodId, inputArguments }));
   return result.statusCode;
 }
 

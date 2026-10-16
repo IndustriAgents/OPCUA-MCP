@@ -863,6 +863,13 @@ class ToolPolicy:
         self._deny_complete = True
         self._deny_reason: str | None = None
 
+    def forget_resolution(self) -> None:
+        self._paths.clear()
+        self._subtree_bounds.clear()
+        self._deny = frozenset()
+        self._deny_complete = not bool(self.config.deny_read)
+        self._deny_reason = "namespace mapping changed"
+
     def bind_namespaces(self, uris: Sequence[str]) -> None:
         """Bind the live NamespaceArray, re-read on every (re)connect.
 

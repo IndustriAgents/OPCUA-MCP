@@ -81,6 +81,15 @@ def describe_targets(spec: dict, arguments: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
+def capture_audit(state, call):
+    connection = state.connection
+    return {
+        "session": state.session_id,
+        "generation": connection.session_generation if connection is not None else None,
+        "targets": _audit_targets(call.spec, call.arguments, state.policy),
+    }
+
+
 def _audit_decision(
     state: ServerState,
     name: str,
@@ -89,6 +98,7 @@ def _audit_decision(
     reason: str = "",
     call_id: str | None = None,
     attempt: int = 1,
+    snapshot: dict | None = None,
 ) -> None:
     """Write one line of the control audit trail."""
     spec = next((tool for tool in CONTRACT["tools"] if tool["name"] == name), None)
@@ -104,8 +114,14 @@ def _audit_decision(
         call_id=call_id,
         attempt=attempt,
         endpoint=state.url,
-        session=state.session_id,
-        session_generation=connection.session_generation if connection is not None else None,
+        session=snapshot["session"] if snapshot is not None else state.session_id,
+        session_generation=(
+            snapshot["generation"]
+            if snapshot is not None
+            else connection.session_generation
+            if connection is not None
+            else None
+        ),
         # null when OPCUA_OPERATOR_ID is unset, which is honest: this server has
         # no notion of who is calling, and a name nothing verified would be worse
         # than none.
@@ -126,7 +142,9 @@ def _audit_decision(
         ),
         tool=name,
         decision=decision,
-        targets=_audit_targets(spec, arguments, state.policy),
+        targets=snapshot["targets"]
+        if snapshot is not None
+        else _audit_targets(spec, arguments, state.policy),
         reason=reason or None,
     )
     state.audit.write(record)
@@ -145,11 +163,19 @@ def _audit_after(state: ServerState, name: str, arguments: dict[str, Any], *args
 
 
 def _audit_permission(
-    state: ServerState, name: str, arguments: dict[str, Any], *, call_id: str, attempt: int
+    state: ServerState,
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    call_id: str,
+    attempt: int,
+    snapshot: dict | None = None,
 ) -> None:
     """Record ``allowed`` before anything is sent — or refuse the call."""
     try:
-        _audit_decision(state, name, arguments, "allowed", call_id=call_id, attempt=attempt)
+        _audit_decision(
+            state, name, arguments, "allowed", call_id=call_id, attempt=attempt, snapshot=snapshot
+        )
     except AuditWriteError as error:
         print(f"AUDIT FAILURE: refusing {name} (call {call_id}): {error}", file=sys.stderr)
         raise ApplicationRefusal(

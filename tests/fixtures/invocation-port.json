@@ -11,8 +11,10 @@
       },
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:once",
         "reconnect:old-session"
@@ -30,8 +32,10 @@
       },
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:once",
         "reconnect:old-session"
@@ -49,8 +53,10 @@
       },
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:once",
         "reconnect:old-session"
@@ -68,8 +74,10 @@
       },
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:once",
         "reconnect:old-session"
@@ -81,14 +89,17 @@
       "tool": "read_opcua_nodes",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session",
+        "capabilities:2",
+        "session",
         "authorize:2",
         "allowed:2",
-        "capabilities:2",
         "dispatch:2"
       ],
       "attempt": 2,
@@ -103,14 +114,17 @@
       "raw": "second failure",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session",
+        "capabilities:2",
+        "session",
         "authorize:2",
         "allowed:2",
-        "capabilities:2",
         "dispatch:2"
       ],
       "attempt": 2
@@ -121,8 +135,10 @@
       "raw": "native timeout",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:once",
         "reconnect:old-session"
@@ -140,8 +156,10 @@
       },
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session"
@@ -155,11 +173,15 @@
       "raw": "test refusal",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session",
+        "capabilities:2",
+        "session",
         "authorize:2",
         "denied:2"
       ],
@@ -173,11 +195,15 @@
       "raw": "test refusal",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session",
+        "capabilities:2",
+        "session",
         "authorize:2",
         "allowed:2"
       ],
@@ -191,13 +217,13 @@
       "raw": "test refusal",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1",
         "log:resend",
         "reconnect:old-session",
-        "authorize:2",
-        "allowed:2",
         "capabilities:2"
       ],
       "attempt": 2
@@ -209,8 +235,10 @@
       "raw": "native timeout",
       "calls": [
         "connect",
-        "session",
         "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
         "dispatch:1"
       ],
       "attempt": 1
@@ -240,6 +268,109 @@
       "result": {
         "ok": true
       }
+    },
+    {
+      "name": "write_opcua_nodes remains uncertain when recovery fails",
+      "tool": "write_opcua_nodes",
+      "crash": "reconnect:old-session",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "write_opcua_nodes",
+        "reason": "native timeout; recovery failed: native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "call_opcua_method remains uncertain when recovery fails",
+      "tool": "call_opcua_method",
+      "crash": "reconnect:old-session",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "call_opcua_method",
+        "reason": "native timeout; recovery failed: native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "acknowledge_alarm remains uncertain when recovery fails",
+      "tool": "acknowledge_alarm",
+      "crash": "reconnect:old-session",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "acknowledge_alarm",
+        "reason": "native timeout; recovery failed: native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "act_on_alarm remains uncertain when recovery fails",
+      "tool": "act_on_alarm",
+      "crash": "reconnect:old-session",
+      "error": "uncertainOutcome",
+      "fields": {
+        "tool": "act_on_alarm",
+        "reason": "native timeout; recovery failed: native timeout",
+        "targets": "ns=2;i=5"
+      },
+      "calls": [
+        "connect",
+        "capabilities:1",
+        "session",
+        "authorize:1",
+        "allowed:1",
+        "dispatch:1",
+        "log:once",
+        "reconnect:old-session"
+      ],
+      "attempt": 1
+    },
+    {
+      "name": "initial session authorization prevents control dispatch",
+      "tool": "write_opcua_nodes",
+      "crash": "authorize:1",
+      "raw": "test refusal",
+      "calls": [
+        "connect",
+        "capabilities:1",
+        "session",
+        "authorize:1",
+        "denied:1"
+      ],
+      "attempt": 1,
+      "denied": true
     }
   ]
 }

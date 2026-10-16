@@ -27,7 +27,7 @@ from opcua import Client, ua
 from opcua.crypto import security_policies, uacrypto
 
 from .client_identity import CLIENT_APPLICATION_NAME, application_uri_problem
-from .python_backend import python_backend
+from .python_backend import parse_python_backend, python_backend
 from .transport_limits import advertise_limits, install_receive_guard
 
 #: Policies this runtime can negotiate — the four both runtimes share.
@@ -186,6 +186,10 @@ def parse_security_config(
             raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_SERVER_APPLICATION_URI")
         if not exists(server_trust_store):
             raise ValueError(f"OPCUA_SERVER_TRUST_STORE does not exist: {server_trust_store}")
+        # Only the asyncua backend validates against a trust store. Refused
+        # here so it stops startup, not the first connect (#242).
+        if parse_python_backend(env) == "legacy":
+            raise ValueError("OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua")
     elif server_application_uri:
         raise ValueError("OPCUA_SERVER_APPLICATION_URI requires OPCUA_SERVER_TRUST_STORE")
 

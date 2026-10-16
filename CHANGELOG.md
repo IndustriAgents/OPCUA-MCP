@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer losses through existing dropped counts.
 - Read engineering ranges freshly for controls and refuse failed discovery
   rather than treating it as an absent range.
+- Python: refuse `OPCUA_SERVER_TRUST_STORE` with `OPCUA_PYTHON_BACKEND=legacy`
+  at startup instead of on the first connect
+  ([#242](https://github.com/IndustriAgents/OPCUA-MCP/issues/242)).
 
 ## [0.6.0] — 2026-10-14
 

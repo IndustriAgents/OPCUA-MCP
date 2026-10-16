@@ -291,7 +291,7 @@ TRUST_STORE = {
 def test_refuses_a_trust_store_with_the_legacy_backend(backend):
     """At startup, like every other invalid combination, not on first connect (#242)."""
     with pytest.raises(
-        ValueError, match="^OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua$"
+        ValueError, match=r"^OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua$"
     ):
         parse({**TRUST_STORE, "OPCUA_PYTHON_BACKEND": backend})
 

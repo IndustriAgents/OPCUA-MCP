@@ -278,6 +278,38 @@ def test_refuses_to_pin_a_server_certificate_on_an_unsecured_channel():
         parse({"OPCUA_SERVER_CERT": "/pki/server.pem"})
 
 
+#: A valid trust-store configuration, before a backend is chosen.
+TRUST_STORE = {
+    "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+    **CERTS,
+    "OPCUA_SERVER_TRUST_STORE": "/pki/trusted",
+    "OPCUA_SERVER_APPLICATION_URI": "urn:example:server",
+}
+
+
+@pytest.mark.parametrize("backend", ["legacy", " LEGACY "])
+def test_refuses_a_trust_store_with_the_legacy_backend(backend):
+    """At startup, like every other invalid combination, not on first connect (#242)."""
+    with pytest.raises(
+        ValueError, match="^OPCUA_SERVER_TRUST_STORE requires OPCUA_PYTHON_BACKEND=asyncua$"
+    ):
+        parse({**TRUST_STORE, "OPCUA_PYTHON_BACKEND": backend})
+
+
+@pytest.mark.parametrize("backend", [None, "", "asyncua"])
+def test_accepts_a_trust_store_with_the_asyncua_backend(backend):
+    env = TRUST_STORE if backend is None else {**TRUST_STORE, "OPCUA_PYTHON_BACKEND": backend}
+    assert parse(env).server_trust_store == "/pki/trusted"
+
+
+@pytest.mark.parametrize("trust_store", [None, "", "  "])
+def test_the_legacy_backend_is_fine_without_a_trust_store(trust_store):
+    env = {"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS, "OPCUA_PYTHON_BACKEND": "legacy"}
+    if trust_store is not None:
+        env["OPCUA_SERVER_TRUST_STORE"] = trust_store
+    assert parse(env).server_trust_store is None
+
+
 def test_requires_the_user_certificate_and_its_key_together():
     base = {"OPCUA_SECURITY_POLICY": "Basic256Sha256", **CERTS}
     with pytest.raises(ValueError, match="must be set together"):

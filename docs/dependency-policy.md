@@ -58,7 +58,7 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 | `jsonschema` | `>=4.23,<5` | Draft 2020-12 input and result validation | Schema validation |
 | `typing-extensions` | `>=4.12,<5` | Generated TypedDict types on Python 3.10 | Static contract types |
 | `mcp[cli]` | `>=2.3.0,<3` | MCP protocol, stdio transport, tool input-schema validation | MCP protocol, schema validation |
-| `asyncua` | `>=2.0.1,<2.1` | Default OPC UA client and bounded transport | OPC UA transport, certificates |
+| `asyncua` | `>=2.1.0,<2.2` | Default OPC UA client and bounded transport | OPC UA transport, certificates |
 | `pyopenssl` | `>=26.4.0,<27` | Native OpenSSL chain and signed CRL validation | Certificates, revocation |
 | `opcua` | `>=0.98.13,<0.99` | Internal UA DTOs and one-release legacy rollback client | OPC UA transport, certificates |
 

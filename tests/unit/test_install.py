@@ -331,3 +331,28 @@ def test_codex_merge_refuses_an_entry_it_cannot_rewrite(existing):
 )
 def test_loopback_is_recognised_and_everything_else_is_remote(url, loopback):
     assert is_loopback_endpoint(url) is loopback
+
+
+def test_trust_store_is_still_rejected_on_legacy_backend(tmp_path):
+    from opcua_mcp_server.install import InstallRefusal, plan_install
+
+    for name in ("client.pem", "client_key.pem"):
+        (tmp_path / name).write_text("placeholder\n", encoding="utf-8")
+    (tmp_path / "trust-store").mkdir()
+    options = InstallOptions(
+        client="claude-desktop",
+        settings={
+            "server_url": URL,
+            "python_backend": "legacy",
+            "security_policy": "Basic256Sha256",
+            "client_cert": "client.pem",
+            "client_key": "client_key.pem",
+            "server_trust_store": "trust-store",
+            "server_application_uri": "urn:example:plc",
+            "profile": "operator",
+            "allowed_write_nodes": "ns=2;i=5",
+        },
+    )
+    with pytest.raises(InstallRefusal, match="OPCUA_PYTHON_BACKEND=asyncua") as exc:
+        plan_install(options, env={}, cwd=tmp_path)
+    assert exc.value.code == "invalid-config"

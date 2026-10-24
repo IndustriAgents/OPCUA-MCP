@@ -31,6 +31,7 @@ function makePki() {
   writeFileSync(join(root, "policy-operator.json"), JSON.stringify(policy));
   writeFileSync(join(root, "policy-bad.json"), "{ not json");
   mkdirSync(join(root, "audit"));
+  mkdirSync(join(root, "trust-store"));
   return root;
 }
 
@@ -81,6 +82,9 @@ describe("install cases (shared table)", () => {
       if (expect.exit !== 0) {
         assert.equal(result.error, expect.error ?? null);
         return;
+      }
+      for (const line of expect.summaryIncludes ?? []) {
+        assert.ok(result.plan.summary.includes(line), `missing summary line: ${line}`);
       }
       assert.deepEqual(result.plan.env, expect.env);
       assert.deepEqual(

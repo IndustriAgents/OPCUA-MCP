@@ -1,13 +1,163 @@
 {
-  "$comment": "One table of `--install` invocations and what each must produce, driven through BOTH runtimes (#135): tests/unit/test_install_cases.py runs every case through the Python and the Node command lines as subprocesses, with HOME redirected at a scratch directory, and packages/server-node/test/install-cases.test.mjs runs it through the Node parser and planner in-process. Two installers that pass the same table write the same configuration, refuse the same things and say the same warnings. `args` follow `--install <client> --dry-run`; `{pki}` is a scratch directory, also the working directory, holding server.pem, client.pem, client_key.pem, user.pem, user_key.pem, policy-operator.json (profile operator, one writable node), policy-bad.json (not JSON) and an empty audit/ directory. `env` is the installer's own environment. `expect.exit` is the exit code: 2 for a usage error, 1 for a refusal. `expect.error` is the code printed as `Error [code]:` (null for an argparse-level usage error, which prints no code). `expect.env` is the exact environment the entry carries, unredacted; `expect.envVars` the variables Codex passes through; `expect.warnings` the exact `WARNING [code]` sequence. `neverPrinted` are strings that must not appear in any output. `byRuntime` overrides `expect` for a runtime, and exists only for a difference declared in contract/runtime-differences.json.",
+  "$comment": "One table of `--install` invocations and what each must produce, driven through BOTH runtimes (#135): tests/unit/test_install_cases.py runs every case through the Python and the Node command lines as subprocesses, with HOME redirected at a scratch directory, and packages/server-node/test/install-cases.test.mjs runs it through the Node parser and planner in-process. Two installers that pass the same table write the same configuration, refuse the same things and say the same warnings. `args` follow `--install <client> --dry-run`; `{pki}` is a scratch directory, also the working directory, holding server.pem, client.pem, client_key.pem, user.pem, user_key.pem, policy-operator.json (profile operator, one writable node), policy-bad.json (not JSON) and empty audit/ and trust-store/ directories. `env` is the installer's own environment. `expect.exit` is the exit code: 2 for a usage error, 1 for a refusal. `expect.error` is the code printed as `Error [code]:` (null for an argparse-level usage error, which prints no code). `expect.env` is the exact environment the entry carries, unredacted; `expect.envVars` the variables Codex passes through; `expect.summaryIncludes` are exact summary lines; `expect.warnings` the exact `WARNING [code]` sequence. `neverPrinted` are strings that must not appear in any output. `byRuntime` overrides `expect` for a runtime, and exists only for a difference declared in contract/runtime-differences.json.",
   "cases": [
+    {
+      "name": "a trust store path must be a directory, not a certificate file",
+      "args": [
+        "--server-trust-store",
+        "server.pem",
+        "--server-application-uri",
+        "urn:example:plc"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "file-missing"
+      }
+    },
+    {
+      "name": "remote operator with a trust store needs neither unverified-control override",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--server-trust-store",
+        "trust-store",
+        "--server-application-uri",
+        "urn:example:plc",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--audit-file",
+        "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 0,
+        "env": {
+          "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840",
+          "OPCUA_SECURITY_POLICY": "Basic256Sha256",
+          "OPCUA_CLIENT_CERT": "{pki}/client.pem",
+          "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
+          "OPCUA_SERVER_TRUST_STORE": "{pki}/trust-store",
+          "OPCUA_SERVER_APPLICATION_URI": "urn:example:plc",
+          "OPCUA_PROFILE": "operator",
+          "OPCUA_ALLOWED_WRITE_NODES": "ns=2;i=5",
+          "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
+        },
+        "warnings": [],
+        "summaryIncludes": [
+          "  server identity  verified: trust store",
+          "  control tools    write_opcua_nodes"
+        ]
+      }
+    },
+    {
+      "name": "a trust store without the expected application URI is refused",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--server-trust-store",
+        "trust-store",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--audit-file",
+        "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "invalid-config"
+      }
+    },
+    {
+      "name": "a trust store without channel security is refused",
+      "args": [
+        "--server-trust-store",
+        "trust-store",
+        "--server-application-uri",
+        "urn:example:plc"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "invalid-config"
+      }
+    },
+    {
+      "name": "a trust store cannot be combined with a certificate pin",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--server-trust-store",
+        "trust-store",
+        "--server-application-uri",
+        "urn:example:plc",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--audit-file",
+        "audit/control.jsonl",
+        "--server-cert",
+        "server.pem"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "invalid-config"
+      }
+    },
+    {
+      "name": "a missing trust store is refused",
+      "args": [
+        "--url",
+        "opc.tcp://plc.example:4840",
+        "--security-policy",
+        "Basic256Sha256",
+        "--client-cert",
+        "client.pem",
+        "--client-key",
+        "client_key.pem",
+        "--server-trust-store",
+        "missing-trust-store",
+        "--server-application-uri",
+        "urn:example:plc",
+        "--profile",
+        "operator",
+        "--allowed-write-nodes",
+        "ns=2;i=5",
+        "--audit-file",
+        "audit/control.jsonl"
+      ],
+      "expect": {
+        "exit": 1,
+        "error": "file-missing"
+      }
+    },
     {
       "name": "the default is a read-only profile on this machine, written explicitly",
       "args": [],
       "expect": {
         "exit": 0,
         "env": { "OPCUA_SERVER_URL": "opc.tcp://localhost:4840", "OPCUA_PROFILE": "observe" },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -16,7 +166,8 @@
       "expect": {
         "exit": 0,
         "env": { "OPCUA_SERVER_URL": "opc.tcp://127.0.0.1:4840", "OPCUA_PROFILE": "observe" },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -25,7 +176,8 @@
       "expect": {
         "exit": 0,
         "env": { "OPCUA_SERVER_URL": "opc.tcp://plc.example:4840", "OPCUA_PROFILE": "observe" },
-        "warnings": ["no-channel-security"]
+        "warnings": ["no-channel-security"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -45,7 +197,8 @@
           "OPCUA_CLIENT_KEY": "{pki}/client_key.pem",
           "OPCUA_PROFILE": "observe"
         },
-        "warnings": ["server-not-pinned"]
+        "warnings": ["server-not-pinned"],
+        "summaryIncludes": ["  server identity  NOT verified: no --server-cert or --server-trust-store"]
       }
     },
     {
@@ -70,7 +223,8 @@
           "OPCUA_SERVER_CERT": "{pki}/server.pem",
           "OPCUA_PROFILE": "observe"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  verified: pinned certificate"]
       }
     },
     {
@@ -99,7 +253,8 @@
           "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl",
           "OPCUA_OPERATOR_ID": "line-1"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  verified: pinned certificate"]
       }
     },
     {
@@ -112,7 +267,8 @@
           "OPCUA_PROFILE": "observe",
           "OPCUA_POLICY_FILE": "{pki}/policy-operator.json"
         },
-        "warnings": ["policy-file-profile-overridden"]
+        "warnings": ["policy-file-profile-overridden"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -166,7 +322,8 @@
           "OPCUA_PROFILE": "operator",
           "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
         },
-        "warnings": ["unverified-remote-control", "server-not-pinned", "no-control-tools"]
+        "warnings": ["unverified-remote-control", "server-not-pinned", "no-control-tools"],
+        "summaryIncludes": ["  server identity  NOT verified: no --server-cert or --server-trust-store"]
       }
     },
     {
@@ -186,7 +343,8 @@
           "OPCUA_ALLOWED_METHODS": "ns=2;i=20|ns=2;i=31",
           "OPCUA_ALLOW_INSECURE_CONTROL": "true"
         },
-        "warnings": ["insecure-control-override", "control-without-audit-file"]
+        "warnings": ["insecure-control-override", "control-without-audit-file"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -205,7 +363,8 @@
           "OPCUA_ALLOW_INSECURE_CONTROL": "true",
           "OPCUA_AUDIT_FILE": "{pki}/audit/control.jsonl"
         },
-        "warnings": ["insecure-control-override", "full-profile"]
+        "warnings": ["insecure-control-override", "full-profile"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -214,7 +373,8 @@
       "expect": {
         "exit": 0,
         "env": { "OPCUA_SERVER_URL": "opc.tcp://localhost:4840", "OPCUA_PROFILE": "operator" },
-        "warnings": ["control-without-audit-file", "no-control-tools"]
+        "warnings": ["control-without-audit-file", "no-control-tools"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -227,7 +387,8 @@
           "OPCUA_PROFILE": "observe",
           "OPCUA_ALLOW_OUT_OF_RANGE_WRITES": "true"
         },
-        "warnings": ["out-of-range-writes"]
+        "warnings": ["out-of-range-writes"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -241,7 +402,8 @@
           "OPCUA_RECONNECT_MAX_RETRY": "-1",
           "OPCUA_SESSION_TIMEOUT_MS": "30000"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -266,7 +428,8 @@
           "OPCUA_USER_KEY": "{pki}/user_key.pem",
           "OPCUA_PROFILE": "observe"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  verified: pinned certificate"]
       }
     },
     {
@@ -287,7 +450,8 @@
           "OPCUA_SERVER_CERT": "{pki}/server.pem",
           "OPCUA_PROFILE": "observe"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  verified: pinned certificate"]
       },
       "byRuntime": { "python": { "exit": 1, "error": "invalid-config" } }
     },
@@ -322,7 +486,8 @@
         },
         "warnings": [
           "unverified-server-control-override"
-        ]
+        ],
+        "summaryIncludes": ["  server identity  NOT verified: no --server-cert or --server-trust-store"]
       }
     },
     {
@@ -354,7 +519,8 @@
         },
         "warnings": [
           "no-control-tools"
-        ]
+        ],
+        "summaryIncludes": ["  server identity  NOT verified: no --server-cert or --server-trust-store"]
       }
     },
     {
@@ -393,7 +559,8 @@
           "unverified-remote-control",
           "server-not-pinned",
           "unverified-server-control-override"
-        ]
+        ],
+        "summaryIncludes": ["  server identity  NOT verified: no --server-cert or --server-trust-store"]
       }
     },
     {
@@ -437,7 +604,8 @@
           "OPCUA_AUDIT_FSYNC": "none",
           "OPCUA_AUDIT_CHAIN": "sha256"
         },
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       }
     },
     {
@@ -623,7 +791,8 @@
           "OPCUA_PROFILE": "observe"
         },
         "envVars": ["OPCUA_PASSWORD"],
-        "warnings": []
+        "warnings": [],
+        "summaryIncludes": ["  server identity  verified: pinned certificate"]
       },
       "neverPrinted": ["env-password-value"]
     },
@@ -639,7 +808,8 @@
           "OPCUA_PASSWORD": "env-password-value",
           "OPCUA_PROFILE": "observe"
         },
-        "warnings": ["password-over-unencrypted-channel", "password-stored-in-config"]
+        "warnings": ["password-over-unencrypted-channel", "password-stored-in-config"],
+        "summaryIncludes": ["  server identity  not verified (no channel security)"]
       },
       "neverPrinted": ["env-password-value"]
     },

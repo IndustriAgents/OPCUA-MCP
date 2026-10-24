@@ -32,7 +32,7 @@ import { dirname, join, resolve } from "path";
 import { parseAuditConfig, runVerify } from "./audit.js";
 import { SERVER_URL, parseReconnectConfig } from "./config.js";
 import { CONTRACT, VERSION, configSchema, type ConfigSetting } from "./contract.js";
-import { ToolPolicy, controlRefusal, parsePolicyConfig } from "./policy.js";
+import { ToolPolicy, controlRefusal, parsePolicyConfig, serverIdentity } from "./policy.js";
 import { parseSecurityConfig } from "./security.js";
 
 /** How an MCP client is told to launch this server. */
@@ -329,7 +329,7 @@ export interface InstallOptions {
   dryRun: boolean;
   /** Write $OPCUA_PASSWORD into the client config in plain text. */
   storePasswordInConfig: boolean;
-  /** Write a control profile for a remote endpoint with no pinned certificate. */
+  /** Write a control profile for a remote endpoint with no verified identity. */
   allowUnverifiedRemoteControl: boolean;
 }
 
@@ -357,7 +357,7 @@ export function usage(): string {
     `  ${"--dry-run".padEnd(38)}Validate, print a redacted preview, write nothing`,
     `  ${"--store-password-in-config".padEnd(38)}Copy $OPCUA_PASSWORD into the file (plain text)`,
     `  ${"--allow-unverified-remote-control".padEnd(38)}Write operator/full for a remote endpoint`,
-    `  ${"".padEnd(38)}with no pinned --server-cert (lab only)`,
+    `  ${"".padEnd(38)}with no verified server identity (lab only)`,
   ];
   const { categories } = configSchema();
   let category = "";
@@ -662,8 +662,15 @@ function normalise(setting: ConfigSetting, raw: string, cwd: string): string {
       const path = resolve(cwd, value);
       const shown = setting.sensitive ? "(path not shown: it names a private key)" : path;
       if (setting.mustExist) {
-        if (!existsSync(path) || !statSync(path).isFile()) {
-          throw new InstallRefusal("file-missing", `${flag}: no such file ${shown}`);
+        const trustStore = setting.contents === "trust-store";
+        if (
+          !existsSync(path) ||
+          !(trustStore ? statSync(path).isDirectory() : statSync(path).isFile())
+        ) {
+          throw new InstallRefusal(
+            "file-missing",
+            `${flag}: no such ${trustStore ? "directory" : "file"} ${shown}`
+          );
         }
       } else if (!existsSync(dirname(path)) || !statSync(dirname(path)).isDirectory()) {
         throw new InstallRefusal(
@@ -762,7 +769,7 @@ export function planInstall(
   const { config } = policy;
   const url = env.OPCUA_SERVER_URL;
   const loopback = isLoopbackEndpoint(url);
-  const pinned = security.serverCert !== undefined;
+  const identity = serverIdentity(probe);
   const control = config.profile !== "observe";
   const controlTools = CONTRACT.tools
     .filter(
@@ -773,19 +780,24 @@ export function planInstall(
     .sort();
 
   // --- the one refusal that is about safety rather than validity ------------------
-  if (control && !loopback && !pinned && !options.allowUnverifiedRemoteControl) {
+  if (
+    control &&
+    !loopback &&
+    !identity.serverAuthenticated &&
+    !options.allowUnverifiedRemoteControl
+  ) {
     throw new InstallRefusal(
       "unverified-remote-control",
       `profile=${config.profile} would give control of ${endpointHost(url) || url}, a remote ` +
-        `endpoint whose identity nothing verifies. Pin its certificate with --server-cert ` +
-        `(with --security-policy, --client-cert and --client-key), or pass ` +
+        `endpoint whose identity nothing verifies. Use --server-cert or --server-trust-store ` +
+        `with --server-application-uri (with --security-policy, --client-cert and --client-key), or pass ` +
         `--allow-unverified-remote-control to write it anyway on a lab network`
     );
   }
 
   const warnings: Finding[] = [];
   const warn = (code: string, message: string) => warnings.push({ code, message });
-  if (control && !loopback && !pinned) {
+  if (control && !loopback && !identity.serverAuthenticated) {
     warn(
       "unverified-remote-control",
       `writing profile=${config.profile} for a remote endpoint whose identity is not ` +
@@ -798,11 +810,11 @@ export function planInstall(
       "the endpoint is remote and the channel has no security policy: every value read or " +
         "written crosses the network unencrypted, to whoever answers. Set --security-policy"
     );
-  } else if (!loopback && !pinned) {
+  } else if (!loopback && !identity.serverAuthenticated) {
     warn(
       "server-not-pinned",
       "the channel is encrypted to whichever server answers at this address. Pin the " +
-        "server's certificate with --server-cert"
+        "server's certificate with --server-cert, or use --server-trust-store with --server-application-uri"
     );
   }
   if (security.username !== undefined && security.policy === "None") {
@@ -822,7 +834,7 @@ export function planInstall(
   if (config.allowUnverifiedServerControl) {
     warn(
       "unverified-server-control-override",
-      "control tools are allowed on a channel whose server certificate is not pinned " +
+      "control tools are allowed on a channel whose server identity is not verified " +
         "(OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL). Never use this against production equipment"
     );
   }
@@ -859,7 +871,8 @@ export function planInstall(
       "no-control-tools",
       `profile=${config.profile} offers no control tool with these settings: ` +
         (refusal === "controlNeedsVerifiedServer"
-          ? "the server's certificate is not pinned. Set --server-cert, or " +
+          ? "the server's identity is not verified. Set --server-cert or " +
+            "--server-trust-store with --server-application-uri, or " +
             "--allow-unverified-server-control on a lab network"
           : refusal === "controlNeedsSecureChannel"
             ? "the channel has no security policy. Set --security-policy, or " +
@@ -894,11 +907,13 @@ export function planInstall(
         : `${security.policy}, ${security.mode}`
     }`,
     `  server identity  ${
-      security.policy === "None"
+      !identity.channelSecured
         ? "not verified (no channel security)"
-        : pinned
-          ? "verified: pinned certificate"
-          : "NOT verified: no --server-cert"
+        : identity.serverAuthenticated
+          ? identity.authenticationMethod === "pin"
+            ? "verified: pinned certificate"
+            : "verified: trust store"
+          : "NOT verified: no --server-cert or --server-trust-store"
     }`,
     `  user             ${user}`,
     `  profile          ${config.profile}${config.profile === "observe" ? " (read-only)" : ""}`,

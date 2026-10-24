@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Both installers recognize CA trust stores on secured channels as authenticated
+  servers for remote control profiles, validate trust-store paths as directories,
+  and report trust-store authentication in the security summary
+  ([#241](https://github.com/IndustriAgents/OPCUA-MCP/issues/241)).
 - Bind control authorization and outcome audit records to the session used by
   each attempt. Refresh namespaces on restored sessions and discard stale
   permissions before a refresh, including when the namespace read fails.

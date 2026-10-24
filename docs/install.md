@@ -20,7 +20,9 @@ Four ways in, roughly in order of how little you need already installed.
 > connection — fine for the bundled mock or a lab server, not for production
 > equipment. Set a security policy and credentials before pointing it at anything
 > real: `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`, `OPCUA_CLIENT_CERT`,
-> `OPCUA_CLIENT_KEY`, `OPCUA_SERVER_CERT` to pin the server, and a user identity
+> `OPCUA_CLIENT_KEY`, and either `OPCUA_SERVER_CERT` to pin the server or
+> `OPCUA_SERVER_TRUST_STORE` with `OPCUA_SERVER_APPLICATION_URI` to validate it
+> against a CA trust store, plus a user identity
 > (the `.mcpb` bundle offers all of these as settings fields, and `--install`
 > as flags). Both servers warn on stderr while running unsecured.
 >
@@ -118,13 +120,14 @@ you are comfortable with one:
   the app — the single most common way MCP setup goes wrong, and `nvm` users hit
   it every time.
 - It can express the whole security model — channel security, a pinned server
-  certificate, user identity, tool profile, policy file, audit trail — and it
-  checks the result with **the server's own startup parsers** before writing
-  anything, so it cannot write a configuration the server would refuse.
+  certificate or CA trust store, user identity, tool profile, policy file, audit
+  trail — and it checks the result with **the server's own startup parsers**
+  before writing anything, so it cannot write a configuration the server would
+  refuse.
 - It **fails closed**. The default profile is `observe` (read-only), written into
   the config explicitly. A control profile has to be asked for with `--profile`,
-  and a control profile for a remote endpoint whose certificate is not pinned is
-  refused (see [Safety rules](#safety-rules)).
+  and a control profile for a remote endpoint whose identity is not authenticated
+  is refused (see [Safety rules](#safety-rules)).
 
 The easy path, for a real device — read-only, encrypted, and talking only to the
 server whose certificate you pinned:
@@ -155,7 +158,8 @@ Against the bundled mock or a lab server on this machine,
 ### Letting the assistant operate equipment
 
 Control tools (writes, method calls, alarm actions) need an explicit profile, an
-allowlist, and — for a remote endpoint — a pinned server certificate:
+allowlist, and — for a remote endpoint — a secured channel with either a pinned
+server certificate or a CA trust store and expected server application URI:
 
 ```bash
 opcua-mcp-server --install claude-desktop \
@@ -168,6 +172,11 @@ opcua-mcp-server --install claude-desktop \
   --audit-file /var/log/opcua-mcp/audit.jsonl \
   --operator-id line-1
 ```
+
+Instead of `--server-cert`, use `--server-trust-store /etc/opcua/trust` with
+`--server-application-uri urn:example:plc` to authenticate against a CA trust
+store. The trust-store path must be a directory; Python requires the default
+`asyncua` backend. Both methods require channel security and client credentials.
 
 The policy file format, and why each of these matters, is in
 [SECURITY.md](../SECURITY.md#tool-profiles-and-control-policy).
@@ -195,6 +204,7 @@ lines as it does a secret. For an HMAC chain, install with `--audit-chain sha256
 | `--security-policy`, `--security-mode` | `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE` |
 | `--client-cert`, `--client-key`, `--application-uri` | `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`, `OPCUA_APPLICATION_URI` |
 | `--server-cert` | `OPCUA_SERVER_CERT`, which pins the server |
+| `--server-trust-store`, `--server-application-uri` | `OPCUA_SERVER_TRUST_STORE` and required `OPCUA_SERVER_APPLICATION_URI`, which authenticate the server against a CA trust store (Python requires the default `asyncua` backend) |
 | `--username`, `--user-cert`, `--user-key` | `OPCUA_USERNAME`, `OPCUA_USER_CERT`, `OPCUA_USER_KEY` (for the password, see [Passwords](#passwords)) |
 | `--profile` | `OPCUA_PROFILE`: `observe` (also `read-only`; the default), `operator`, `full` |
 | `--policy-file`, `--allowed-tools`, `--allowed-write-nodes`, `--allowed-methods` | `OPCUA_POLICY_FILE`, `OPCUA_ALLOWED_TOOLS`, `OPCUA_ALLOWED_WRITE_NODES`, `OPCUA_ALLOWED_METHODS` |
@@ -210,31 +220,34 @@ And the installer's own:
 | `--dry-run` | Validate, print the target file, a redacted preview and the security summary; write nothing |
 | `--force` | Replace an existing `opcua` entry instead of refusing |
 | `--store-password-in-config` | Copy `$OPCUA_PASSWORD` into the config file, in plain text. See [Passwords](#passwords) |
-| `--allow-unverified-remote-control` | Write a control profile for a remote endpoint with no pinned certificate. Lab networks only |
+| `--allow-unverified-remote-control` | Write a control profile for a remote endpoint with no verified server identity. Lab networks only |
 | `--version`, `--help` | As expected |
 
 The two runtimes' installers take the same flags and write the same
 configuration for the same input: one shared table of cases,
 [`tests/fixtures/install-cases.json`](../tests/fixtures/install-cases.json), holds
-both to it. The one exception is a declared runtime difference. Each validates
-with its own server's parser, so the Python installer refuses the two AES
-security policies its runtime cannot negotiate.
+both to it. Each validates with its own server's parser, so the Python installer
+refuses the two AES security policies its runtime cannot negotiate and trust stores
+when the `legacy` backend is selected. `--python-backend` is Python-only.
 
 ### Safety rules
 
 Refused outright (exit 1, nothing written):
 
 - **A configuration the server would refuse at startup**: a mode without a
-  policy, a policy without a client certificate, a pinned server certificate or
-  a user certificate with no channel security, a username with no password, an
-  unreadable policy file, an unknown tool name, a hash chain with no audit file.
-  The installer runs the server's own parsers on what it is about to write.
-- **A file that does not exist**, or an audit file in a directory that does not.
-- **`--profile operator` or `full` for a remote endpoint without
-  `--server-cert`**, unless `--allow-unverified-remote-control` is given. An
-  encrypted channel to an unpinned server is encrypted to whoever answers at that
-  address. "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an
-  address the installer cannot parse counts as remote. The server's own lab
+  policy, a policy without a client certificate, a pinned server certificate,
+  trust store or user certificate with no channel security, a username with no
+  password, an unreadable policy file, an unknown tool name, a hash chain with no
+  audit file, or a trust store without its expected server application URI. The
+  installer runs the server's own parsers on what it is about to write.
+- **A file or trust-store directory that does not exist**, or an audit file in
+  a directory that does not.
+- **`--profile operator` or `full` for a remote endpoint without an authenticated
+  server** (a secured channel plus either `--server-cert` or
+  `--server-trust-store` with `--server-application-uri`), unless
+  `--allow-unverified-remote-control` is given. An encrypted channel to an
+  unauthenticated server is encrypted to whoever answers at that address.
+  "Remote" is anything but `localhost`, `127.0.0.0/8` and `::1`; an address the installer cannot parse counts as remote. The server's own lab
   override, `--allow-unverified-server-control`, does not stand in for this one:
   it is written into the config and opens control at runtime, while
   `--allow-unverified-remote-control` is only the acknowledgement that doing so
@@ -246,13 +259,13 @@ secret as a flag (`--password`), or a setting kept off the installer
 (`--audit-chain-key-file`).
 
 Written, with a `WARNING [code]` on stderr: a remote endpoint with no channel
-security (`no-channel-security`) or with an unpinned server (`server-not-pinned`);
-a password on an unencrypted channel; a password stored in the file; the
+security (`no-channel-security`) or with an unauthenticated server
+(`server-not-pinned`); a password on an unencrypted channel; a password stored in the file; the
 `OPCUA_ALLOW_INSECURE_CONTROL`, `OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL` or
 `OPCUA_ALLOW_OUT_OF_RANGE_WRITES` overrides; the `full` profile; a control profile
 with no audit file, or one the server would offer no control tool (the warning
-gives the server's own reason: no allowlist, no security policy, or no pinned
-certificate); and a policy file whose `profile` the explicit `observe` default
+gives the server's own reason: no allowlist, no security policy, or no pin or
+trust-store verification); and a policy file whose `profile` the explicit `observe` default
 overrides.
 
 ### Passwords

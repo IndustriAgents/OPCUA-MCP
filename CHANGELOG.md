@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `fast-uri` dependency from 3.1.8 to 3.1.9 (#255).
+
 - Node: update the locked `body-parser` dependency from 2.3.0 to 2.4.0 (#256).
 
 - Node: update the locked `node-forge` dependency from 1.4.0 to 1.4.3 (#260).

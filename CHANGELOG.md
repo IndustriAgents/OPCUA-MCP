@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Python: update the locked `setuptools` dependency from 84.0.0 to 84.1.0 (#257).
 
+- Node: update the locked `qs` dependency from 6.16.0 to 6.17.1 (#262).
+
 - Both installers recognize CA trust stores on secured channels as authenticated
   servers for remote control profiles, validate trust-store paths as directories,
   and report trust-store authentication in the security summary

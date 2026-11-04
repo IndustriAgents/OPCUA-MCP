@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Python: update the locked `setuptools` dependency from 84.0.0 to 84.1.0 (#257).
+
 - Node: update the locked `node-opcua-client` dependency from 2.187.3 to 2.187.18 and deduplicate its client-stack crypto dependencies on 6.2.3 (#249).
 
 - Node: update the locked `node-opcua-crypto` dependency from 6.2.0 to 6.2.3 (#250).

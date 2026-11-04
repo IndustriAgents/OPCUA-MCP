@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `body-parser` dependency from 2.3.0 to 2.4.0 (#256).
+
 - Node: update the locked `qs` dependency from 6.16.0 to 6.17.1 (#262).
 
 - Both installers recognize CA trust stores on secured channels as authenticated

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `node-opcua-client` dependency from 2.187.3 to 2.187.18 and deduplicate its client-stack crypto dependencies on 6.2.3 (#249).
+
 - Node: update the locked `node-opcua-crypto` dependency from 6.2.0 to 6.2.3 (#250).
 
 - Node: exit with a failure code after draining startup configuration diagnostics,

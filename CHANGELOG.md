@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Python tooling: update Ruff from 0.17.0 to 0.17.2 and pytest-asyncio from 1.4.0 to 1.4.1 (#258).
+
 - Python: update the locked `opentelemetry-api` dependency from 1.44.0 to 1.45.1 (#252).
 
 - Python: update the locked `setuptools` dependency from 84.0.0 to 84.1.0 (#257).

@@ -227,7 +227,10 @@ export function runMain(opts: { scriptPath: string | null }): void {
       console.error(`Connection resilience: ${describeReconnect(reconnect)}`);
     } catch (error) {
       console.error(`Configuration error: ${(error as Error).message}`);
-      process.exit(1);
+      // No transport or OPC UA connection exists yet. Let Node finish pending
+      // I/O and drain the diagnostic before exiting, as on the CLI path below.
+      process.exitCode = 1;
+      return;
     }
 
     const server = new OPCUAMCPServer(audit);

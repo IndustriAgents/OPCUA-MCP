@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `node-opcua-crypto` dependency from 6.2.0 to 6.2.3 (#250).
+
 - Node: exit with a failure code after draining startup configuration diagnostics,
   without creating the MCP transport or an OPC UA connection.
 

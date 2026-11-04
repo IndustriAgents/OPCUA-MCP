@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Python: update the locked `opentelemetry-api` dependency from 1.44.0 to 1.45.1 (#252).
+
 - Python: update the locked `setuptools` dependency from 84.0.0 to 84.1.0 (#257).
 
 - Node: update the locked `node-opcua-client` dependency from 2.187.3 to 2.187.18 and deduplicate its client-stack crypto dependencies on 6.2.3 (#249).

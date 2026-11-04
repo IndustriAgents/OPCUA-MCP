@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `node-forge` dependency from 1.4.0 to 1.4.3 (#260).
+
 - Node: update the locked `@hono/node-server` dependency from 2.1.1 to 2.1.6 (#261).
 
 - Node: update the locked `qs` dependency from 6.16.0 to 6.17.1 (#262).

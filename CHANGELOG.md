@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Python: update the locked `opentelemetry-api` dependency from 1.44.0 to 1.45.1 (#252).
+
 - Both installers recognize CA trust stores on secured channels as authenticated
   servers for remote control profiles, validate trust-store paths as directories,
   and report trust-store authentication in the security summary

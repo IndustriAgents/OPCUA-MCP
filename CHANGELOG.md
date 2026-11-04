@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: exit with a failure code after draining startup configuration diagnostics,
+  without creating the MCP transport or an OPC UA connection.
+
 - Node: update the locked `hono` dependency from 4.13.7 to 4.13.13 (#247).
 
 - Node: update the locked `ip-address` dependency from 10.7.3 to 10.7.6 (#253).

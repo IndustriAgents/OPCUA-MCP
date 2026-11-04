@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Node: update the locked `fast-uri` dependency from 3.1.8 to 3.1.9 (#255).
 
+- Node: update the locked `body-parser` dependency from 2.3.0 to 2.4.0 (#256).
+
+- Node: update the locked `node-forge` dependency from 1.4.0 to 1.4.3 (#260).
+
+- Node: update the locked `@hono/node-server` dependency from 2.1.1 to 2.1.6 (#261).
+
 - Node: update the locked `qs` dependency from 6.16.0 to 6.17.1 (#262).
 
 - Both installers recognize CA trust stores on secured channels as authenticated

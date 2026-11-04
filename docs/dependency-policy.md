@@ -108,6 +108,13 @@ Floor notes:
   the lockfile, and a wheel carries none). The latest-compatible job is what
   tests the set a fresh install resolves.
 
+Repository builds also use scoped overrides to keep advisory-affected versions
+out of the runtime graph. The MCP SDK's Zod override selects `^4.6.6`, while
+allowing the development-only packaging tool to retain its compatible Zod 3
+copy. npm applies these overrides in the installing root project; they do not
+govern another project's dependency resolution. The remaining packaging-tool
+advisory is recorded in [SECURITY.md](../SECURITY.md#ghsa-mrhx-c7xc-m3w5--oversized-collection-validation-in-zod).
+
 Build and test tooling (`devDependencies`, the `tests` workspace member, the root
 `dev` and `packaging` groups) never reaches a user's install. It is locked, and
 floors must still resolve, but it has no ceiling requirement. The mock OPC UA

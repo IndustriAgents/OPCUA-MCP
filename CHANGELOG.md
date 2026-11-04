@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Python: update the locked `opentelemetry-api` dependency from 1.44.0 to 1.45.1 (#252).
 
+- Python: update the locked `setuptools` dependency from 84.0.0 to 84.1.0 (#257).
+
+- Node: update the locked `node-opcua-client` dependency from 2.187.3 to 2.187.18 and deduplicate its client-stack crypto dependencies on 6.2.3 (#249).
+
+- Node: update the locked `node-opcua-crypto` dependency from 6.2.0 to 6.2.3 (#250).
+
+- Node: exit with a failure code after draining startup configuration diagnostics,
+  without creating the MCP transport or an OPC UA connection.
+
+- Node: update the locked `hono` dependency from 4.13.7 to 4.13.13 (#247).
+
+- Node: update the locked `ip-address` dependency from 10.7.3 to 10.7.6 (#253).
+
+- Node: update the locked `fast-uri` dependency from 3.1.8 to 3.1.9 (#255).
+
+- Node: update the locked `body-parser` dependency from 2.3.0 to 2.4.0 (#256).
+
+- Node: update the locked `node-forge` dependency from 1.4.0 to 1.4.3 (#260).
+
+- Node: update the locked `@hono/node-server` dependency from 2.1.1 to 2.1.6 (#261).
+
 - Node: update the locked `qs` dependency from 6.16.0 to 6.17.1 (#262).
 
 - Both installers recognize CA trust stores on secured channels as authenticated

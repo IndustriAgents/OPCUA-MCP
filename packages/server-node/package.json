@@ -64,6 +64,9 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
+    "@modelcontextprotocol/sdk": {
+      "zod": "^4.6.6"
+    },
     "tmp": "^0.2.6"
   },
   "engines": {

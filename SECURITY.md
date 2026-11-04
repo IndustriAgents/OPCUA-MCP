@@ -634,6 +634,23 @@ authenticate the server, encrypt the channel, and do not point either runtime at
 an endpoint you do not trust. Both default runtimes use maintained clients. The legacy Python rollback remains
 an explicit compatibility fallback, with its guard and residual dependency risk.
 
+### GHSA-mrhx-c7xc-m3w5 — oversized collection validation in Zod
+
+Repository builds constrain the MCP SDK's Zod dependency to `^4.6.6`, which
+includes the [collection-validation fix](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+The SDK supports Zod 4 at its declared floor as well as its current version.
+The runtime dependency and bundled executables use this patched copy.
+
+The development-only `@anthropic-ai/mcpb` packaging tool still requires Zod 3
+and retains 3.25.76. That copy remains affected, with no compatible upstream
+packaging-tool update currently available. It is excluded from the production
+dependency graph and the bundled runtime; the full development audit continues
+to report it.
+
+The override and lockfile govern repository builds. Other npm root projects
+resolve their dependencies independently, as described in the
+[dependency policy](docs/dependency-policy.md#range-rules).
+
 ## Release integrity
 
 Every file on a GitHub release is listed in a `SHA256SUMS` manifest signed

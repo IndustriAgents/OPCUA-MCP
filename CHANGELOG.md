@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the MCP SDK's runtime Zod from 3.25.76 to 4.6.7 for
+  GHSA-mrhx-c7xc-m3w5, with a scoped override that retains the packaging tool's
+  compatible development dependency.
+
 - Python tooling: update Ruff from 0.17.0 to 0.17.2 and pytest-asyncio from 1.4.0 to 1.4.1 (#258).
 
 - Python: update the locked `opentelemetry-api` dependency from 1.44.0 to 1.45.1 (#252).

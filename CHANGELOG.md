@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `hono` dependency from 4.13.7 to 4.13.13 (#247).
+
 - Both installers recognize CA trust stores on secured channels as authenticated
   servers for remote control profiles, validate trust-store paths as directories,
   and report trust-store authentication in the security summary

@@ -262,6 +262,58 @@ def _pki(root: Path) -> Path:
 
 
 @pytest.mark.parametrize("impl", ["python", "node"])
+@pytest.mark.parametrize("profile", ["operator", "full"])
+def test_remote_trust_store_control_install(impl, profile, tmp_path):
+    """A CA-authenticated remote control entry is written without lab overrides."""
+    pki = _pki(tmp_path / "pki")
+    trust_store = pki / "trust-store"
+    trust_store.mkdir()
+    home = tmp_path / "home"
+    proc = _run(
+        impl,
+        [
+            "--install",
+            "claude-desktop",
+            "--url",
+            URL,
+            "--security-policy",
+            "Basic256Sha256",
+            "--client-cert",
+            "client.pem",
+            "--client-key",
+            "client_key.pem",
+            "--server-trust-store",
+            "trust-store",
+            "--server-application-uri",
+            "urn:example:plc",
+            "--profile",
+            profile,
+            "--allowed-write-nodes",
+            "ns=2;i=5",
+            "--allowed-tools",
+            "write_opcua_nodes",
+        ],
+        home,
+        cwd=pki,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  server identity  verified: trust store" in proc.stderr.splitlines()
+    assert "  control tools    write_opcua_nodes" in proc.stderr.splitlines()
+    assert "unverified" not in proc.stderr.lower()
+
+    written = list(home.rglob("claude_desktop_config.json"))
+    assert len(written) == 1
+    env = json.loads(written[0].read_text("utf-8"))["mcpServers"]["opcua"]["env"]
+    assert env["OPCUA_PROFILE"] == profile
+    assert env["OPCUA_SERVER_TRUST_STORE"] == str(trust_store)
+    assert env["OPCUA_SERVER_APPLICATION_URI"] == "urn:example:plc"
+    assert env["OPCUA_ALLOWED_WRITE_NODES"] == "ns=2;i=5"
+    assert "OPCUA_SERVER_CERT" not in env
+    assert "OPCUA_ALLOW_INSECURE_CONTROL" not in env
+    assert "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL" not in env
+
+
+@pytest.mark.parametrize("impl", ["python", "node"])
 def test_codex_install_writes_config_toml_under_home(impl, tmp_path):
     """Codex reads ~/.codex/config.toml. The install must land there — under the
     scratch HOME, never the developer's — and leave the rest of the file alone."""

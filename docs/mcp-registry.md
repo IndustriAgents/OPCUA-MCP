@@ -6,13 +6,15 @@ stdio transport, and every environment variable it reads. That last part —
 `packages[].environmentVariables` — is generated from
 [`contract/config.json`](../contract/config.json); edit the schema and run
 `npm run config:generate` in `packages/server-node` rather than editing it here.
-The npm manifest carries the matching `"mcpName": "io.github.midhunxavier/opcua"`, which is how
-the registry proves the package and this repository belong to the same owner.
+The registry checks the published npm package for
+`"mcpName": "io.github.midhunxavier/opcua"`. GitHub authentication separately
+proves permission to publish in that namespace. The repository is now under
+`IndustriAgents`, but the published package still uses the existing
+`io.github.midhunxavier` namespace.
 
-> **Status: metadata only.** Nothing here publishes a listing, and no listing has
-> been submitted yet. `server.json` carries the release version, stamped from the
-> npm manifest by the same generator; every published npm version from 0.4.1 on
-> carries `mcpName`, so the published release is the one to submit.
+> **Status: ready to publish.** npm serves version 0.6.0 with the matching
+> `mcpName`. The first submission requires GitHub device authorization as
+> `midhunxavier`; no new npm release is needed.
 
 ## Before submitting
 
@@ -41,16 +43,26 @@ Install the official `mcp-publisher` CLI as described in the
 from the repository root:
 
 ```bash
-mcp-publisher login github     # as the owner of the io.github.midhunxavier namespace
-mcp-publisher publish
+mcp-publisher validate server.json
+mcp-publisher login github     # authorize as midhunxavier at the GitHub device prompt
+mcp-publisher publish server.json
 ```
 
 Verify the entry resolves, and that it names this repository and the exact
 version published:
 
 ```bash
-curl --fail --get 'https://registry.modelcontextprotocol.io/v0.1/servers' \
-  --data-urlencode 'search=io.github.midhunxavier/opcua'
+VERSION=$(node -p "require('./server.json').version")
+curl --fail --silent --show-error \
+  "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.midhunxavier%2Fopcua/versions/$VERSION" \
+  | jq -e --arg version "$VERSION" '
+      .server
+      | .name == "io.github.midhunxavier/opcua"
+        and .version == $version
+        and .repository.url == "https://github.com/IndustriAgents/OPCUA-MCP"
+        and any(.packages[]; .registryType == "npm" and .identifier == "opcua-mcp-server"
+            and .version == $version and .transport.type == "stdio")
+    '
 ```
 
 Only link to the listing once that returns it.
@@ -83,19 +95,34 @@ unchanged.
 
 ## Keeping it valid
 
-`server.json` declares its schema. Validate it after any edit:
-
-```bash
-uv run --no-project --with jsonschema python - <<'PY'
-import json, urllib.request, jsonschema
-inst = json.load(open("server.json"))
-schema = json.load(urllib.request.urlopen(inst["$schema"]))
-jsonschema.Draft7Validator(schema).validate(inst)
-print("server.json is valid")
-PY
-```
+`server.json` declares its schema. Run `mcp-publisher validate server.json`
+after any edit to check it against the official Registry.
 
 The registry is still in preview, so re-read the quickstart before the first
 submission — the schema date in `$schema` is pinned here on purpose, and a newer
 one may exist. Automating publication in `publish.yml` is worth doing only after
 one manual submission has succeeded.
+
+## Glama and awesome-mcp-servers
+
+[Add the GitHub repository on Glama](https://glama.ai/mcp/servers) once, using
+`https://github.com/IndustriAgents/OPCUA-MCP`. After sign-in, claim the listing
+as a maintainer listed in the root [`glama.json`](../glama.json). Follow Glama's
+[build and release instructions](https://glama.ai/blog/2026-03-15-how-to-make-a-release)
+and use the current published npm version in the Dockerfile:
+
+```dockerfile
+FROM node:22-bookworm-slim
+RUN npm install --global --ignore-scripts --no-audit --no-fund opcua-mcp-server@0.6.0
+USER node
+ENV OPCUA_PROFILE=observe \
+    OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4840
+CMD ["opcua-mcp-server"]
+```
+
+The server responds to MCP initialization and tool discovery without a live
+OPC UA endpoint. The loopback URL lets Glama run those checks without plant
+access. Once the listing passes its checks and the score badge works, submit
+one entry under **Industrial & IoT** in
+[awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers),
+following its [contribution rules](https://github.com/punkpeye/awesome-mcp-servers/blob/main/CONTRIBUTING.md).

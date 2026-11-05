@@ -13,6 +13,8 @@
 
 [Quick start](#quick-start) · [Connect your agent](#connect-your-agent) · [Tools](#tools) · [Production](#going-to-production) · [Docs](#documentation)
 
+Find this server on [HardwareMCP](https://hardwaremcp.khanex.ai/servers/industriagents-opcua-mcp/).
+
 </div>
 
 ![OPC UA MCP Server in Claude Desktop](docs/assets/screenshot.png)

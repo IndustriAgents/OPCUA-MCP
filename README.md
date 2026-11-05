@@ -13,7 +13,7 @@
 
 [Quick start](#quick-start) · [Connect your agent](#connect-your-agent) · [Tools](#tools) · [Production](#going-to-production) · [Docs](#documentation)
 
-[Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.midhunxavier%2Fopcua) · [HardwareMCP](https://hardwaremcp.khanex.ai/servers/industriagents-opcua-mcp/)
+[Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.midhunxavier%2Fopcua) · [Glama](https://glama.ai/mcp/servers/IndustriAgents/OPCUA-MCP) · [HardwareMCP](https://hardwaremcp.khanex.ai/servers/industriagents-opcua-mcp/)
 
 </div>
 

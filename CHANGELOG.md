@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Docs: open the README with a 50-second demo of an agent reading the simulated
+  plant, built from real tool calls by `scripts/readme_demo.py`, and link
+  "Try it without hardware" and the good first issues from the top of the page.
+
 - Node: update the MCP SDK's runtime Zod from 3.25.76 to 4.6.7 for
   GHSA-mrhx-c7xc-m3w5, with a scoped override that retains the packaging tool's
   compatible development dependency.

@@ -12,9 +12,7 @@ proves permission to publish in that namespace. The repository is now under
 `IndustriAgents`, but the published package still uses the existing
 `io.github.midhunxavier` namespace.
 
-> **Status: ready to publish.** npm serves version 0.6.0 with the matching
-> `mcpName`. The first submission requires GitHub device authorization as
-> `midhunxavier`; no new npm release is needed.
+> **Status: published.** [Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.midhunxavier%2Fopcua) lists `io.github.midhunxavier/opcua` with the npm package and local stdio transport.
 
 ## Before submitting
 

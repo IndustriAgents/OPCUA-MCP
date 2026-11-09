@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update `pkijs` from 3.4.1 to 4.0.1 for certificate and CRL validation (#267).
+
 - Node: update the locked `node-opcua-client` dependency from 2.187.18 to 2.187.19, including a bound on wire-decoded Variant arrays (#266).
 
 - Node tooling: update `@types/node` from 26.6.5 to 26.6.6 and Oxlint from 1.88.0 to 1.90.0 (#265).

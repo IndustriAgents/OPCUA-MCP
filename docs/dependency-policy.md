@@ -69,7 +69,7 @@ the manifests disagree, and if any runtime range loses its floor or its ceiling.
 | `@modelcontextprotocol/sdk` | `^1.26.0` | MCP protocol, stdio transport, request validation | MCP protocol, schema validation |
 | `ajv` | `^8.20.0` | Draft 2020-12 tool argument validation | Schema validation |
 | `node-opcua-client` | `^2.184.8` | OPC UA client stack | OPC UA transport, certificates |
-| `pkijs` | `~3.4.1` | Native certificate chain and signed CRL validation with explicit profile constraints | Certificates, revocation |
+| `pkijs` | `~4.0.1` | Native certificate chain and signed CRL validation with explicit profile constraints | Certificates, revocation |
 | `node-opcua-crypto` | `^6.0.0` | Certificate and key loading, X.509 user-identity signing | Certificates |
 
 Every runtime dependency is treated as security-sensitive under the definition below; that

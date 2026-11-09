@@ -119,6 +119,23 @@ See [tests/README.md](tests/README.md) for details and selectors
 (`-k "[python]"` / `-k "[node]"`). For manual testing with the MCP Inspector or an AI
 agent, see **[docs/testing.md](docs/testing.md)**.
 
+## The README demo
+
+The animation at the top of the README, `docs/assets/demo.gif`, is drawn from
+real tool calls, not mocked up. Rebuild it whenever a change alters what those
+calls return or how a tool is named:
+
+```bash
+uv run --no-sync opcua-mock-server &                            # the simulated plant on :4840
+uv run --no-sync python scripts/readme_demo.py capture          # real calls -> docs/assets/demo-session.json
+uv run --no-sync --with pillow python scripts/readme_demo.py render   # -> docs/assets/demo.gif
+```
+
+`capture` drives the Python bridge under the read-only `observe` profile and
+records its structured results; `render` draws the chat from that recording, and
+computes the numbers in the scripted answer from it. Commit both files. The
+renderer uses `gifsicle` to shrink the GIF when it is installed.
+
 ## Adding a new MCP tool
 
 The tool surface is defined once in [`contract/tools.json`](contract/tools.json); both servers derive from it, and `tests/e2e/test_contract_parity.py` fails if they diverge. To add a tool `foo`:

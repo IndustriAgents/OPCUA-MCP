@@ -11,11 +11,20 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/github/license/IndustriAgents/OPCUA-MCP)](LICENSE)
 
-[Quick start](#quick-start) · [Connect your agent](#connect-your-agent) · [Tools](#tools) · [Production](#going-to-production) · [Docs](#documentation)
+**[▶ Try it without hardware](#try-it-without-a-plant)** — a simulated plant ships in this repository
+
+[Quick start](#quick-start) · [Connect your agent](#connect-your-agent) · [Tools](#tools) · [Production](#going-to-production) · [Docs](#documentation) · [Contributing](#contributing)
+
+[Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.midhunxavier%2Fopcua) · [Glama](https://glama.ai/mcp/servers/IndustriAgents/OPCUA-MCP) · [HardwareMCP](https://hardwaremcp.khanex.ai/servers/industriagents-opcua-mcp/)
 
 </div>
 
-![OPC UA MCP Server in Claude Desktop](docs/assets/screenshot.png)
+![An AI agent asks about the line's sensors, calls browse_opcua_nodes, read_opcua_nodes and read_opcua_history on the simulated plant, and answers from the values returned](docs/assets/demo.gif)
+
+<sub>Every tool call and value above is a real response from the bundled simulator,
+recorded through the Python bridge under the read-only `observe` profile; the
+question and answer text are scripted. Rebuild it with
+[`scripts/readme_demo.py`](scripts/readme_demo.py).</sub>
 
 This project is a bridge between an AI agent and an OPC UA server. OPC UA is the
 protocol used to expose industrial equipment and its data; MCP (Model Context
@@ -148,6 +157,8 @@ To use Python in a JSON configuration, set `"command": "uvx"` and
 [latest release](https://github.com/IndustriAgents/OPCUA-MCP/releases/latest),
 drag it into **Settings → Extensions**, and fill in **OPC UA endpoint**. No
 Node, no Python, no JSON.
+
+![OPC UA MCP Server in Claude Desktop](docs/assets/screenshot.png)
 
 **Or let the server write the config** (needs Node or Python):
 
@@ -466,6 +477,10 @@ restart: **[docs/configuration.md](docs/configuration.md)**. Threat model:
 
 Contributions are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** for the
 project layout, local development and adding a tool to both runtimes.
+
+New here? The [good first issues](https://github.com/IndustriAgents/OPCUA-MCP/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+are small and scoped to one pull request: a setup guide for another MCP client,
+or a sample application built on the simulated plant. None needs OPC UA hardware.
 
 The most useful thing you can send is a result from a real OPC UA server: open a
 [compatibility report](https://github.com/IndustriAgents/OPCUA-MCP/issues/new?template=compatibility_report.md)

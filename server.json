@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.midhunxavier/opcua",
   "title": "OPC UA MCP Server",
-  "description": "MCP server for OPC UA: read, write, browse, call methods, history, events and alarms.",
+  "description": "Connect AI assistants to industrial OPC UA: browse, read, history, subscriptions, events and alarms.",
   "repository": {
-    "url": "https://github.com/midhunxavier/OPCUA-MCP",
+    "url": "https://github.com/IndustriAgents/OPCUA-MCP",
     "source": "github"
   },
-  "websiteUrl": "https://github.com/midhunxavier/OPCUA-MCP#readme",
+  "websiteUrl": "https://industriagents.com/connect/opcua",
   "version": "0.6.0",
   "packages": [
     {

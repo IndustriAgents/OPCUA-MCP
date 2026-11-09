@@ -1,0 +1,218 @@
+{
+  "note": "Real responses from the Python bridge (profile=observe) against the bundled mock plant, recorded by scripts/readme_demo.py capture. Input to the README demo.",
+  "calls": [
+    {
+      "tool": "browse_opcua_nodes",
+      "arguments": {
+        "browse_path": "/Objects/IndustrialControlSystem/Sensors",
+        "node_class": "Variable"
+      },
+      "result": {
+        "result": {
+          "nodes": [
+            {
+              "node_id": "ns=2;i=3",
+              "browse_name": "2:Temperature",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=4",
+              "browse_name": "2:Pressure",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=5",
+              "browse_name": "2:FlowRate",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=6",
+              "browse_name": "2:TankLevel",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=7",
+              "browse_name": "2:Vibration",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=8",
+              "browse_name": "2:PhLevel",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=9",
+              "browse_name": "2:Humidity",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            },
+            {
+              "node_id": "ns=2;i=10",
+              "browse_name": "2:MotorSpeed",
+              "node_class": "Variable",
+              "parent_node_id": "ns=2;i=2",
+              "data_type": null,
+              "value": null,
+              "description": null,
+              "type_definition": "BaseDataVariableType"
+            }
+          ],
+          "truncated": false,
+          "inspected": 8
+        },
+        "completeness": {
+          "complete": true,
+          "reasons": [],
+          "returned": 8,
+          "truncated": false,
+          "limit": null,
+          "dropped": 0,
+          "remaining": false,
+          "continuation": null
+        }
+      }
+    },
+    {
+      "tool": "read_opcua_nodes",
+      "arguments": {
+        "node_ids": [
+          "ns=2;i=3",
+          "ns=2;i=4",
+          "ns=2;i=5",
+          "ns=2;i=10"
+        ]
+      },
+      "result": {
+        "result": [
+          {
+            "node_id": "ns=2;i=3",
+            "value": 25.301336979555185,
+            "data_type": "Double",
+            "status": "Good",
+            "source_timestamp": "2026-11-05T11:39:43.479112Z",
+            "server_timestamp": "2026-11-05T11:39:43.479156Z",
+            "engineering": null,
+            "write_access": null
+          },
+          {
+            "node_id": "ns=2;i=4",
+            "value": 1014.8672252065768,
+            "data_type": "Double",
+            "status": "Good",
+            "source_timestamp": "2026-11-05T11:39:43.479372Z",
+            "server_timestamp": "2026-11-05T11:39:43.479389Z",
+            "engineering": null,
+            "write_access": null
+          },
+          {
+            "node_id": "ns=2;i=5",
+            "value": 3.7591787320822476,
+            "data_type": "Double",
+            "status": "Good",
+            "source_timestamp": "2026-11-05T11:39:42.470926Z",
+            "server_timestamp": "2026-11-05T11:39:42.470945Z",
+            "engineering": null,
+            "write_access": null
+          },
+          {
+            "node_id": "ns=2;i=10",
+            "value": 4.585650797946347,
+            "data_type": "Double",
+            "status": "Good",
+            "source_timestamp": "2026-11-05T11:39:43.480845Z",
+            "server_timestamp": "2026-11-05T11:39:43.480871Z",
+            "engineering": null,
+            "write_access": null
+          }
+        ]
+      }
+    },
+    {
+      "tool": "read_opcua_history",
+      "arguments": {
+        "node_id": "ns=2;i=3",
+        "num_values": 6
+      },
+      "result": {
+        "result": [
+          {
+            "value": 25.301336979555185,
+            "timestamp": "2026-11-05T11:39:43.479112Z",
+            "status": "Good"
+          },
+          {
+            "value": 24.877479943832746,
+            "timestamp": "2026-11-05T11:39:42.470554Z",
+            "status": "Good"
+          },
+          {
+            "value": 25.333762104019414,
+            "timestamp": "2026-11-05T11:39:41.461673Z",
+            "status": "Good"
+          },
+          {
+            "value": 24.918531978619377,
+            "timestamp": "2026-11-05T11:39:40.452947Z",
+            "status": "Good"
+          },
+          {
+            "value": 23.340144943779443,
+            "timestamp": "2026-11-05T11:39:39.445225Z",
+            "status": "Good"
+          },
+          {
+            "value": 25.979279002580775,
+            "timestamp": "2026-11-05T11:39:38.437381Z",
+            "status": "Good"
+          }
+        ],
+        "completeness": {
+          "complete": false,
+          "reasons": [
+            "requestLimit"
+          ],
+          "returned": 6,
+          "truncated": true,
+          "limit": 6,
+          "dropped": 0,
+          "remaining": true,
+          "continuation": null
+        }
+      }
+    }
+  ]
+}

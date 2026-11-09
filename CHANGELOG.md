@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Python tooling: update pytest-asyncio from 1.4.1 to 1.4.1.post1 (#270).
+
 - Python tooling: update Ruff from 0.17.2 to 0.17.3 and pytest from 9.1.1 to 9.2.0 (#269).
 
 - Node: update the locked `@modelcontextprotocol/sdk` dependency from 1.32.1 to 1.32.2 (#268).

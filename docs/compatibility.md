@@ -227,6 +227,21 @@ evidence. Many embedded servers are built on open62541, but a product adds its
 own configuration, limits and permissions on top — a result for the SDK is not a
 result for a device built with it.
 
+#### Vendor validation status
+
+The original production validation checklist
+([#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70)) was closed as not
+planned with its criteria unchecked.
+[#275](https://github.com/IndustriAgents/OPCUA-MCP/issues/275) tracks conformance
+against Prosys OPC UA Simulation Server. A published result there would cover
+the tested simulator version and configuration. Validation on production
+equipment remains outstanding.
+
+A second client connecting to the same OPC UA endpoint uses its own session.
+The planned Prosys run exercises one MCP runtime at a time. Check concurrent
+connections, account permissions and session limits separately on the target
+setup before using a second client there.
+
 #### Not covered yet
 
 - **An uncertain control outcome.** A write or method call in flight when the

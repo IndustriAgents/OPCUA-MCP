@@ -52,13 +52,13 @@
     "ajv": "^8.20.0",
     "node-opcua-client": "^2.184.8",
     "node-opcua-crypto": "^6.0.0",
-    "pkijs": "~3.4.1"
+    "pkijs": "~4.0.1"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",
-    "oxlint": "1.88.0",
+    "oxlint": "1.90.0",
     "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.8",
     "typescript": "^7.0.2"

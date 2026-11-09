@@ -33,6 +33,27 @@ Options considered:
 | Gateway with isolated workers and authenticated routing | Explicit ownership and failure containment | Additional identity provider, supervisor, durable audit and operating responsibility; accepted future design |
 | Pool all clients in one OPC UA session                  | Fewer licensed sessions                    | OPC UA identity, subscriptions and failure state become shared; reject cross-principal pooling               |
 
+## Related work: process policy
+
+The bridge already provides per-node value bounds and live guard-node
+preconditions in its [operator policy](../../SECURITY.md#tool-profiles-and-control-policy),
+alongside target allowlists and audit records that omit values.
+[otgate](https://github.com/alikup-ai/otgate)
+explores additional controls such as rate and cumulative drift limits and a
+separate operator approval channel. Its OPC UA backend connects directly to the
+endpoint. Running it alongside the bridge gives each process a separate OPC UA
+session and policy path.
+
+A composition experiment ([#279](https://github.com/IndustriAgents/OPCUA-MCP/issues/279))
+could use an adapter that dispatches writes through a local bridge worker.
+Start on a simulator. For writes that require approval, verify that the
+approval binds to the exact target and value, and that the gateway rechecks
+live conditions before dispatch. Verify that the bridge can still deny the
+write and that the agent has no alternate write path. Keep any process audit
+containing values separate from the bridge's value-free audit. Compare range,
+rate and guard semantics using the same scenarios before proposing a shared
+policy format.
+
 ## Trust boundaries and ownership
 
 ```mermaid

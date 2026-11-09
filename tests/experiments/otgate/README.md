@@ -17,7 +17,7 @@ uv sync --locked --all-packages
 lab_dir=$(mktemp -d)
 uv venv --python 3.13 "$lab_dir/otgate"
 uv pip install --python "$lab_dir/otgate/bin/python" \
-  'otgate[opcua] @ git+https://github.com/alikup-ai/otgate.git@4f54555878f8f52fa20b089dc204898f41b254fb' \
+  'otgate[opcua] @ git+https://github.com/midhunxavier/otgate.git@2db2c0652e44f4871186cee6abdcc9cd82342252' \
   'mcp==1.30.0' 'asyncua==2.1.0' 'httpx==0.28.1'
 "$lab_dir/otgate/bin/python" tests/experiments/otgate/run.py \
   --workspace-python .venv/bin/python --output-dir "$lab_dir/evidence"
@@ -31,8 +31,10 @@ self-approve or connect to the operator or OPC UA ports, and the bridge audit
 omits the synthetic values recorded by otgate.
 
 The evidence directory contains the Write trace, both audit files, and process
-logs. The pinned otgate revision surfaces the bridge's policy refusal as a
-backend error and leaves that approval pending. The bridge still sends zero OPC
-UA writes in that case. The test exercises one Python worker, sequential
+logs. The pinned commit from [otgate PR #5](https://github.com/alikup-ai/otgate/pull/5)
+resolves a confirmed bridge allowlist refusal as denied. The harness verifies
+that a second approval is refused and the simulator receives zero OPC UA writes
+for that request. Transient failures stay pending for operator retry, as covered
+by the otgate tests. The harness exercises one Python worker, sequential
 approvals, and local lab isolation. The unsecured loopback endpoint and
 sandbox probe are specific to this experiment.

@@ -13,17 +13,19 @@ from pathlib import Path
 
 import httpx
 import uvicorn
+from anyio import BrokenResourceError, ClosedResourceError
 from asyncua import Client
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, McpError, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from otgate.audit import AuditLog
-from otgate.backends.base import Backend, BackendError
+from otgate.backends.base import Backend, BackendError, BackendPolicyDenied
 from otgate.gateway import Gateway
 from otgate.models import Access, Interlock, Policy, Rule
 from otgate.server import build_agent_server, build_http_app, build_operator_server
 
 HERE = Path(__file__).resolve().parent
+CONTRACT = HERE.parents[2] / "contract" / "tools.json"
 LOOPBACK = "127.0.0.1"
 PERMIT = "ns=2;i=110"
 SETPOINT = "ns=2;i=111"
@@ -40,6 +42,8 @@ class BridgeBackend(Backend):
 
     def __init__(self, session: ClientSession):
         self.session = session
+        with CONTRACT.open(encoding="utf-8") as stream:
+            self.allowlist_denial = json.load(stream)["errors"]["nodeNotWritable"]
 
     async def connect(self) -> None:
         # The harness owns the initialized session.
@@ -48,10 +52,18 @@ class BridgeBackend(Backend):
     async def disconnect(self) -> None:
         pass
 
-    async def call_one(self, tool, arguments):
-        result = await self.session.call_tool(tool, arguments)
+    async def call_one(self, tool, arguments, *, policy_denial=None):
+        try:
+            result = await self.session.call_tool(tool, arguments)
+        except (McpError, BrokenResourceError, ClosedResourceError, OSError) as exc:
+            raise BackendError(f"{tool} request failed: {exc}") from exc
         if result.isError:
-            raise BackendError(text_result(result))
+            detail = text_result(result)
+            # The bridge returns this pre-dispatch denial as MCP error text.
+            # Match the full contract message for this write's exact node.
+            if policy_denial and len(result.content) == 1 and detail == policy_denial:
+                raise BackendPolicyDenied(detail)
+            raise BackendError(detail)
         rows = (result.structuredContent or {}).get("result")
         if not isinstance(rows, list) or len(rows) != 1 or rows[0].get("status") != "Good":
             raise BackendError(f"{tool} returned a failed or malformed per-node result: {rows}")
@@ -62,7 +74,11 @@ class BridgeBackend(Backend):
         return row["value"]
 
     async def write(self, node_id, value):
-        await self.call_one("write_opcua_nodes", {"nodes": [{"node_id": node_id, "value": value}]})
+        await self.call_one(
+            "write_opcua_nodes",
+            {"nodes": [{"node_id": node_id, "value": value}]},
+            policy_denial=self.allowlist_denial.format(node_id=node_id),
+        )
 
 
 @asynccontextmanager
@@ -208,15 +224,17 @@ async def exercise(agent, operator, hmi, wire):
     pending = await request_write(agent, operator, wire, EXCLUDED, 7.375)
     before = rows(wire)
     result = await call_text(operator, "approve", request_id=pending)
-    assert result.startswith("ERROR (not executed):"), result
+    assert result.startswith("DENIED (not executed):"), result
     assert "not writable under the operator policy" in result, result
     assert rows(wire) == before
     assert await hmi.get_node(EXCLUDED).read_value() == 10.0
     remaining = await operator.call_tool("list_pending")
     assert not remaining.isError, text_result(remaining)
-    [request] = remaining.structuredContent["result"]
-    assert (request["id"], request["status"]) == (pending, "PENDING")
-    print("PASS: bridge allowlist blocks dispatch; otgate leaves the request pending")
+    assert remaining.structuredContent["result"] == []
+    repeated = await call_text(operator, "approve", request_id=pending)
+    assert repeated.startswith("DENIED (not executed): request already resolved:"), repeated
+    assert rows(wire) == before
+    print("PASS: bridge allowlist blocks dispatch and resolves the approval as denied")
 
 
 async def boundary(agent_url, agent_port, operator_url, operator_port, simulator_port, token):
@@ -279,7 +297,7 @@ def verify_audits(out):
         (SETPOINT, 4.125, "ASK", False),
         (SETPOINT, 4.125, "DENY", False),
         (EXCLUDED, 7.375, "ASK", False),
-        (EXCLUDED, 7.375, "ERROR", False),
+        (EXCLUDED, 7.375, "DENY", False),
     ], gateway
     print(
         "PASS: separate gateway and bridge audit trails; synthetic values stay out of bridge audit"

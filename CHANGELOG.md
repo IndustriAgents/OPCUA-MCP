@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Node: update the locked `@modelcontextprotocol/sdk` dependency from 1.32.1 to 1.32.2 (#268).
+
 - Node: update `pkijs` from 3.4.1 to 4.0.1 for certificate and CRL validation (#267).
 
 - Node: update the locked `node-opcua-client` dependency from 2.187.18 to 2.187.19, including a bound on wire-decoded Variant arrays (#266).

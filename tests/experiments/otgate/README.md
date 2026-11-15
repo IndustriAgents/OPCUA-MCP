@@ -17,7 +17,7 @@ uv sync --locked --all-packages
 lab_dir=$(mktemp -d)
 uv venv --python 3.13 "$lab_dir/otgate"
 uv pip install --python "$lab_dir/otgate/bin/python" \
-  'otgate[opcua] @ git+https://github.com/midhunxavier/otgate.git@2db2c0652e44f4871186cee6abdcc9cd82342252' \
+  'otgate[opcua] @ git+https://github.com/alikup-ai/otgate.git@bad4d62e35cc2f8294fe7121fa610447f1b7dfe3' \
   'mcp==1.30.0' 'asyncua==2.1.0' 'httpx==0.28.1'
 "$lab_dir/otgate/bin/python" tests/experiments/otgate/run.py \
   --workspace-python .venv/bin/python --output-dir "$lab_dir/evidence"
@@ -26,15 +26,18 @@ uv pip install --python "$lab_dir/otgate/bin/python" \
 The harness checks the initial range denial, the exact approved write and its
 read-back, and sequential repeat approval. It changes a guard tag and then a
 live setpoint in separate cases to check stale approval. It also checks that
-the bridge blocks a node excluded by its operator policy, the agent cannot
+the bridge blocks a node excluded by its operator policy and denies a guard
+read after a request has been queued, the agent cannot
 self-approve or connect to the operator or OPC UA ports, and the bridge audit
 omits the synthetic values recorded by otgate.
 
 The evidence directory contains the Write trace, both audit files, and process
-logs. The pinned commit from [otgate PR #5](https://github.com/alikup-ai/otgate/pull/5)
-resolves a confirmed bridge allowlist refusal as denied. The harness verifies
-that a second approval is refused and the simulator receives zero OPC UA writes
-for that request. Transient failures stay pending for operator retry, as covered
-by the otgate tests. The harness exercises one Python worker, sequential
-approvals, and local lab isolation. The unsecured loopback endpoint and
+logs. The pinned otgate commit includes [PR #5](https://github.com/alikup-ai/otgate/pull/5)
+and [PR #7](https://github.com/alikup-ai/otgate/pull/7), which resolve confirmed
+bridge write and guard-read policy refusals as denied. The harness verifies
+that repeat approval is refused and the simulator receives zero OPC UA writes
+for both requests. Transient failures stay pending for operator retry, as covered
+by the otgate tests. The harness uses a second Python worker to change the read
+policy between queueing and approval, sequential approvals, and local lab isolation.
+The unsecured loopback endpoint and
 sandbox probe are specific to this experiment.

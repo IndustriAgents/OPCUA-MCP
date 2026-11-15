@@ -43,7 +43,9 @@ class BridgeBackend(Backend):
     def __init__(self, session: ClientSession):
         self.session = session
         with CONTRACT.open(encoding="utf-8") as stream:
-            self.allowlist_denial = json.load(stream)["errors"]["nodeNotWritable"]
+            errors = json.load(stream)["errors"]
+            self.allowlist_denial = errors["nodeNotWritable"]
+            self.read_denial = errors["readDenied"]
 
     async def connect(self) -> None:
         # The harness owns the initialized session.
@@ -60,7 +62,7 @@ class BridgeBackend(Backend):
         if result.isError:
             detail = text_result(result)
             # The bridge returns this pre-dispatch denial as MCP error text.
-            # Match the full contract message for this write's exact node.
+            # Match the full contract message for this operation's exact node.
             if policy_denial and len(result.content) == 1 and detail == policy_denial:
                 raise BackendPolicyDenied(detail)
             raise BackendError(detail)
@@ -70,7 +72,11 @@ class BridgeBackend(Backend):
         return rows[0]
 
     async def read(self, node_id):
-        row = await self.call_one("read_opcua_nodes", {"node_ids": [node_id]})
+        row = await self.call_one(
+            "read_opcua_nodes",
+            {"node_ids": [node_id]},
+            policy_denial=self.read_denial.format(node_id=node_id),
+        )
         return row["value"]
 
     async def write(self, node_id, value):
@@ -237,6 +243,28 @@ async def exercise(agent, operator, hmi, wire):
     print("PASS: bridge allowlist blocks dispatch and resolves the approval as denied")
 
 
+async def guard_read_denial(agent, operator, hmi, wire, backend, denied_bridge):
+    # Queue while the guard is readable, then change bridge policy before approval.
+    await hmi.get_node(SETPOINT).write_value(4.125)
+    pending = await request_write(agent, operator, wire, SETPOINT, 4.125)
+    before = rows(wire)
+    original = backend.session
+    backend.session = denied_bridge
+    try:
+        result = await call_text(operator, "approve", request_id=pending)
+        assert result.startswith("DENIED (not executed):") and "deny_read" in result, result
+        assert rows(wire) == before
+        remaining = await operator.call_tool("list_pending")
+        assert not remaining.isError, text_result(remaining)
+        assert remaining.structuredContent["result"] == []
+        repeated = await call_text(operator, "approve", request_id=pending)
+        assert repeated.startswith("DENIED (not executed): request already resolved:"), repeated
+        assert rows(wire) == before
+    finally:
+        backend.session = original
+    print("PASS: bridge guard-read denial resolves approval as denied without a write")
+
+
 async def boundary(agent_url, agent_port, operator_url, operator_port, simulator_port, token):
     # A bearer-token test alone would not prove that a local process can't
     # bypass MCP by connecting directly to the simulated plant.
@@ -286,6 +314,7 @@ def verify_audits(out):
     assert all("value" not in row for row in bridge)
     raw_bridge = (out / "bridge-audit.jsonl").read_text(encoding="utf-8")
     assert all(value not in raw_bridge for value in ("4.125", "7.375", "31.25"))
+    assert rows(out / "denied-bridge-audit.jsonl") == []
 
     gateway = [row for row in rows(out / "gateway-audit.jsonl") if row["action"] == "write"]
     assert [(r["node_id"], r["value"], r["decision"], r["executed"]) for r in gateway] == [
@@ -298,6 +327,8 @@ def verify_audits(out):
         (SETPOINT, 4.125, "DENY", False),
         (EXCLUDED, 7.375, "ASK", False),
         (EXCLUDED, 7.375, "DENY", False),
+        (SETPOINT, 4.125, "ASK", False),
+        (SETPOINT, 4.125, "DENY", False),
     ], gateway
     print(
         "PASS: separate gateway and bridge audit trails; synthetic values stay out of bridge audit"
@@ -339,9 +370,8 @@ async def run(workspace_python, out):
                 ClientSession(read, write, read_timeout_seconds=READ_TIMEOUT) as bridge,
             ):
                 await bridge.initialize()
-                gateway = Gateway(
-                    policy, BridgeBackend(bridge), AuditLog(out / "gateway-audit.jsonl")
-                )
+                backend = BridgeBackend(bridge)
+                gateway = Gateway(policy, backend, AuditLog(out / "gateway-audit.jsonl"))
                 try:
                     agent_app = build_http_app(build_agent_server(gateway), agent_token, "agent")
                     operator_app = build_http_app(
@@ -355,6 +385,28 @@ async def run(workspace_python, out):
                         Client(endpoint, timeout=5) as hmi,
                     ):
                         await exercise(agent, operator, hmi, out / "wire.jsonl")
+                        policy_file = out / "deny-guard.json"
+                        policy_file.write_text(json.dumps({"version": 1, "deny_read": [PERMIT]}))
+                        denied_params = StdioServerParameters(
+                            command=workspace_python,
+                            args=["-m", "opcua_mcp_server"],
+                            env={
+                                **params.env,
+                                "OPCUA_POLICY_FILE": str(policy_file),
+                                "OPCUA_AUDIT_FILE": str(out / "denied-bridge-audit.jsonl"),
+                            },
+                        )
+                        with (out / "denied-bridge.log").open("w", encoding="utf-8") as errlog:
+                            async with (
+                                stdio_client(denied_params, errlog=errlog) as (read, write),
+                                ClientSession(
+                                    read, write, read_timeout_seconds=READ_TIMEOUT
+                                ) as denied_bridge,
+                            ):
+                                await denied_bridge.initialize()
+                                await guard_read_denial(
+                                    agent, operator, hmi, out / "wire.jsonl", backend, denied_bridge
+                                )
                         await boundary(
                             agent_url,
                             agent_port,

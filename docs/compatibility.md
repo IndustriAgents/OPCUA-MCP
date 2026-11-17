@@ -65,6 +65,7 @@ from this repository's source at the commit it records, against one server.
 |---|---|---|---|---|---|
 | eclipse milo example server 1.1.7 | Eclipse Milo (Java) | yes | 2026-09-24 | 0.5.1 | **Partially supported** |
 | open62541 conformance lab server 1.5.8 | open62541 (C) | yes | 2026-09-24 | 0.5.1 | **Partially supported** |
+| SimulationServer 2026.2.2 | Prosys OPC UA SDK for Java | yes | 2026-11-17 | 0.6.0 | **Supported** |
 
 Passed of the scenarios that ran, per group. *unsupported* means the server itself does not offer the feature; *not configured* means the run did not exercise it.
 
@@ -74,6 +75,8 @@ Passed of the scenarios that ran, per group. *unsupported* means the server itse
 | eclipse milo example server 1.1.7 | python 3.13.3 | 3/3 | 5/5, 1 unsupported | 4/4 | 1/1 | 2/3 (bug) | 3/3 | 1/1 | unsupported | 2/2 | 1/1, 1 unsupported | 3/3 | 2/2 |
 | open62541 conformance lab server 1.5.8 | node 22.14.0 | 3/3 | 6/6 | 4/4 | 2/2 | 2/3 (bug) | 3/3 | 1/1 | 2/2, 1 unsupported | 2/2 | 3/3, 1 unsupported | 4/4 | 3/3 |
 | open62541 conformance lab server 1.5.8 | python 3.13.3 | 3/3 | 6/6 | 4/4 | 2/2 | 2/3 (bug) | 3/3 | 1/1 | 2/2, 1 unsupported | 2/2 | 3/3, 1 unsupported | 4/4 | 3/3 |
+| SimulationServer 2026.2.2 | node 22.14.0 | 3/3 | 6/6 | 1/1 | 1/1 | 3/3 | 3/3 | 1/1 | 2/2 | 2/2 | not configured | 3/3 | not configured |
+| SimulationServer 2026.2.2 | python 3.14.8 | 3/3 | 6/6 | 1/1 | 1/1 | 3/3 | 3/3 | 1/1 | 2/2 | 2/2 | not configured | 3/3 | not configured |
 
 #### Findings
 
@@ -93,7 +96,11 @@ Not offered by this server (unsupported optional features): `security.sign`, `hi
 
 Not offered by this server (unsupported optional features): `history.aggregate`, `events.history`.
 
-Results: [`milo-example-2026-09-24.json`](../compatibility/results/milo-example-2026-09-24.json), [`open62541-lab-2026-09-24.json`](../compatibility/results/open62541-lab-2026-09-24.json).
+**SimulationServer 2026.2.2** (prosys-simulation-server, 2026-11-17)
+
+No failures: every scenario that ran passed on both runtimes.
+
+Results: [`milo-example-2026-09-24.json`](../compatibility/results/milo-example-2026-09-24.json), [`open62541-lab-2026-09-24.json`](../compatibility/results/open62541-lab-2026-09-24.json), [`prosys-simulation-server-2026-11-17.json`](../compatibility/results/prosys-simulation-server-2026-11-17.json).
 
 <details><summary>The scenarios</summary>
 
@@ -196,9 +203,8 @@ cannot be published.
 
 #### The servers behind the published results
 
-Both ran on the machine the harness ran on, started by the harness itself, so
-the restart scenarios could take the server away and give it back. Neither is a
-commercial product.
+The harness started the open62541 and Milo servers locally so it could run
+the restart scenarios. Prosys ran locally as a separate desktop application.
 
 - **open62541 1.5.8** (C, [open62541.org](https://www.open62541.org/)), built
   from source by
@@ -217,8 +223,21 @@ commercial product.
   the example server from Milo's own repository, unmodified. It has no
   history, no aggregates and no conditions, and offers no `Sign`-only endpoint,
   which is exactly what its *unsupported* cells say.
+- **Prosys OPC UA Simulation Server 2026.2.2, build 39** (Java,
+  [Prosys OPC](https://prosysopc.com/products/opc-ua-simulation-server/)), run
+  on macOS using its built-in Simulation and ComplianceNodes fixtures. The
+  [lab config](../compatibility/labs/prosys-simulation-server.json) uses anonymous
+  access, `Basic256Sha256` for secure-channel tests, and two synthetic scalar
+  variables for write tests. The harness did not control the server process.
+  To reproduce, start the simulator and set `PROSYS_SIMULATION_ENDPOINT` to
+  its loopback URL. Generate a disposable application certificate, for example
+  with `uv run --no-sync python tests/fixtures/pki.py <private-temp-dir>` from
+  the repository root. Trust only the client certificate in Prosys's
+  Certificates view, then point `PROSYS_CLIENT_CERT` and `PROSYS_CLIENT_KEY`
+  at its PEM files. Run the linked config with `--external`. Remove the
+  disposable certificate from Prosys's trust list afterward.
 
-Neither shares code with `python-opcua` or `node-opcua`, which is what makes them
+These servers do not share code with the bridge client stacks, which makes them
 evidence of interoperability. The node-opcua sample server and the `asyncua`
 example server are deliberately **not** in the matrix: the first is the Node
 runtime's own stack talking to itself, and the second descends from
@@ -232,13 +251,12 @@ result for a device built with it.
 The original production validation checklist
 ([#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70)) was closed as not
 planned with its criteria unchecked.
-[#275](https://github.com/IndustriAgents/OPCUA-MCP/issues/275) tracks conformance
-against Prosys OPC UA Simulation Server. A published result there would cover
-the tested simulator version and configuration. Validation on production
+The Prosys result for [#275](https://github.com/IndustriAgents/OPCUA-MCP/issues/275)
+covers the simulator version and configuration above. Validation on production
 equipment remains outstanding.
 
 A second client connecting to the same OPC UA endpoint uses its own session.
-The planned Prosys run exercises one MCP runtime at a time. Check concurrent
+The Prosys run exercised one MCP runtime at a time. Check concurrent
 connections, account permissions and session limits separately on the target
 setup before using a second client there.
 

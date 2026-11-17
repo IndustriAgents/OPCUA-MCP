@@ -7,9 +7,8 @@ test suite — the same working style as
 [`ROADMAP-0.2.0.md`](ROADMAP-0.2.0.md).
 
 Every phase here is **code and tests only**. Nothing in this plan needs physical
-equipment; the hardware gate is
-[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) and stays open until
-someone runs the suite against a vendor server.
+equipment. See [vendor validation status](compatibility.md#vendor-validation-status)
+for the current state of the separate validation work.
 
 ## The one finding everything descends from
 
@@ -379,10 +378,8 @@ they touch files Phase 5 does not, so the two large diffs never collide.
 
 ## Out of scope
 
-- **[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) — validation
-  against a real vendor server.** No code; needs equipment. It stays open as the
-  only remaining non-codeable gate, and Phases 1, 2 and 4 are exactly the
-  findings most likely to change behaviour when it is finally run.
+- **Validation against vendor equipment.** See
+  [vendor validation status](compatibility.md#vendor-validation-status).
 - **#14, #15, #16** — closed as set aside; see
   [ROADMAP.md](../ROADMAP.md#considered-and-set-aside).
 - **Per-client approval semantics for control tools** — the stated prerequisite

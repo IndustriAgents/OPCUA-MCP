@@ -173,11 +173,12 @@ result of its own.
   reason, and everything else passed. Read the findings before relying on the
   affected feature.
 - **Unverified** — no published result: the server was never run, or only one
-  runtime was, or a failure has not been classified. Prosys, Unified Automation,
-  Softing, KEPServerEX, Ignition, Siemens, Beckhoff and every other server not in
-  the table above are **unverified**. Both runtimes use general-purpose OPC UA
-  client libraries and speak no vendor-specific protocol, so they are *expected*
-  to work against a compliant server; expected is not tested.
+  runtime was, or a failure has not been classified. Unified Automation,
+  Softing, KEPServerEX, Ignition, Siemens, Beckhoff, other Prosys products and
+  versions, and every other server not in the table above are **unverified**.
+  Both runtimes use general-purpose OPC UA client libraries and speak no
+  vendor-specific protocol, so they are *expected* to work against a compliant
+  server; expected is not tested.
 
 #### What the outcomes mean
 

@@ -176,8 +176,9 @@ result of its own.
   runtime was, or a failure has not been classified. Unified Automation,
   Softing, KEPServerEX, Ignition, Siemens, Beckhoff, other Prosys products and
   versions, and every other server not in the table above are **unverified**.
-  Both runtimes use general-purpose OPC UA client libraries and speak no vendor-specific protocol, so they are *expected*
-  to work against a compliant server; expected is not tested.
+  Both runtimes use general-purpose OPC UA client libraries and speak no
+  vendor-specific protocol, so they are *expected* to work against a compliant
+  server; expected is not tested.
 
 #### What the outcomes mean
 

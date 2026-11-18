@@ -24,6 +24,7 @@ from typing import Any
 import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from opcua_mcp_server.python_backend import parse_python_backend
 
 ROOT = Path(__file__).resolve().parents[2]
 NODE_PACKAGE = ROOT / "packages" / "server-node"
@@ -185,11 +186,14 @@ def describe(runtime: str) -> dict[str, str]:
             except metadata.PackageNotFoundError:
                 return "unknown"
 
+        # server_params drops OPCUA_PYTHON_BACKEND, so the worker uses the
+        # bridge default even if the invoking shell selected a different backend.
+        distribution = "opcua" if parse_python_backend({}) == "legacy" else "asyncua"
         return {
             "runtime": "python",
             "runtime_version": platform.python_version(),
             "package_version": version("opcua-mcp-server"),
-            "opcua_library": f"opcua {version('opcua')}",
+            "opcua_library": f"{distribution} {version(distribution)}",
             "mcp_sdk": f"mcp {version('mcp')}",
         }
     if runtime == "node":

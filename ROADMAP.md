@@ -127,14 +127,12 @@ per endpoint. Serving a plant rather than a workstation needs, together:
 - a transport that can serve more than one client.
 
 That is one piece of work, not four, and #14 is half of it. The tool signatures
-are the part that would have to change, and they were only just stabilised at
-0.4.0 — so the sequencing that makes sense is to let
-[#70](https://github.com/IndustriAgents/OPCUA-MCP/issues/70) come back from real
-equipment first: whether sessions are actually scarce, and whether anyone is
-trying to run this for a line rather than for themselves, decides whether this is
-worth the tool-surface break. Until then, one process per endpoint is not a
-workaround, it is the design, and [the configuration guide](docs/configuration.md#one-process-one-endpoint) now says so
-where someone would meet it.
+are the part that would have to change, and they were stabilised at 0.4.0.
+Session limits and the need for line-wide operation still need evidence from
+real deployments. See
+[vendor validation status](docs/compatibility.md#vendor-validation-status).
+The supported model is
+[one endpoint per process](docs/configuration.md#one-process-one-endpoint).
 
 **Reopen when** the [identity and isolation RFC](docs/rfc/0001-remote-identity-isolation.md)
 is accepted and the implementation plan addresses its security gates (#148).

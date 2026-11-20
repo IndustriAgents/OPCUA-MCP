@@ -168,6 +168,21 @@ ServerStatusCapabilities = TypedDict('ServerStatusCapabilities', {
     'aggregate_functions': Required[list[JsonValue]],
 }, total=False)
 
+ServerStatusRecoveryMonitoringObject = TypedDict('ServerStatusRecoveryMonitoringObject', {
+    'source': Required[Literal['bridge', 'sdk']],
+    'data_restored': Required[int | None],
+    'event_restored': Required[int | None],
+    'data_failed': Required[int],
+    'event_failed': Required[int],
+    'degraded': Required[bool],
+}, total=False)
+
+ServerStatusRecovery = TypedDict('ServerStatusRecovery', {
+    'phase': Required[Literal['idle', 'reconnecting', 'rebinding_policy', 'restoring_subscriptions']],
+    'elapsed_ms': Required[int | None],
+    'monitoring': Required[ServerStatusRecoveryMonitoringObject | None],
+}, total=False)
+
 ServerStatusPolicyCheckObjectFindingsItem = TypedDict('ServerStatusPolicyCheckObjectFindingsItem', {
     'entry': Required[str],
     'problem': Required[str],
@@ -195,6 +210,7 @@ ServerStatus = TypedDict('ServerStatus', {
     'namespaces': Required[list[JsonValue]],
     'error': Required[str | None],
     'capabilities': Required[ServerStatusCapabilities],
+    'recovery': Required[ServerStatusRecovery],
     'policy_check': Required[ServerStatusPolicyCheckObject | None],
 }, total=False)
 

@@ -369,6 +369,76 @@ describe("the capability gate", () => {
 });
 
 describe("OpcuaConnection.reconnect", () => {
+  it("holds new calls and stale-session retries until the replacement finishes binding", async () => {
+    const connection = new OpcuaConnection();
+    const binding = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let opened = 0;
+    connection.open = async () => {
+      opened += 1;
+      connection.session = { close: async () => {} };
+      connection.session_ = "replacement";
+      connection.opcuaClient = { disconnect: async () => {} };
+      connection.state = "connected";
+    };
+    connection.onSessionReplaced = async () => {
+      connection.restoringSubscriptions();
+      binding.resolve();
+      await release.promise;
+      connection.subscriptionsRestored({ restored: 0, failed: 1 }, { restored: 1, failed: 0 });
+      assert.equal(connection.recoveryStatus.phase, "rebinding_policy");
+    };
+
+    const rebuild = connection.reconnect();
+    assert.equal(connection.recoveryStatus.phase, "reconnecting");
+    await binding.promise;
+    let finished = 0;
+    const callers = [connection.ensureConnection(), connection.reconnect("stale")].map((call) =>
+      call.then(() => finished++)
+    );
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(connection.connecting, true);
+      assert.equal(connection.connected, false);
+      assert.equal(connection.recoveryStatus.phase, "restoring_subscriptions");
+      assert.equal(finished, 0);
+    } finally {
+      release.resolve();
+      await Promise.all([rebuild, ...callers]);
+    }
+    assert.equal(connection.connected, true);
+    assert.equal(connection.recoveryStatus.phase, "idle");
+    assert.equal(connection.recoveryStatus.monitoring.degraded, true);
+    assert.equal(opened, 1);
+  });
+
+  it("waits for session binding when native channel repair finishes", async () => {
+    const connection = new OpcuaConnection();
+    connection.session = {};
+    connection.state = "reconnecting";
+    connection.rebuild = async () =>
+      assert.fail("native repair should avoid an application rebuild");
+    let finished = false;
+    const caller = connection.ensureConnection().then(() => {
+      finished = true;
+    });
+    const release = Promise.withResolvers();
+    connection.restorePromise = release.promise.finally(() => {
+      connection.restorePromise = null;
+    });
+    connection.state = "connected";
+
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(connection.connected, false);
+      assert.equal(finished, false);
+    } finally {
+      release.resolve();
+      await caller;
+    }
+    assert.equal(connection.connected, true);
+  });
+
   // #107. `connect()` was already single-flight, so two rebuilds could not both
   // open a client — but they could interleave so that one tore down the fresh
   // session the other had just opened and was about to return.

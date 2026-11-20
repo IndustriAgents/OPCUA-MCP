@@ -82,7 +82,11 @@ export class ProtocolFeatureHandlers implements FeatureHandlers {
     // The check as it stands, never one of its own: it runs on every session,
     // and says which generation it ran on. null while not connected — a check
     // of a session that is gone describes nothing.
-    return { ...status, policy_check: status.connected ? this.runtime.policyCheck : null };
+    return {
+      ...status,
+      policy_check: status.connected ? this.runtime.policyCheck : null,
+      recovery: this.conn.recoveryStatus,
+    };
   }
 
   async readOpcuaNodes(nodeIds: string[], includeWriteAccess = false) {

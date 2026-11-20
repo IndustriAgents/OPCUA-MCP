@@ -19,22 +19,24 @@ from ..state import ServerState
 
 
 def _bind(state: ServerState, context: dict, client) -> None:
-    """Point everything that holds a client at the one just established."""
+    """Prepare session-scoped state before the connection releases callers."""
     context["opcua_client"] = client
-    state.subscriptions.reattach(client)
-    # Event subscriptions belong to a session just the same. Not re-attaching
-    # them left `read_events` draining a buffer nothing would ever fill again,
-    # and answering `[]` — "nothing happened" — for as long as anyone asked.
-    state.events.reattach(client)
     # A new session may be a restarted server, whose nodes are not necessarily
     # the nodes the old ids named. What each one said about its unit and its
     # range was true of the session that said it — and so was what it said about
     # its class, its type and who may write it.
+    state.forget_capabilities()
     state.node_metadata.forget()
     state.node_facts.forget()
     connection = state.connection
+    if connection is not None:
+        connection.restoring_subscriptions()
+    data = state.subscriptions.reattach(client)
+    events = state.events.reattach(client)
+    if connection is not None:
+        connection.subscriptions_restored(data, events)
     _probe_capabilities(state, client, connection)
-    # Last, with the NamespaceArray bound (by the connection, before this) and
+    # With the NamespaceArray bound (by the connection, before this) and
     # the operation limits read (just above): the browse paths, subtrees and
     # deny_read resolved on this session, and the policy measured against it.
     # Before any tool call rides the session, because every call waits for the

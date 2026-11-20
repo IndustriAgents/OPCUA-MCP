@@ -713,6 +713,7 @@ describe("SubscriptionManager teardown", () => {
     return {
       async createSubscription2() {
         const subscription = {
+          on() {},
           async terminate() {
             terminated.push(subscription);
           },
@@ -762,6 +763,7 @@ describe("SubscriptionManager teardown", () => {
     return {
       async createSubscription2() {
         return {
+          on() {},
           async terminate() {
             throw new Error("session closed");
           },

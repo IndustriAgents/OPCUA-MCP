@@ -47,6 +47,7 @@ from __future__ import annotations
 import secrets
 import sys
 import threading
+import time
 from collections.abc import Callable
 from concurrent import futures
 from typing import TypeVar
@@ -110,10 +111,13 @@ DEAD_SESSION_MARKERS: tuple[str, ...] = (
 #: ordinary tool failure with no reason at all and no reconnection — the precise
 #: failure this list exists to prevent, on the oldest supported Python. On 3.11+
 #: this entry is the same object as ``TimeoutError`` and changes nothing.
+#: The legacy client's receiver also cancels its pending response futures when
+#: the socket closes. That synchronous cancellation marks a lost connection.
 _DEAD_SESSION_TYPES = (
     ConnectionError,
     TimeoutError,
     futures.TimeoutError,
+    futures.CancelledError,
     OSError,
     EOFError,
 )
@@ -168,12 +172,22 @@ class _Rebuild:
     answer a waiter had not yet read.
     """
 
-    __slots__ = ("client", "done", "failure")
+    __slots__ = ("client", "done", "failure", "monitoring", "phase", "started")
 
     def __init__(self) -> None:
         self.done = threading.Event()
         self.client: Client | None = None
         self.failure: BaseException | None = None
+        self.started = time.monotonic()
+        self.phase = "reconnecting"
+        self.monitoring: dict | None = None
+
+    def status(self, phase: str) -> dict:
+        return {
+            "phase": phase,
+            "elapsed_ms": int((time.monotonic() - self.started) * 1000),
+            "monitoring": self.monitoring,
+        }
 
 
 class OpcuaConnection:
@@ -211,6 +225,7 @@ class OpcuaConnection:
         #: The rebuild in flight, so concurrent callers join it rather than start
         #: a second. ``None`` when nothing is being rebuilt.
         self._rebuilding: _Rebuild | None = None
+        self._last_recovery: dict = {"phase": "idle", "elapsed_ms": None, "monitoring": None}
         #: Set by :meth:`close`. The backoff waits on it rather than sleeping, so
         #: a round still dialling a plant that is down stops when the server does.
         self._closed = threading.Event()
@@ -230,8 +245,9 @@ class OpcuaConnection:
 
     @property
     def connected(self) -> bool:
-        """True while this server holds a session it believes is live."""
-        return self._client is not None
+        """True when a live session has finished binding its state."""
+        with self._lock:
+            return self._rebuilding is None and self._client is not None
 
     @property
     def connecting(self) -> bool:
@@ -248,6 +264,32 @@ class OpcuaConnection:
     def last_error(self) -> str | None:
         """Why the connection is not up, in the client library's words."""
         return self._last_error
+
+    def recovery_status(self) -> dict:
+        """Read local recovery progress without joining the connection round."""
+        with self._lock:
+            attempt = self._rebuilding
+            return attempt.status(attempt.phase) if attempt is not None else self._last_recovery
+
+    def restoring_subscriptions(self) -> None:
+        with self._lock:
+            if self._rebuilding is not None:
+                self._rebuilding.phase = "restoring_subscriptions"
+
+    def subscriptions_restored(self, data: tuple[int, int], events: tuple[int, int]) -> None:
+        data_restored, data_failed = data
+        event_restored, event_failed = events
+        with self._lock:
+            if self._rebuilding is not None:
+                self._rebuilding.monitoring = {
+                    "source": "bridge",
+                    "data_restored": data_restored,
+                    "event_restored": event_restored,
+                    "data_failed": data_failed,
+                    "event_failed": event_failed,
+                    "degraded": data_failed + event_failed > 0,
+                }
+                self._rebuilding.phase = "rebinding_policy"
 
     @property
     def session_id(self) -> str | None:
@@ -374,13 +416,13 @@ class OpcuaConnection:
             client = self._client
             self._client = None
             self._session = None
-            if client is None:
-                return
-            try:
-                client.disconnect()
-                print("Disconnected from OPC UA server", file=sys.stderr)
-            except Exception as error:
-                print(f"Error disconnecting from OPC UA server: {error}", file=sys.stderr)
+        if client is None:
+            return
+        try:
+            client.disconnect()
+            print("Disconnected from OPC UA server", file=sys.stderr)
+        except Exception as error:
+            print(f"Error disconnecting from OPC UA server: {error}", file=sys.stderr)
 
     def settle(self) -> None:
         """Wait for the connection round already running, whatever it finds.
@@ -412,14 +454,10 @@ class OpcuaConnection:
     def ensure_connected(self) -> Client:
         """A live client, connecting if there is not one yet.
 
-        Goes through :meth:`reconnect` even for the very first connection, so
-        that whatever holds a client is bound to it by exactly one path — the
-        first session and the fiftieth arrive the same way.
+        Join any round in flight, including its session binding, before deciding
+        whether the client can be reused.
         """
-        with self._lock:
-            if self._client is not None:
-                return self._client
-        return self.reconnect()
+        return self._acquire_session(reuse=True)
 
     def reconnect(self, stale: str | None = None) -> Client:
         """Throw the client away and build a new one, whatever state it was in.
@@ -442,11 +480,16 @@ class OpcuaConnection:
         sleep it cannot learn anything from. A caller that arrives mid-rebuild
         takes that rebuild's answer rather than starting a second (issue #111).
         """
+        return self._acquire_session(stale=stale)
+
+    def _acquire_session(self, *, reuse: bool = False, stale: str | None = None) -> Client:
         with self._lock:
-            if stale is not None and self._client is not None and self._session != stale:
-                return self._client
             mine = self._rebuilding is None
             if mine:
+                if self._client is not None and (
+                    reuse or (stale is not None and self._session != stale)
+                ):
+                    return self._client
                 self._rebuilding = _Rebuild()
             attempt = self._rebuilding
 
@@ -472,6 +515,7 @@ class OpcuaConnection:
             raise
         finally:
             with self._lock:
+                self._last_recovery = attempt.status("idle")
                 self._rebuilding = None
             # After the claim is released, so a caller that wakes and finds no
             # client is free to start its own attempt.
@@ -491,10 +535,8 @@ class OpcuaConnection:
         self.disconnect()
         client = self._open_with_backoff()
         with self._lock:
-            self._client = client
             self._session = secrets.token_hex(8)
             self._generation += 1
-            self._last_error = None
         if self.on_client_replaced is not None:
             try:
                 self.on_client_replaced(client)
@@ -505,6 +547,9 @@ class OpcuaConnection:
                     f"Error re-establishing state on the new OPC UA session: {error}",
                     file=sys.stderr,
                 )
+        with self._lock:
+            self._client = client
+            self._last_error = None
         return client
 
     def run(self, operation: Callable[[], T], may_repeat: bool = True) -> T:

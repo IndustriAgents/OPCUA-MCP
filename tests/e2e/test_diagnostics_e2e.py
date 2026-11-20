@@ -166,6 +166,7 @@ async def test_both_servers_report_the_same_thing(opcua_server):
     # found, and on which session, must match.
     for report in reports.values():
         assert report["capabilities"].pop("checked_at").endswith("Z"), report
+        assert report["recovery"].pop("elapsed_ms") >= 0, report
     assert {k: v for k, v in reports["python"].items() if k not in moving} == {
         k: v for k, v in reports["node"].items() if k not in moving
     }

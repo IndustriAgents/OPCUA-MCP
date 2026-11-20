@@ -1,9 +1,8 @@
 """End-to-end tests for connection resilience (issue #18).
 
-The claim under test is the one an operator actually cares about: restart the OPC
-UA server and the MCP server keeps working, without being restarted itself. So
-each test here takes a mock away, gives it back on the same endpoint, and asks
-the MCP server to do its job again.
+The MCP server must keep working when an OPC UA endpoint goes away and comes
+back. A lost write response must also leave the outcome uncertain, even when the
+endpoint applied the write before dropping the connection.
 
 That needs a mock of its own — `restartable_opcua_server`, function-scoped —
 because stopping the session-wide one would break every other test using it.
@@ -22,6 +21,8 @@ import sys
 import tempfile
 
 import pytest
+from asyncua import Server, ua
+from asyncua.common.callback import CallbackType, ServerItemCallback
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 from test_contract_parity import CONTRACT, normalized_catalogue
@@ -115,6 +116,113 @@ async def test_writes_recover_after_the_server_restarts(impl, restartable_opcua_
         # write races that timer. Nothing touches this node but the test.
         readback = await read_until_ok(session, NODE["ScratchDouble"])
         assert records_of(readback)[0]["value"] == 42.5, text_of(readback)
+
+
+async def test_applied_write_with_lost_response_is_uncertain_and_not_replayed(impl, tmp_path):
+    server = Server()
+    await server.init()
+    server.set_endpoint("opc.tcp://127.0.0.1:0/")
+    server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+    namespace = await server.register_namespace("urn:opcua-mcp:lost-response-test")
+    target = await server.nodes.objects.add_variable(
+        ua.NodeId("Setpoint", namespace), "Setpoint", 0.0
+    )
+    await target.set_writable()
+    node_id = target.nodeid.to_string()
+    writes: list[list[ua.NodeId]] = []
+
+    def lose_first_write_response(event: ServerItemCallback, _service):
+        if not event.is_external:
+            return
+        writes.append([item.NodeId for item in event.request_params.NodesToWrite])
+        if writes == [[target.nodeid]]:
+            assert event.response_params[0].is_good()
+            # PostWrite runs after the value is stored and before WriteResponse
+            # is sent. Close the sole client's socket and keep listening.
+            (transport,) = server.iserver.asyncio_transports
+            transport.abort()
+
+    server.subscribe_server_callback(CallbackType.PostWrite, lose_first_write_response)
+    audit_path = tmp_path / "audit.jsonl"
+    async with server:
+        url = f"opc.tcp://127.0.0.1:{server.bserver.port}/"
+        async with connect(params_for(impl, url, OPCUA_AUDIT_FILE=str(audit_path))) as session:
+            result = await asyncio.wait_for(
+                session.call_tool(
+                    "write_opcua_nodes",
+                    {"nodes": [{"node_id": node_id, "value": 42.5}]},
+                ),
+                timeout=30,
+            )
+            assert result.is_error, text_of(result)
+            assert "whether it took effect is unknown" in text_of(result)
+            assert node_id in text_of(result)
+
+            readback = await read_until_ok(session, node_id)
+            assert not readback.is_error, text_of(readback)
+            assert records_of(readback)[0]["value"] == 42.5
+
+        assert writes == [[target.nodeid]]
+
+    allowed, outcome = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert allowed["decision"] == "allowed"
+    assert outcome["decision"] == "uncertain"
+    assert "whether it took effect is unknown" in outcome["reason"]
+    assert outcome["call_id"] == allowed["call_id"]
+    for record in (allowed, outcome):
+        assert record["attempt"] == 1
+        assert record["tool"] == "write_opcua_nodes"
+        assert record["node_ids"] == [node_id]
+        assert record["session_generation"] == allowed["session_generation"]
+
+
+async def test_status_reports_degraded_monitoring_after_a_rebuild(impl):
+    from test_diagnostics_e2e import status_of
+
+    server = Server()
+    await server.init()
+    server.set_endpoint("opc.tcp://127.0.0.1:0/")
+    server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+    namespace = await server.register_namespace("urn:opcua-mcp:recovery-test")
+    removed = await server.nodes.objects.add_variable(namespace, "Removed", 0.0)
+    retained = await server.nodes.objects.add_variable(namespace, "Retained", 0.0)
+    removed_id = removed.nodeid.to_string()
+    retained_id = retained.nodeid.to_string()
+
+    async with server:
+        url = f"opc.tcp://127.0.0.1:{server.bserver.port}/"
+        # Exercise bridge-owned restoration in both runtimes.
+        async with connect(params_for(impl, url, OPCUA_RECONNECT_MAX_RETRY="0")) as session:
+            subscribed = await session.call_tool(
+                "subscribe_opcua_nodes", {"node_ids": [removed_id, retained_id]}
+            )
+            assert not subscribed.is_error, text_of(subscribed)
+            assert len(records_of(subscribed)) == 2
+            (client,) = server.bserver.clients
+            await client.processor.session.close_session()
+            await removed.delete()
+            (transport,) = server.iserver.asyncio_transports
+            transport.abort()
+
+            readback = await read_until_ok(session, retained_id)
+            assert not readback.is_error, text_of(readback)
+            report = status_of(await session.call_tool("get_server_status", {}))
+            assert report["connected"] is True
+            recovery = report["recovery"]
+            assert recovery["phase"] == "idle"
+            assert recovery["elapsed_ms"] >= 0
+            assert recovery["monitoring"] == {
+                "source": "bridge",
+                "data_restored": 1,
+                "event_restored": 0,
+                "data_failed": 1,
+                "event_failed": 0,
+                "degraded": True,
+            }
+            listed = records_of(await session.call_tool("list_subscriptions", {}))
+            assert [record["node_id"] for record in listed] == [retained_id]
 
 
 async def test_status_reports_the_reconnection(impl, restartable_opcua_server):
@@ -384,6 +492,9 @@ async def test_mcp_starts_and_stays_diagnosable_while_the_endpoint_is_offline(
         assert status["connected"] is False, f"{impl}: {status}"
         assert status["endpoint_url"] == server.url
         assert status["error"], f"{impl}: a disconnected status must say why"
+        assert status["recovery"]["phase"] == "reconnecting", status
+        assert status["recovery"]["elapsed_ms"] >= 0, status
+        assert status["recovery"]["monitoring"] is None, status
 
         # A read joins the connection round and fails when it does: bounded, and
         # worded as the outage it is. One round plus a generous margin.

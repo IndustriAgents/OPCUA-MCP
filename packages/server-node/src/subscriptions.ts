@@ -28,6 +28,24 @@ import { HistoryRecord, toHistoryRecord } from "./records.js";
 import { ToolFailure, message } from "./errors.js";
 import { isGood } from "./status.js";
 
+const sdkFailures = new WeakSet<ClientSubscription>();
+
+export function watchSdkSubscription(subscription: ClientSubscription): void {
+  subscription.on("internal_error", () => sdkFailures.add(subscription));
+}
+
+export function sdkSubscriptionFailed(subscription: ClientSubscription | null): boolean {
+  if (!subscription) return true;
+  const reportedError = sdkFailures.delete(subscription);
+  const items = Object.values(subscription.monitoredItems);
+  return (
+    reportedError ||
+    !subscription.isActive ||
+    items.length === 0 ||
+    items.some((item) => !isGood(item.statusCode))
+  );
+}
+
 // Defaults and bounds, read from the contract rather than written here. They
 // were five constants declared identically in this file and in
 // `subscriptions.py` — two copies of the same promise, which the tool
@@ -298,12 +316,15 @@ export class SubscriptionManager {
    * as a handle that will never deliver again: `list_subscriptions` has to keep
    * telling the truth.
    */
-  async reattach(session: ClientSession): Promise<void> {
-    for (const entry of [...this.entries.values()]) {
+  async reattach(session: ClientSession): Promise<{ restored: number; failed: number }> {
+    const entries = [...this.entries.values()];
+    let failed = 0;
+    for (const entry of entries) {
       try {
         await this.attach(session, entry);
         console.error(`Re-established subscription ${entry.id} on node ${entry.nodeId}`);
       } catch (error) {
+        failed += 1;
         this.entries.delete(entry.id);
         console.error(
           `Could not re-establish subscription ${entry.id} on node ${entry.nodeId}: ${
@@ -312,6 +333,12 @@ export class SubscriptionManager {
         );
       }
     }
+    return { restored: entries.length - failed, failed };
+  }
+
+  sdkRestoreFailures(): number {
+    return [...this.entries.values()].filter((entry) => sdkSubscriptionFailed(entry.subscription))
+      .length;
   }
 
   /** Create the OPC UA subscription and monitored item behind one entry.
@@ -351,6 +378,7 @@ export class SubscriptionManager {
         );
       }
       monitoredItem.on("changed", (dataValue: DataValue) => this.record(entry, dataValue));
+      watchSdkSubscription(subscription);
       entry.subscription = subscription;
       entry.monitoredItem = monitoredItem;
     } catch (error) {

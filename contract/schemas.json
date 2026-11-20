@@ -801,6 +801,92 @@
           ],
           "additionalProperties": false
         },
+        "recovery": {
+          "type": "object",
+          "description": "Bridge connection progress and the latest monitoring restoration results. Available during an outage without a fresh OPC UA status read.",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": [
+                "idle",
+                "reconnecting",
+                "rebinding_policy",
+                "restoring_subscriptions"
+              ],
+              "description": "Current connection or recovery phase. Idle means no work is in progress; use connected to tell whether the bridge is online."
+            },
+            "elapsed_ms": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "Duration so far for an active round, or the duration of the last round while idle. Null before the first attempt."
+            },
+            "monitoring": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Restoration results for the current or last connection round. Null until monitoring restoration has reported results.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "bridge",
+                    "sdk"
+                  ],
+                  "description": "Whether the bridge recreated the subscriptions or the Node OPC UA SDK handled recovery."
+                },
+                "data_restored": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Data subscriptions the bridge recreated. Null when SDK recovery cannot confirm a success count."
+                },
+                "event_restored": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Event subscriptions the bridge recreated. Null when SDK recovery cannot confirm a success count."
+                },
+                "data_failed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Data subscriptions whose restoration failed or whose SDK handle reports a failure."
+                },
+                "event_failed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Event subscriptions whose restoration failed or whose SDK handle reports a failure."
+                },
+                "degraded": {
+                  "type": "boolean",
+                  "description": "True when monitoring restoration has a known failure. SDK recovery may leave outcomes unverified."
+                }
+              },
+              "required": [
+                "source",
+                "data_restored",
+                "event_restored",
+                "data_failed",
+                "event_failed",
+                "degraded"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "phase",
+            "elapsed_ms",
+            "monitoring"
+          ],
+          "additionalProperties": false
+        },
         "policy_check": {
           "type": [
             "object",
@@ -884,6 +970,7 @@
         "namespaces",
         "error",
         "capabilities",
+        "recovery",
         "policy_check"
       ],
       "additionalProperties": false

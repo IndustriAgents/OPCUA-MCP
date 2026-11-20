@@ -175,8 +175,11 @@ export class NodeOpcuaRuntime {
     // every `subscribe_opcua_nodes` handle the agent holds silently dead.
     this.conn.onSessionReplaced = async (session) => {
       this.forgetSession();
-      await this.subs.reattach(session);
-      await this.events.reattach(session);
+      // The managers report and drop individual handles they cannot reattach.
+      this.conn.restoringSubscriptions();
+      const data = await this.subs.reattach(session);
+      const events = await this.events.reattach(session);
+      this.conn.subscriptionsRestored(data, events);
       // With the session in hand, not through the connection: this runs inside
       // `reconnect()`, and a probe that called `ensureConnection()` from here
       // would re-enter the connect path it is standing in. Read now so the
@@ -191,6 +194,10 @@ export class NodeOpcuaRuntime {
       this.forgetSession();
       await this.learnSession(session);
     };
+    this.conn.sdkMonitoringFailures = () => ({
+      data: this.subs.sdkRestoreFailures(),
+      events: this.events.sdkRestoreFailures(),
+    });
   }
 
   /** Drop everything learned about the session that has just gone.
@@ -204,6 +211,7 @@ export class NodeOpcuaRuntime {
    */
   private forgetSession(): void {
     this.events.forgetConditions();
+    this.capabilities = unasked();
     this.serverLimits = UNSTATED;
     this.metadata.serverLimits = UNSTATED;
     this.metadata.forget();

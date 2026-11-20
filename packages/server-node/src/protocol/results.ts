@@ -9,11 +9,13 @@ import type { SubscriptionRecord } from "../application/subscriptions.js";
 import type { ServerStatusRecord } from "../application/diagnostics.js";
 import type { CapabilityStatusRecord } from "../capabilities.js";
 import type { PolicyCheckRecord } from "../policy-resolution.js";
+import type { RecoveryStatus } from "../connection.js";
 /** `resultShapes.serverStatus`: what the server says, what it was found to support,
  *  and how the deployment's policy measured up against it. */
 export type ServerStatusReport = ServerStatusRecord & {
   capabilities: CapabilityStatusRecord;
   policy_check: PolicyCheckRecord | null;
+  recovery: RecoveryStatus;
 };
 export function withNotice<T extends { content: Array<{ type: string; text: string }> }>(
   result: T,

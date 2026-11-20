@@ -303,7 +303,7 @@ class SubscriptionManager:
             with self._lock:
                 self._pending -= 1
 
-    def reattach(self, client: Any) -> None:
+    def reattach(self, client: Any) -> tuple[int, int]:
         """Re-create every subscription on ``client``, after the old one died.
 
         What makes an OPC UA MCP server survivable across a plant restart: the
@@ -315,11 +315,12 @@ class SubscriptionManager:
         Best-effort per subscription. One the server will not take back (its node
         is gone from the new address space, say) is dropped rather than left in
         the list as a handle that will never deliver again: ``list_subscriptions``
-        has to keep telling the truth.
+        has to keep telling the truth. Return the restored and failed counts.
         """
         self.attach(client)
         with self._lock:
             entries = list(self._entries.values())
+        failed = 0
         for entry in entries:
             try:
                 self._attach(client, entry)
@@ -328,6 +329,7 @@ class SubscriptionManager:
                     file=sys.stderr,
                 )
             except Exception as error:
+                failed += 1
                 with self._lock:
                     self._entries.pop(entry.id, None)
                 print(
@@ -335,6 +337,7 @@ class SubscriptionManager:
                     f"{entry.node_id}: {error}",
                     file=sys.stderr,
                 )
+        return len(entries) - failed, failed
 
     def _attach(self, client: Any, entry: _Entry) -> None:
         """Create the OPC UA subscription and monitored item behind one entry.

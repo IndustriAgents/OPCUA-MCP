@@ -14,7 +14,7 @@ export class NodeOpcuaDiagnosticsPort<C> implements DiagnosticsPort<C> {
   snapshot() {
     return {
       endpoint: this.connection.endpointUrl,
-      connecting: this.connection.connecting,
+      connecting: this.connection.connecting || this.connection.recoveryStatus.phase !== "idle",
       lastError: this.connection.lastErrorMessage,
     };
   }

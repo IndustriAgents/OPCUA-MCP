@@ -460,6 +460,18 @@ when another tool fails.
     "support": { "history": "supported", "historyEvents": "supported", "aggregate": "not_supported" },
     "aggregate_functions": []
   },
+  "recovery": {
+    "phase": "idle",
+    "elapsed_ms": 173,
+    "monitoring": {
+      "source": "bridge",
+      "data_restored": 2,
+      "event_restored": 0,
+      "data_failed": 1,
+      "event_failed": 0,
+      "degraded": true
+    }
+  },
   "policy_check": {
     "generation": 1,
     "writable_nodes": [],
@@ -471,6 +483,13 @@ when another tool fails.
 }
 ```
 > Prompt: *"Are we actually connected, and is the PLC healthy?"*
+
+`recovery.phase` reports `reconnecting`, `restoring_subscriptions`, or
+`rebinding_policy` while connection work is in progress. When the phase is
+`idle`, `elapsed_ms` is the duration of the last round. A connected bridge can
+still have `recovery.monitoring.degraded` set to true when a subscription failed
+to recover. For Node SDK repair, success counts are null and failure counts
+include the errors the SDK makes visible.
 
 `policy_check` is the deployment's policy measured against this server, from the
 check every session runs. Under `operator` it lists what the allowlists resolved

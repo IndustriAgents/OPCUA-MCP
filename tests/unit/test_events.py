@@ -326,9 +326,12 @@ def test_a_new_session_re_creates_the_subscription_and_keeps_the_buffer():
     assert subscriptions.drain("ns=0;i=2253", 10)[4] is False, "the gap is reported once"
 
 
-def test_a_subscription_the_new_session_refuses_is_dropped():
+def test_a_subscription_the_new_session_refuses_is_reported_and_dropped(capsys):
     """So `read_events` says "not subscribed" rather than "nothing happened"."""
     subscriptions = EventSubscriptions()
     subscriptions.subscribe(_FakeEventClient(), "ns=0;i=2253", 0, 10)
-    subscriptions.reattach(_FakeEventClient(refuse=True))
+    assert subscriptions.reattach(_FakeEventClient(refuse=True)) == (0, 1)
     assert subscriptions.drain("ns=0;i=2253", 10) is None
+    assert "Could not re-establish the event subscription on node ns=0;i=2253" in (
+        capsys.readouterr().err
+    )

@@ -274,6 +274,62 @@ def _until(predicate, timeout: float = 5.0) -> None:
         time.sleep(0.01)
 
 
+@pytest.mark.parametrize("join_via_reconnect", [False, True])
+def test_callers_wait_for_the_replacement_to_finish_binding(monkeypatch, join_via_reconnect):
+    opener = _Opener()
+    subject = connection(opener)
+    subject.ensure_connected()
+    stale = subject.session_id
+    binding = threading.Event()
+    release = threading.Event()
+    phases = []
+
+    def bind(_client):
+        subject.restoring_subscriptions()
+        binding.set()
+        release.wait()
+        subject.subscriptions_restored((0, 1), (1, 0))
+        phases.append(subject.recovery_status()["phase"])
+
+    subject.on_client_replaced = bind
+    rebuild, replacement = _in_background(subject.reconnect)
+    try:
+        assert binding.wait(5)
+        assert subject.connecting
+        assert not subject.connected
+        assert subject.recovery_status()["phase"] == "restoring_subscriptions"
+
+        waiting = threading.Event()
+        done = subject._rebuilding.done
+        wait_for_done = done.wait
+
+        def wait(timeout=None):
+            waiting.set()
+            return wait_for_done(timeout)
+
+        monkeypatch.setattr(done, "wait", wait)
+
+        def join():
+            if join_via_reconnect:
+                return subject.reconnect(stale=stale)
+            return subject.ensure_connected()
+
+        caller, result = _in_background(join)
+        assert waiting.wait(5), "caller bypassed the session binding"
+    finally:
+        release.set()
+        rebuild.join(5)
+
+    caller.join(5)
+    assert subject.connected
+    assert phases == ["rebinding_policy"]
+    recovery = subject.recovery_status()
+    assert recovery["phase"] == "idle"
+    assert recovery["monitoring"]["degraded"] is True
+    assert result["result"] is replacement["result"] is subject.client
+    assert opener.calls == 2
+
+
 def test_a_round_in_flight_is_visible_and_says_why_it_is_still_going():
     """`get_server_status` reads these instead of joining the round.
 

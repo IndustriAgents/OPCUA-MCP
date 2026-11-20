@@ -6,6 +6,7 @@
 // written out here and left to python-opcua's defaults there, so the two asked a
 // server for subscriptions that outlived their client by a minute and by hours.
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 
 import { DataType, StatusCodes, Variant } from "node-opcua-client";
@@ -19,20 +20,26 @@ function recordingSession({ refuse = false } = {}) {
   const session = {
     requests: [],
     listeners: [],
+    subscriptions: [],
     async createSubscription2(request) {
       session.requests.push(request);
-      return {
+      const subscription = Object.assign(new EventEmitter(), {
+        isActive: true,
+        monitoredItems: {},
         async terminate() {},
         async monitor() {
           if (refuse) throw new Error("BadNodeIdUnknown");
-          return {
+          this.monitoredItems[1] = {
             statusCode: StatusCodes.Good,
             on(_event, listener) {
               session.listeners.push(listener);
             },
           };
+          return this.monitoredItems[1];
         },
-      };
+      });
+      session.subscriptions.push(subscription);
+      return subscription;
     },
   };
   return session;
@@ -85,7 +92,7 @@ describe("event subscriptions across a new session", () => {
     old.listeners[0](anEvent());
 
     const replacement = recordingSession();
-    await subscriptions.reattach(replacement);
+    assert.deepEqual(await subscriptions.reattach(replacement), { restored: 1, failed: 0 });
 
     assert.equal(replacement.requests.length, 1, "no subscription was created on the new session");
     const drained = subscriptions.drain(replacement, "ns=0;i=2253", 10);
@@ -97,11 +104,31 @@ describe("event subscriptions across a new session", () => {
     assert.equal(subscriptions.drain(replacement, "ns=0;i=2253", 10).records.length, 1);
   });
 
-  it("are dropped when the new session refuses them", async () => {
+  it("are reported and dropped when the new session refuses them", async (test) => {
     const subscriptions = new EventSubscriptions();
     await subscriptions.subscribe(recordingSession(), "ns=0;i=2253", 0, 10);
     const refusing = recordingSession({ refuse: true });
-    await subscriptions.reattach(refusing);
+    const logged = test.mock.method(console, "error", () => {});
+    assert.deepEqual(await subscriptions.reattach(refusing), { restored: 0, failed: 1 });
     assert.equal(subscriptions.drain(refusing, "ns=0;i=2253", 10), null);
+    assert.deepEqual(
+      logged.mock.calls.map((call) => call.arguments),
+      [["Could not re-establish the event subscription on node ns=0;i=2253: BadNodeIdUnknown"]]
+    );
+  });
+
+  it("reports a native SDK error and a rejected monitored item", async () => {
+    const session = recordingSession();
+    const data = new SubscriptionManager();
+    const events = new EventSubscriptions();
+    await data.subscribe(session, "ns=2;i=3");
+    await events.subscribe(session, "ns=0;i=2253", 0, 10);
+    const [dataSubscription, eventSubscription] = session.subscriptions;
+    dataSubscription.emit("internal_error", new Error("subscription creation failed"));
+    eventSubscription.monitoredItems[1].statusCode = StatusCodes.BadNodeIdUnknown;
+
+    assert.equal(data.sdkRestoreFailures(), 1);
+    assert.equal(events.sdkRestoreFailures(), 1);
+    assert.equal(data.sdkRestoreFailures(), 0, "the SDK error belongs to the previous round");
   });
 });

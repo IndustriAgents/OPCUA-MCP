@@ -246,7 +246,7 @@ class EventSubscriptions:
             with self._lock:
                 self._pending.discard(node_id)
 
-    def reattach(self, client) -> None:
+    def reattach(self, client) -> tuple[int, int]:
         """Re-create every event subscription on ``client``, after the old one died.
 
         The promise ``SubscriptionManager.reattach`` makes for data changes, kept
@@ -259,15 +259,17 @@ class EventSubscriptions:
 
         Best-effort per notifier. One the new session will not take back is
         dropped, so ``read_events`` says "not subscribed" rather than "nothing
-        happened".
+        happened". Return the restored and failed counts.
         """
         with self._lock:
             self._condition_of_event.clear()
             entries = list(self._subscriptions.items())
+        failed = 0
         for node_id, (_old, handler) in entries:
             try:
                 subscription = _attach(client, node_id, handler)
             except Exception as error:
+                failed += 1
                 with self._lock:
                     self._subscriptions.pop(node_id, None)
                 print(
@@ -280,6 +282,7 @@ class EventSubscriptions:
             with self._lock:
                 self._subscriptions[node_id] = (subscription, handler)
             print(f"Re-established the event subscription on node {node_id}", file=sys.stderr)
+        return len(entries) - failed, failed
 
     def drain(self, node_id: str, limit: int) -> tuple[list[dict], int, int, int, bool] | None:
         """Take up to ``limit`` buffered events, or None when not subscribed.

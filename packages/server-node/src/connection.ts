@@ -39,6 +39,7 @@ import {
 import { TrustStore, trustRefusal } from "./trust-store.js";
 import { CLIENT_APPLICATION_NAME } from "./client-identity.js";
 import { singleSendControls } from "./adapters/control-transactions.js";
+import type { ServerStatus } from "./generated/contract-types.js";
 
 import { randomBytes } from "crypto";
 import { setDefaultAutoSelectFamily } from "net";
@@ -194,6 +195,9 @@ export function stillConnectingMessage(url: string, reason: string | null): stri
 /** Why a connection attempt made after `close()` fails. Shared with Python. */
 export const CLOSED_MESSAGE = "the MCP server is shutting down";
 
+export type RecoveryStatus = ServerStatus["recovery"];
+type MonitoringRecovery = NonNullable<RecoveryStatus["monitoring"]>;
+
 export class OpcuaConnection {
   /** Everything this connection used to read off a module-level singleton.
    *
@@ -219,6 +223,10 @@ export class OpcuaConnection {
   /** The rebuild in flight, so concurrent callers join it rather than start one. */
   private reconnectPromise: Promise<void> | null = null;
   private restorePromise: Promise<void> | null = null;
+  private recoveryStarted: number | null = null;
+  private recoveryElapsed: number | null = null;
+  private recoveryPhase: RecoveryStatus["phase"] = "idle";
+  private monitoringRecovery: MonitoringRecovery | null = null;
   private state: ConnectionState = "disconnected";
   private lastError: string | null = null;
   /** The client of the round in flight, until it connects or gives up — so that
@@ -252,10 +260,53 @@ export class OpcuaConnection {
    * learned about the old one has to be learned again (#140).
    */
   onSessionRestored: ((session: ClientSession) => Promise<void>) | null = null;
+  sdkMonitoringFailures: (() => { data: number; events: number }) | null = null;
 
-  /** True while this server holds a session it believes is live. */
+  get recoveryStatus(): RecoveryStatus {
+    return {
+      phase: this.recoveryPhase,
+      elapsed_ms:
+        this.recoveryStarted === null
+          ? this.recoveryElapsed
+          : Math.floor(performance.now() - this.recoveryStarted),
+      monitoring: this.monitoringRecovery,
+    };
+  }
+
+  private beginRecovery(): void {
+    this.recoveryStarted ??= performance.now();
+    this.recoveryPhase = "reconnecting";
+    this.monitoringRecovery = null;
+  }
+
+  private finishRecovery(): void {
+    this.recoveryElapsed = this.recoveryStatus.elapsed_ms;
+    this.recoveryStarted = null;
+    this.recoveryPhase = "idle";
+  }
+
+  restoringSubscriptions(): void {
+    this.recoveryPhase = "restoring_subscriptions";
+  }
+
+  subscriptionsRestored(
+    data: { restored: number; failed: number },
+    events: { restored: number; failed: number }
+  ): void {
+    this.monitoringRecovery = {
+      source: "bridge",
+      data_restored: data.restored,
+      event_restored: events.restored,
+      data_failed: data.failed,
+      event_failed: events.failed,
+      degraded: data.failed + events.failed > 0,
+    };
+    this.recoveryPhase = "rebinding_policy";
+  }
+
+  /** True when a live session has finished binding its state. */
   get connected(): boolean {
-    return this.state === "connected" && this.session !== null && this.restorePromise === null;
+    return this.state === "connected" && this.session !== null && !this.connecting;
   }
 
   /** True while a connection round — a first connect or a rebuild — is running.
@@ -267,17 +318,18 @@ export class OpcuaConnection {
    * `ensureConnection` already waits on for a bounded time.
    */
   get connecting(): boolean {
-    return (
-      this.connectPromise !== null || this.reconnectPromise !== null || this.restorePromise !== null
-    );
+    return this.pendingSession !== null;
+  }
+
+  private get pendingSession(): Promise<void> | null {
+    return this.reconnectPromise ?? this.connectPromise ?? this.restorePromise;
   }
 
   /** Wait for the connection round already running, whatever it finds. Never
    *  starts one — see `OpcuaTools.awaitConnectionInFlight` for who needs this. */
   async settled(): Promise<void> {
-    for (;;) {
-      const inFlight = this.restorePromise ?? this.reconnectPromise ?? this.connectPromise;
-      if (!inFlight) return;
+    let inFlight: Promise<void> | null;
+    while ((inFlight = this.pendingSession)) {
       await inFlight.catch(() => undefined);
     }
   }
@@ -322,12 +374,11 @@ export class OpcuaConnection {
   }
 
   async connect(): Promise<void> {
+    if (this.connectPromise) return this.connectPromise;
     if (this.opcuaClient && this.session && this.state === "connected") return;
-    if (!this.connectPromise) {
-      this.connectPromise = this.open().finally(() => {
-        this.connectPromise = null;
-      });
-    }
+    this.connectPromise = this.open().finally(() => {
+      this.connectPromise = null;
+    });
     return this.connectPromise;
   }
 
@@ -413,7 +464,10 @@ export class OpcuaConnection {
             console.error("Could not refresh restored session:", error);
           })
           .finally(() => {
-            if (this.restorePromise === restored) this.restorePromise = null;
+            if (this.restorePromise === restored) {
+              this.restorePromise = null;
+              if (!this.reconnectPromise) this.finishRecovery();
+            }
           });
         this.restorePromise = restored;
       });
@@ -468,6 +522,17 @@ export class OpcuaConnection {
    */
   private async restored(session: ClientSession): Promise<void> {
     if (session !== this.session) return;
+    const monitoring = this.sdkMonitoringFailures?.();
+    if (monitoring) {
+      this.monitoringRecovery = {
+        source: "sdk",
+        data_restored: null,
+        event_restored: null,
+        data_failed: monitoring.data,
+        event_failed: monitoring.events,
+        degraded: monitoring.data + monitoring.events > 0,
+      };
+    }
     const serverSessionId = session.sessionId.toString();
     const startTime = await this.startTimeOf(session);
     if (session !== this.session) return;
@@ -478,7 +543,7 @@ export class OpcuaConnection {
     if (startTime !== null) this.serverStartTime = startTime;
     this.session_ = randomBytes(8).toString("hex");
     this.generation_ += 1;
-    await this.bindPolicyNamespaces(session);
+    this.recoveryPhase = "rebinding_policy";
     console.error("OPC UA session re-created after the server lost it");
     // A restarted server may have loaded its namespaces in a different order,
     // and the policy is about to be resolved again against this session.
@@ -503,6 +568,7 @@ export class OpcuaConnection {
     client.on("connection_lost", () => {
       if (!isCurrent()) return;
       this.state = client.reconnectOnFailure !== false ? "reconnecting" : "disconnected";
+      if (this.state === "reconnecting" && !this.reconnectPromise) this.beginRecovery();
       this.lastError = "connection lost";
       console.error(
         client.reconnectOnFailure
@@ -522,6 +588,7 @@ export class OpcuaConnection {
       if (!isCurrent()) return;
       this.state = "connected";
       this.lastError = null;
+      if (!this.pendingSession) this.finishRecovery();
       console.error("OPC UA connection re-established");
     });
 
@@ -530,6 +597,7 @@ export class OpcuaConnection {
     client.on("close", (error?: Error | null) => {
       if (!isCurrent()) return;
       this.state = "disconnected";
+      if (!this.pendingSession) this.finishRecovery();
       this.lastError = error ? error.message : "connection closed by the OPC UA server";
       console.error(`OPC UA connection closed${error ? `: ${error.message}` : ""}`);
     });
@@ -601,13 +669,14 @@ export class OpcuaConnection {
 
   /** A live session, re-establishing one if the connection has gone. */
   async ensureConnection(): Promise<void> {
-    if (this.restorePromise) await this.restorePromise;
-    if (this.connectPromise) {
-      await this.connectPromise;
-      return;
+    if (this.state === "reconnecting" && !this.pendingSession) {
+      await this.awaitReconnection();
+    }
+    let inFlight: Promise<void> | null;
+    while ((inFlight = this.pendingSession)) {
+      await inFlight;
     }
     if (this.connected) return;
-    if (this.state === "reconnecting" && (await this.awaitReconnection())) return;
     await this.reconnect();
   }
 
@@ -650,9 +719,14 @@ export class OpcuaConnection {
    * serving several calls — rebuilt once per caller in turn (issue #111).
    */
   async reconnect(stale?: string | null): Promise<void> {
+    while (this.restorePromise && !this.reconnectPromise) {
+      await this.restorePromise;
+    }
     if (stale != null && this.connected && this.session_ !== stale) return;
     if (!this.reconnectPromise) {
+      this.beginRecovery();
       this.reconnectPromise = this.rebuild().finally(() => {
+        this.finishRecovery();
         this.reconnectPromise = null;
       });
     }
@@ -674,21 +748,13 @@ export class OpcuaConnection {
     }
   }
 
-  /** Wait out node-opcua's own repair, for as long as the operator configured.
-   *
-   * Returns true if it finished in time. Returning false is not a failure — it
-   * means the caller should stop waiting and rebuild, which is strictly more
-   * likely to work than waiting longer on a client that may already have given
-   * up.
-   */
-  private async awaitReconnection(): Promise<boolean> {
+  /** Give channel repair its configured budget. Once session preparation
+   * starts, the caller joins its promise instead of polling. */
+  private async awaitReconnection(): Promise<void> {
     const deadline = Date.now() + reconnectBudgetMs(this.reconnectSettings);
-    while (Date.now() < deadline) {
-      if (this.connected) return true;
-      if (this.state !== "reconnecting") return false;
+    while (this.state === "reconnecting" && !this.pendingSession && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
     }
-    return this.connected;
   }
 
   /** Run `operation` against a live session, once more on a fresh one if it dies.

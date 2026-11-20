@@ -105,6 +105,7 @@ async def get_server_status(ctx: Context) -> CallToolResult:
     # report about a server this process cannot reach would describe one that
     # is gone.
     status["policy_check"] = state.policy_check if status.get("connected") else None
+    status["recovery"] = connection.recovery_status()
     return _object_result(status)
 
 

@@ -567,6 +567,15 @@ power-cycled, a switch reboots — so neither server treats a live session as a
 precondition it was handed once at startup. Both start whether or not the
 endpoint answers, and both rebuild a dead session on the next tool call.
 
+**A session is ready after its state has been rebound.** Calls acquiring a
+session and retries from the previous session join the connection round already
+in progress. The round binds the namespace map, clears caches from the previous
+generation, restores monitoring, and refreshes capabilities and resolved policy
+before it releases those callers. Application-owned rebuilds log individual
+subscription restoration failures and drop the affected handles. Node's native
+session repair handles monitoring in the SDK and refreshes the bridge's policy
+and caches when the SDK creates a new session.
+
 **A round, and why -1 is not one without an end (#136).** Every connection is
 made in a *round*: one attempt, then up to `OPCUA_RECONNECT_MAX_RETRY` retries
 on the doubling backoff. The startup warm-up is a round; so is the rebuild a tool

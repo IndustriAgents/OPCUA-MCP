@@ -36,6 +36,7 @@ import { continues, releaseContinuationPoint } from "./history.js";
 import { historyData, variantToJson } from "./records.js";
 import { notice } from "./notices.js";
 import { isGood } from "./status.js";
+import { sdkSubscriptionFailed, watchSdkSubscription } from "./subscriptions.js";
 
 const EVENTS = CONTRACT.events;
 
@@ -245,14 +246,17 @@ export class EventSubscriptions {
    * Best-effort per notifier. One the new session will not take back is dropped,
    * so `read_events` says "not subscribed" rather than "nothing happened".
    */
-  async reattach(session: ClientSession): Promise<void> {
+  async reattach(session: ClientSession): Promise<{ restored: number; failed: number }> {
     this.conditionOfEvent.clear();
-    for (const [nodeId, buffer] of [...this.buffers]) {
+    const entries = [...this.buffers];
+    let failed = 0;
+    for (const [nodeId, buffer] of entries) {
       try {
         await this.attach(session, nodeId, buffer);
         buffer.resubscribed = true;
         console.error(`Re-established the event subscription on node ${nodeId}`);
       } catch (error) {
+        failed += 1;
         this.buffers.delete(nodeId);
         console.error(
           `Could not re-establish the event subscription on node ${nodeId}: ${
@@ -261,6 +265,12 @@ export class EventSubscriptions {
         );
       }
     }
+    return { restored: entries.length - failed, failed };
+  }
+
+  sdkRestoreFailures(): number {
+    return [...this.buffers.values()].filter((buffer) => sdkSubscriptionFailed(buffer.subscription))
+      .length;
   }
 
   /** Create the OPC UA subscription and monitored item behind one buffer.
@@ -297,6 +307,7 @@ export class EventSubscriptions {
 
     buffer.session = session;
     buffer.subscription = subscription;
+    watchSdkSubscription(subscription);
   }
 
   /** Take up to `limit` of the oldest buffered events, removing them.

@@ -1,0 +1,104 @@
+{
+  "$comment": "External Prosys OPC UA Simulation Server 2026.2.2 (build 39) lab. Use an isolated loopback simulator with its built-in Simulation and ComplianceNodes fixtures and anonymous access. Trust the disposable application certificate supplied by PROSYS_CLIENT_CERT in Prosys and keep client-certificate validation enabled. The default None channel exercises ordinary access and synthetic writes; Basic256Sha256 covers secured connections. The write scenarios modify only the synthetic StaticVariables Double and Int32 fixtures.",
+  "schemaVersion": 1,
+  "server": {
+    "id": "prosys-simulation-server",
+    "name": "Prosys OPC UA Simulation Server",
+    "implementation": "Prosys OPC UA SDK for Java",
+    "language": "Java",
+    "independent": true,
+    "source": "https://prosysopc.com/products/opc-ua-simulation-server/"
+  },
+  "endpoint": {
+    "env": "PROSYS_SIMULATION_ENDPOINT"
+  },
+  "security": {
+    "policy": "Basic256Sha256",
+    "modes": [
+      "None",
+      "Sign",
+      "SignAndEncrypt"
+    ],
+    "default": {
+      "policy": "None",
+      "mode": "None"
+    },
+    "clientTrust": "enforced",
+    "clientCertificate": {
+      "cert": {
+        "env": "PROSYS_CLIENT_CERT"
+      },
+      "key": {
+        "env": "PROSYS_CLIENT_KEY"
+      }
+    }
+  },
+  "identities": {
+    "anonymous": true
+  },
+  "namespaces": {
+    "simulation": "http://www.prosysopc.com/OPCUA/SimulationNodes/",
+    "compliance": "http://www.prosysopc.com/OPCUA/StaticNodes"
+  },
+  "nodes": {
+    "browseRoot": "nsu=http://www.prosysopc.com/OPCUA/SimulationNodes/;s=85/0:Simulation",
+    "scalars": {
+      "Boolean": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Boolean",
+      "Byte": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Byte",
+      "SByte": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=SByte",
+      "Int16": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Int16",
+      "Int32": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Int32",
+      "Int64": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Int64",
+      "UInt16": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=UInt16",
+      "UInt32": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=UInt32",
+      "UInt64": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=UInt64",
+      "Float": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Float",
+      "Double": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Double",
+      "String": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=String",
+      "DateTime": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=DateTime",
+      "Guid": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=GUID",
+      "ByteString": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=ByteString",
+      "XmlElement": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=XmlElement",
+      "LocalizedText": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=LocalizedText",
+      "QualifiedName": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=QualifiedName",
+      "NodeId": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=NodeId"
+    },
+    "arrays": {
+      "Boolean": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=BooleanArray",
+      "Int32": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Int32Array",
+      "UInt64": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=UInt64Array",
+      "Double": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=DoubleArray",
+      "String": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=StringArray",
+      "DateTime": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=DateTimeArray",
+      "LocalizedText": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=LocalizedTextArray"
+    },
+    "structures": {
+      "Range": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Range",
+      "EUInformation": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=EUInformation"
+    },
+    "writable": [
+      {
+        "node": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Double",
+        "value": 12.5
+      },
+      {
+        "node": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Int32",
+        "value": -7
+      }
+    ],
+    "deniedWrite": {
+      "node": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=AccessLevelCurrentRead",
+      "value": 1
+    },
+    "deniedRead": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=AccessLevelCurrentReadNotUser",
+    "unknown": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=OPCUAMCPConformanceMissing",
+    "method": {
+      "object": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=Methods",
+      "method": "nsu=http://www.prosysopc.com/OPCUA/StaticNodes;s=NoInputNoOutputMethod",
+      "arguments": [],
+      "outputTypes": []
+    },
+    "historized": "nsu=http://www.prosysopc.com/OPCUA/SimulationNodes/;i=1001",
+    "changing": "nsu=http://www.prosysopc.com/OPCUA/SimulationNodes/;i=1001"
+  }
+}

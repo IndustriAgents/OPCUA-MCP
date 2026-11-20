@@ -111,6 +111,26 @@ def secure_env(secure_pki) -> dict[str, str]:
 
 
 @pytest.fixture
+def pinned_env(secure_env, secure_pki):
+    return {**secure_env, "OPCUA_SERVER_CERT": secure_pki["server_cert"]}
+
+
+@pytest.fixture
+def unverified_env(impl, secure_env, tmp_path):
+    if impl == "node":
+        # Newer node-opcua versions reject unknown certificates by default.
+        # Opt in only for these local control-policy tests, with a fresh SDK PKI.
+        home_var = "APPDATA" if os.name == "nt" else "HOME"
+        return {
+            **secure_env,
+            "NODE_OPCUA_AUTO_ACCEPT_CERTS": "true",
+            "XDG_CONFIG_HOME": str(tmp_path),
+            home_var: str(tmp_path),
+        }
+    return secure_env
+
+
+@pytest.fixture
 def errlog():
     """A file to collect the MCP server's stderr, which is where it reports."""
     with tempfile.TemporaryFile("w+", errors="replace") as handle:
@@ -213,18 +233,18 @@ async def test_reads_and_writes_over_a_secured_connection(
     assert "traffic is unencrypted" not in log
 
 
-async def test_the_password_never_reaches_the_logs(impl, secure_opcua_server, secure_env, errlog):
+async def test_the_password_never_reaches_the_logs(impl, secure_opcua_server, pinned_env, errlog):
     """Everything an MCP client shows the user comes from this stream."""
-    params = _server_params(impl, secure_opcua_server, secure_env)
+    params = _server_params(impl, secure_opcua_server, pinned_env)
     async with connect(params, errlog) as session:
         await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
 
     assert SECURE_PASSWORD not in stderr_of(errlog)
 
 
-async def test_default_mode_is_sign_and_encrypt(impl, secure_opcua_server, secure_env, errlog):
+async def test_default_mode_is_sign_and_encrypt(impl, secure_opcua_server, pinned_env, errlog):
     """A policy with no explicit mode must reach the strongest endpoint, not the weakest."""
-    params = _server_params(impl, secure_opcua_server, secure_env)  # no OPCUA_SECURITY_MODE
+    params = _server_params(impl, secure_opcua_server, pinned_env)  # no OPCUA_SECURITY_MODE
     async with connect(params, errlog) as session:
         assert TEMPERATURE in text_of(
             await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
@@ -234,7 +254,7 @@ async def test_default_mode_is_sign_and_encrypt(impl, secure_opcua_server, secur
 
 
 async def test_the_application_uri_comes_from_the_certificate(
-    impl, secure_opcua_server, secure_env, errlog
+    impl, secure_opcua_server, pinned_env, errlog
 ):
     """With no `OPCUA_APPLICATION_URI`, both runtimes announce the certificate's own URI.
 
@@ -243,7 +263,7 @@ async def test_the_application_uri_comes_from_the_certificate(
     runtime announcing a library default — python-opcua's `urn:freeopcua:client`
     — cannot get a session here.
     """
-    env = {key: value for key, value in secure_env.items() if key != "OPCUA_APPLICATION_URI"}
+    env = {key: value for key, value in pinned_env.items() if key != "OPCUA_APPLICATION_URI"}
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         assert TEMPERATURE in text_of(
@@ -251,14 +271,14 @@ async def test_the_application_uri_comes_from_the_certificate(
         )
 
 
-async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, secure_env, errlog):
+async def test_a_wrong_password_is_rejected(impl, secure_opcua_server, pinned_env, errlog):
     """Neither runtime may fall back to a working session when the login fails.
 
     Both report it on the call, since neither waits for its first connection
     before answering `initialize` (#136), and both name the same status code.
     """
     reason = await _read_or_reason(
-        impl, secure_opcua_server, {**secure_env, "OPCUA_PASSWORD": "wrong"}, errlog
+        impl, secure_opcua_server, {**pinned_env, "OPCUA_PASSWORD": "wrong"}, errlog
     )
     assert '"status": "Good"' not in reason
     assert "BadUserAccessDenied" in reason
@@ -351,7 +371,7 @@ async def test_a_wrong_server_certificate_is_refused(
 
 
 async def test_an_unverified_server_says_so_on_a_secured_connection(
-    impl, secure_opcua_server, secure_env, errlog
+    impl, secure_opcua_server, unverified_env, errlog
 ):
     """Encryption alone is encryption to whoever answered, and now admits it.
 
@@ -359,7 +379,7 @@ async def test_an_unverified_server_says_so_on_a_secured_connection(
     safe. The one thing it does not establish is who is on the other end, so the
     absence of pinning is stated rather than left to be inferred.
     """
-    params = _server_params(impl, secure_opcua_server, secure_env)  # no OPCUA_SERVER_CERT
+    params = _server_params(impl, secure_opcua_server, unverified_env)  # no OPCUA_SERVER_CERT
     async with connect(params, errlog) as session:
         await session.call_tool("read_opcua_nodes", {"node_ids": [TEMPERATURE]})
 
@@ -374,7 +394,7 @@ async def test_an_unverified_server_says_so_on_a_secured_connection(
 
 @pytest.mark.parametrize("mode", ["SignAndEncrypt", "Sign"])
 async def test_an_unverified_server_gets_no_control(
-    impl, secure_opcua_server, secure_env, errlog, mode
+    impl, secure_opcua_server, unverified_env, errlog, mode
 ):
     """Encrypted to whoever answered is not a channel to control a plant over.
 
@@ -384,7 +404,8 @@ async def test_an_unverified_server_gets_no_control(
     channel still works for reading; control is hidden, refused if called
     anyway, and the refusal names the variable that would open it.
     """
-    params = _server_params(impl, secure_opcua_server, {**secure_env, "OPCUA_SECURITY_MODE": mode})
+    env = {**unverified_env, "OPCUA_SECURITY_MODE": mode}
+    params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         tools = {tool.name for tool in (await session.list_tools()).tools}
         assert not tools & CONTROL_TOOLS, f"{impl}: offered {tools & CONTROL_TOOLS}"
@@ -422,12 +443,12 @@ async def test_an_unverified_server_gets_no_control(
 
 
 async def test_the_insecure_override_does_not_vouch_for_the_server(
-    impl, secure_opcua_server, secure_env, errlog
+    impl, secure_opcua_server, unverified_env, errlog
 ):
     """`OPCUA_ALLOW_INSECURE_CONTROL` is about an unsecured channel, not an
     unverified server: encryption and peer authentication are independent, and
     a lab override for the one is not consent to the other."""
-    env = {**secure_env, "OPCUA_ALLOW_INSECURE_CONTROL": "true"}
+    env = {**unverified_env, "OPCUA_ALLOW_INSECURE_CONTROL": "true"}
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         tools = {tool.name for tool in (await session.list_tools()).tools}
@@ -441,12 +462,12 @@ async def test_the_insecure_override_does_not_vouch_for_the_server(
 
 
 async def test_the_unverified_override_opens_control_and_says_so(
-    impl, secure_opcua_server, secure_env, errlog
+    impl, secure_opcua_server, unverified_env, errlog
 ):
     """The explicit lab escape hatch works — and is conspicuous everywhere a
     reviewer would look: the startup line, the status report and the audit
     record of the very write it let through."""
-    env = {**secure_env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "true"}
+    env = {**unverified_env, "OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL": "true"}
     params = _server_params(impl, secure_opcua_server, env)
     async with connect(params, errlog) as session:
         tools = {tool.name for tool in (await session.list_tools()).tools}

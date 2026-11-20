@@ -134,12 +134,13 @@ Getting the file, whatever the vendor:
   open62541, the .NET stack), or an *export certificate* action in the
   certificate manager of Prosys, KEPServerEX, Siemens and the like. Best: it is
   the operator's copy, not the network's.
-- **From the endpoint, once, on a network you trust.** node-opcua files every
-  server certificate it has accepted in a per-user PKI folder
+- **From the SDK's PKI folder.** On Node, node-opcua can save the certificate
+  presented by the endpoint under its per-user PKI folder
   (`~/Library/Preferences/node-opcua-default-nodejs/PKI` on macOS,
   `~/.config/node-opcua-default-nodejs/PKI` on Linux, under `%APPDATA%` on
-  Windows); a first connection without a pin leaves it there. Compare its
-  thumbprint with the one the server's UI shows before you trust it:
+  Windows). Newer SDK releases reject unknown certificates by default; check
+  `rejected` if the connection fails. Compare the certificate's thumbprint with
+  the one the server's UI shows before you pin it:
   `openssl x509 -in plc_server.pem -noout -fingerprint -sha256`.
 
 What a pin does and does not check:
@@ -149,7 +150,7 @@ What a pin does and does not check:
 | The server presents the pinned certificate | Connects; `get_server_status` → `server_identity.server_authenticated: true`, `control: "secured"` |
 | Anything else answers | The handshake fails — the impostor cannot decrypt it. No request of any kind reaches it |
 | The pinned certificate has expired, or is not valid yet | Refused before connecting, naming the file and the date. Renew it on the server and pin the new one |
-| No pin | Connects and reads; control tools are hidden, and a call to one is refused with `Set OPCUA_SERVER_CERT … or OPCUA_ALLOW_UNVERIFIED_SERVER_CONTROL=true` |
+| No pin or CA trust store | If the SDK allows the connection, reads are available and control stays blocked by default. Newer Node SDK releases can refuse an unknown certificate at connection time; configure a pin or CA trust store. |
 
 A pin is an exact match: revocation requires replacing the pin, and renewal
 requires re-pinning. The CA trust store below instead verifies a renewed

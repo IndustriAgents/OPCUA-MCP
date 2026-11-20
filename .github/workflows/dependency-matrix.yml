@@ -40,6 +40,7 @@ on:
       - packages/server-python/pyproject.toml
       - packages/mock-server/pyproject.toml
       - tests/pyproject.toml
+      - tests/e2e/test_secure_connection_e2e.py
       - pyproject.toml
       - uv.lock
       - .github/workflows/dependency-matrix.yml
